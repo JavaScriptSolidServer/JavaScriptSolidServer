@@ -1,0 +1,23 @@
+{
+  "name": "javascript-solid-server",
+  "version": "0.1.0",
+  "description": "A minimalist, high-performance JavaScript Solid Server",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "benchmark": "node benchmark.js",
+    "visualize": "node visualize-results.js"
+  },
+  "dependencies": {
+    "fastify": "^4.25.2",
+    "@fastify/cors": "^8.5.0",
+    "jose": "^5.2.2",
+    "fs-extra": "^11.2.0",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
