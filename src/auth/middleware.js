@@ -1,9 +1,10 @@
 /**
  * Authorization middleware
  * Combines authentication (token verification) with WAC checking
+ * Supports both simple Bearer tokens and Solid-OIDC DPoP tokens
  */
 
-import { getWebIdFromRequest } from './token.js';
+import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import * as storage from '../storage/filesystem.js';
 
@@ -11,7 +12,7 @@ import * as storage from '../storage/filesystem.js';
  * Check if request is authorized
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
- * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string}>}
+ * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string, authError: string|null}>}
  */
 export async function authorize(request, reply) {
   const urlPath = request.url.split('?')[0];
@@ -20,11 +21,11 @@ export async function authorize(request, reply) {
   // Skip auth for .acl files (they need special handling)
   // and for OPTIONS (CORS preflight)
   if (urlPath.endsWith('.acl') || method === 'OPTIONS') {
-    return { authorized: true, webId: null, wacAllow: 'user="read write append control", public="read write append"' };
+    return { authorized: true, webId: null, wacAllow: 'user="read write append control", public="read write append"', authError: null };
   }
 
-  // Get WebID from token (null if not authenticated)
-  const webId = getWebIdFromRequest(request);
+  // Get WebID from token (supports both simple and Solid-OIDC tokens)
+  const { webId, error: authError } = await getWebIdFromRequestAsync(request);
 
   // Get resource info
   const stats = await storage.stat(urlPath);
@@ -59,7 +60,7 @@ export async function authorize(request, reply) {
     requiredMode
   });
 
-  return { authorized: allowed, webId, wacAllow };
+  return { authorized: allowed, webId, wacAllow, authError };
 }
 
 /**
@@ -77,15 +78,16 @@ function getParentPath(path) {
  * @param {object} reply - Fastify reply
  * @param {boolean} isAuthenticated - Whether user is authenticated
  * @param {string} wacAllow - WAC-Allow header value
+ * @param {string|null} authError - Authentication error message (for DPoP failures)
  */
-export function handleUnauthorized(reply, isAuthenticated, wacAllow) {
+export function handleUnauthorized(reply, isAuthenticated, wacAllow, authError = null) {
   reply.header('WAC-Allow', wacAllow);
 
   if (!isAuthenticated) {
     // Not authenticated - return 401
     return reply.code(401).send({
       error: 'Unauthorized',
-      message: 'Authentication required'
+      message: authError || 'Authentication required'
     });
   } else {
     // Authenticated but not authorized - return 403

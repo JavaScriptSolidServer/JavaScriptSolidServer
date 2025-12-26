@@ -5,7 +5,7 @@ import path from 'path';
 
 // Configuration
 const config = {
-  baseUrl: 'http://localhost:3000',
+  baseUrl: 'http://nostr.social:3000',
   concurrentUsers: [1, 5, 10, 50, 100], // Different concurrency levels to test
   operations: 100, // Operations per user
   testDuration: 30000, // 30 seconds per test

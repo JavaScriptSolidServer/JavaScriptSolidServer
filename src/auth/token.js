@@ -1,12 +1,13 @@
 /**
- * Simple token-based authentication
+ * Token-based authentication
  *
- * For now, we use a simple JWT-like approach:
- * - Token format: base64(JSON({webId, iat, exp}))
- * - In production, this would be replaced with proper Solid-OIDC DPoP tokens
+ * Supports two modes:
+ * 1. Simple tokens (for local/dev use): base64(JSON({webId, iat, exp})) + HMAC signature
+ * 2. Solid-OIDC DPoP tokens (for federation): verified via external IdP JWKS
  */
 
 import crypto from 'crypto';
+import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
 
 // Secret for signing tokens (in production, use env var)
 const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
@@ -95,12 +96,18 @@ export function extractToken(authHeader) {
 }
 
 /**
- * Extract WebID from request
+ * Extract WebID from request (sync version for simple tokens only)
  * @param {object} request - Fastify request object
  * @returns {string | null} WebID or null if not authenticated
  */
 export function getWebIdFromRequest(request) {
   const authHeader = request.headers.authorization;
+
+  // Skip DPoP tokens - use async version for those
+  if (authHeader && authHeader.startsWith('DPoP ')) {
+    return null;
+  }
+
   const token = extractToken(authHeader);
 
   if (!token) {
@@ -109,4 +116,35 @@ export function getWebIdFromRequest(request) {
 
   const payload = verifyToken(token);
   return payload?.webId || null;
+}
+
+/**
+ * Extract WebID from request (async version supporting Solid-OIDC)
+ * @param {object} request - Fastify request object
+ * @returns {Promise<{webId: string|null, error: string|null}>}
+ */
+export async function getWebIdFromRequestAsync(request) {
+  const authHeader = request.headers.authorization;
+
+  if (!authHeader) {
+    return { webId: null, error: null };
+  }
+
+  // Try Solid-OIDC first (DPoP tokens)
+  if (hasSolidOidcAuth(request)) {
+    return verifySolidOidc(request);
+  }
+
+  // Fall back to simple Bearer tokens
+  const token = extractToken(authHeader);
+  if (!token) {
+    return { webId: null, error: null };
+  }
+
+  const payload = verifyToken(token);
+  if (payload?.webId) {
+    return { webId: payload.webId, error: null };
+  }
+
+  return { webId: null, error: 'Invalid token' };
 }

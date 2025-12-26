@@ -43,14 +43,14 @@ export function createServer(options = {}) {
       return;
     }
 
-    const { authorized, webId, wacAllow } = await authorize(request, reply);
+    const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
 
     // Store webId and wacAllow on request for handlers to use
     request.webId = webId;
     request.wacAllow = wacAllow;
 
     if (!authorized) {
-      return handleUnauthorized(reply, webId !== null, wacAllow);
+      return handleUnauthorized(reply, webId !== null, wacAllow, authError);
     }
   });
 
