@@ -44,6 +44,9 @@ program
   .option('--no-conneg', 'Disable content negotiation')
   .option('--notifications', 'Enable WebSocket notifications')
   .option('--no-notifications', 'Disable WebSocket notifications')
+  .option('--idp', 'Enable built-in Identity Provider')
+  .option('--no-idp', 'Disable built-in Identity Provider')
+  .option('--idp-issuer <url>', 'IdP issuer URL (defaults to server URL)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -55,11 +58,19 @@ program
         process.exit(0);
       }
 
+      // Determine IdP issuer URL
+      const protocol = config.ssl ? 'https' : 'http';
+      const serverHost = config.host === '0.0.0.0' ? 'localhost' : config.host;
+      const baseUrl = `${protocol}://${serverHost}:${config.port}`;
+      const idpIssuer = config.idpIssuer || baseUrl;
+
       // Create and start server
       const server = createServer({
         logger: config.logger,
         conneg: config.conneg,
         notifications: config.notifications,
+        idp: config.idp,
+        idpIssuer: idpIssuer,
         ssl: config.ssl ? {
           key: await fs.readFile(config.sslKey),
           cert: await fs.readFile(config.sslCert),
@@ -69,16 +80,14 @@ program
 
       await server.listen({ port: config.port, host: config.host });
 
-      const protocol = config.ssl ? 'https' : 'http';
-      const address = config.host === '0.0.0.0' ? 'localhost' : config.host;
-
       if (!config.quiet) {
         console.log(`\n  JavaScript Solid Server v${pkg.version}`);
-        console.log(`  ${protocol}://${address}:${config.port}/`);
+        console.log(`  ${baseUrl}/`);
         console.log(`\n  Data: ${path.resolve(config.root)}`);
         if (config.ssl) console.log('  SSL:  enabled');
         if (config.conneg) console.log('  Conneg: enabled');
         if (config.notifications) console.log('  WebSocket: enabled');
+        if (config.idp) console.log(`  IdP: ${idpIssuer}`);
         console.log('\n  Press Ctrl+C to stop\n');
       }
 
@@ -140,6 +149,15 @@ program
       if (useSSL) {
         config.sslKey = await prompt('SSL key path', './ssl/key.pem');
         config.sslCert = await prompt('SSL certificate path', './ssl/cert.pem');
+      }
+
+      // Ask about IdP
+      config.idp = await confirm('Enable built-in Identity Provider?', false);
+      if (config.idp) {
+        const customIssuer = await confirm('Use custom issuer URL?', false);
+        if (customIssuer) {
+          config.idpIssuer = await prompt('IdP issuer URL', 'https://example.com');
+        }
       }
 
       console.log('');

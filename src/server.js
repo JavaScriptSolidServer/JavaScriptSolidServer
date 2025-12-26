@@ -4,6 +4,7 @@ import { handlePost, handleCreatePod } from './handlers/container.js';
 import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
+import { idpPlugin } from './idp/index.js';
 
 /**
  * Create and configure Fastify server
@@ -11,6 +12,8 @@ import { notificationsPlugin } from './notifications/index.js';
  * @param {boolean} options.logger - Enable logging (default true)
  * @param {boolean} options.conneg - Enable content negotiation for RDF (default false)
  * @param {boolean} options.notifications - Enable WebSocket notifications (default false)
+ * @param {boolean} options.idp - Enable built-in Identity Provider (default false)
+ * @param {string} options.idpIssuer - IdP issuer URL (default: server URL)
  * @param {object} options.ssl - SSL configuration { key, cert } (default null)
  * @param {string} options.root - Data directory path (default from env or ./data)
  */
@@ -19,6 +22,9 @@ export function createServer(options = {}) {
   const connegEnabled = options.conneg ?? false;
   // WebSocket notifications are OFF by default
   const notificationsEnabled = options.notifications ?? false;
+  // Identity Provider is OFF by default
+  const idpEnabled = options.idp ?? false;
+  const idpIssuer = options.idpIssuer;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -51,14 +57,21 @@ export function createServer(options = {}) {
   // Attach server config to requests
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
+  fastify.decorateRequest('idpEnabled', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
+    request.idpEnabled = idpEnabled;
   });
 
   // Register WebSocket notifications plugin if enabled
   if (notificationsEnabled) {
     fastify.register(notificationsPlugin);
+  }
+
+  // Register Identity Provider plugin if enabled
+  if (idpEnabled) {
+    fastify.register(idpPlugin, { issuer: idpIssuer });
   }
 
   // Global CORS preflight
@@ -78,8 +91,11 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation and OPTIONS
-    if (request.url === '/.pods' || request.method === 'OPTIONS') {
+    // Skip auth for pod creation, OPTIONS, IdP routes, and well-known endpoints
+    if (request.url === '/.pods' ||
+        request.method === 'OPTIONS' ||
+        request.url.startsWith('/idp/') ||
+        request.url.startsWith('/.well-known/')) {
       return;
     }
 

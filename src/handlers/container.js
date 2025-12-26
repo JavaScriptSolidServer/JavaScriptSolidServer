@@ -110,6 +110,7 @@ export async function handlePost(request, reply) {
 /**
  * Create a pod (container) for a user
  * POST /.pods with { "name": "alice" }
+ * With IdP enabled: { "name": "alice", "email": "alice@example.com", "password": "secret" }
  *
  * Creates the following structure:
  *   /{name}/
@@ -122,10 +123,21 @@ export async function handlePost(request, reply) {
  *   /{name}/settings/privateTypeIndex
  */
 export async function handleCreatePod(request, reply) {
-  const { name } = request.body || {};
+  const { name, email, password } = request.body || {};
+  const idpEnabled = request.idpEnabled;
 
   if (!name || typeof name !== 'string') {
     return reply.code(400).send({ error: 'Pod name required' });
+  }
+
+  // If IdP is enabled, require email and password
+  if (idpEnabled) {
+    if (!email || typeof email !== 'string') {
+      return reply.code(400).send({ error: 'Email required for account creation' });
+    }
+    if (!password || password.length < 8) {
+      return reply.code(400).send({ error: 'Password required (minimum 8 characters)' });
+    }
   }
 
   // Validate pod name (alphanumeric, dash, underscore)
@@ -200,7 +212,28 @@ export async function handleCreatePod(request, reply) {
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
-  // Generate token for the pod owner
+  // If IdP is enabled, create account instead of simple token
+  if (idpEnabled) {
+    try {
+      const { createAccount } = await import('../idp/accounts.js');
+      await createAccount({ email, password, webId, podName: name });
+
+      return reply.code(201).send({
+        name,
+        webId,
+        podUri,
+        idpIssuer: issuer,
+        loginUrl: `${issuer}/idp/auth`,
+      });
+    } catch (err) {
+      console.error('Account creation error:', err);
+      // Rollback pod creation on account failure
+      await storage.remove(podPath);
+      return reply.code(409).send({ error: err.message });
+    }
+  }
+
+  // Generate token for the pod owner (simple auth mode)
   const token = createToken(webId);
 
   return reply.code(201).send({

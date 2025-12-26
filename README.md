@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.11)
+### Implemented (v0.0.12)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -67,6 +67,7 @@ npm run benchmark
 - **Multi-user Pods** - Create pods at `/<username>/`
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
 - **Web Access Control (WAC)** - `.acl` file-based authorization
+- **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Optional Turtle <-> JSON-LD conversion
@@ -132,6 +133,8 @@ jss --help             # Show help
 | `--ssl-cert <path>` | SSL certificate (PEM) | - |
 | `--conneg` | Enable Turtle support | false |
 | `--notifications` | Enable WebSocket | false |
+| `--idp` | Enable built-in IdP | false |
+| `--idp-issuer <url>` | IdP issuer URL | (auto) |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -274,9 +277,38 @@ Use the token returned from pod creation:
 curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/alice/private/
 ```
 
-### Solid-OIDC (Production)
+### Built-in Identity Provider (v0.0.12+)
 
-The server accepts DPoP-bound access tokens from external Solid identity providers:
+Enable the built-in Solid-OIDC Identity Provider:
+
+```bash
+jss start --idp
+```
+
+With IdP enabled, pod creation requires email and password:
+
+```bash
+curl -X POST http://localhost:3000/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "alice", "email": "alice@example.com", "password": "secret123"}'
+```
+
+Response:
+```json
+{
+  "name": "alice",
+  "webId": "http://localhost:3000/alice/#me",
+  "podUri": "http://localhost:3000/alice/",
+  "idpIssuer": "http://localhost:3000",
+  "loginUrl": "http://localhost:3000/idp/auth"
+}
+```
+
+OIDC Discovery: `/.well-known/openid-configuration`
+
+### Solid-OIDC (External IdP)
+
+The server also accepts DPoP-bound access tokens from external Solid identity providers:
 
 ```bash
 curl -H "Authorization: DPoP ACCESS_TOKEN" \
@@ -323,7 +355,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 npm test
 ```
 
-Currently passing: **163 tests** (including 27 conformance tests)
+Currently passing: **174 tests** (including 27 conformance tests)
 
 ## Project Structure
 
@@ -355,6 +387,14 @@ src/
 │   ├── index.js          # WebSocket plugin
 │   ├── events.js         # Event emitter
 │   └── websocket.js      # solid-0.1 protocol
+├── idp/
+│   ├── index.js          # Identity Provider plugin
+│   ├── provider.js       # oidc-provider config
+│   ├── adapter.js        # Filesystem adapter
+│   ├── accounts.js       # User account management
+│   ├── keys.js           # JWKS key management
+│   ├── interactions.js   # Login/consent handlers
+│   └── views.js          # HTML templates
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
@@ -372,6 +412,8 @@ Minimal dependencies for a fast, secure server:
 - **fs-extra** - Enhanced file operations
 - **jose** - JWT/JWK handling for Solid-OIDC
 - **n3** - Turtle parsing (only used when conneg enabled)
+- **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
+- **bcrypt** - Password hashing (only when IdP enabled)
 
 ## License
 
