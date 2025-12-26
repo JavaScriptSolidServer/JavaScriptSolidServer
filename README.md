@@ -54,10 +54,12 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.9)
+### Implemented (v0.0.10)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
+- **SPARQL Update** - Standard SPARQL UPDATE protocol for PATCH
+- **Conditional Requests** - If-Match/If-None-Match headers (304, 412)
 - **WebSocket Notifications** - Real-time updates via solid-0.1 protocol (SolidOS compatible)
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Create pods at `/<username>/`
@@ -147,6 +149,44 @@ curl -X PATCH http://localhost:3000/alice/public/data.json \
         solid:inserts { <#data> <http://example.org/name> "Updated" }.'
 ```
 
+### PATCH with SPARQL Update
+
+```bash
+curl -X PATCH http://localhost:3000/alice/public/data.json \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/sparql-update" \
+  -d 'PREFIX ex: <http://example.org/>
+      DELETE DATA { <#data> ex:value 42 } ;
+      INSERT DATA { <#data> ex:value 43 }'
+```
+
+### Conditional Requests
+
+Use `If-Match` for safe updates (optimistic concurrency):
+
+```bash
+# Get current ETag
+ETAG=$(curl -sI http://localhost:3000/alice/public/data.json | grep -i etag | awk '{print $2}')
+
+# Update only if ETag matches
+curl -X PUT http://localhost:3000/alice/public/data.json \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/ld+json" \
+  -H "If-Match: $ETAG" \
+  -d '{"@id": "#data", "http://example.org/value": 100}'
+```
+
+Use `If-None-Match: *` for create-only semantics:
+
+```bash
+# Create only if resource doesn't exist (returns 412 if it does)
+curl -X PUT http://localhost:3000/alice/public/new-resource.json \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/ld+json" \
+  -H "If-None-Match: *" \
+  -d '{"@id": "#new"}'
+```
+
 ## Pod Structure
 
 ```
@@ -224,7 +264,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 npm test
 ```
 
-Currently passing: **116 tests**
+Currently passing: **136 tests**
 
 ## Project Structure
 
@@ -250,7 +290,8 @@ src/
 ├── webid/
 │   └── profile.js        # WebID generation
 ├── patch/
-│   └── n3-patch.js       # N3 Patch support
+│   ├── n3-patch.js       # N3 Patch support
+│   └── sparql-update.js  # SPARQL Update support
 ├── notifications/
 │   ├── index.js          # WebSocket plugin
 │   ├── events.js         # Event emitter
@@ -259,7 +300,8 @@ src/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
 └── utils/
-    └── url.js            # URL utilities
+    ├── url.js            # URL utilities
+    └── conditional.js    # If-Match/If-None-Match
 ```
 
 ## Dependencies

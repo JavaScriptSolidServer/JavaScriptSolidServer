@@ -3,6 +3,7 @@ import { getAllHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
+import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
 import {
   selectContentType,
   canAcceptInput,
@@ -12,6 +13,7 @@ import {
   RDF_TYPES
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
+import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 
 /**
  * Handle GET request
@@ -22,6 +24,15 @@ export async function handleGet(request, reply) {
 
   if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
+  }
+
+  // Check If-None-Match for conditional GET (304 Not Modified)
+  const ifNoneMatch = request.headers['if-none-match'];
+  if (ifNoneMatch) {
+    const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
+    if (!check.ok && check.notModified) {
+      return reply.code(304).send();
+    }
   }
 
   const origin = request.headers.origin;
@@ -185,8 +196,28 @@ export async function handlePut(request, reply) {
     });
   }
 
-  // Check if resource already exists
-  const existed = await storage.exists(urlPath);
+  // Check if resource already exists and get current ETag
+  const stats = await storage.stat(urlPath);
+  const existed = stats !== null;
+  const currentEtag = stats?.etag || null;
+
+  // Check If-Match header (for safe updates)
+  const ifMatch = request.headers['if-match'];
+  if (ifMatch) {
+    const check = checkIfMatch(ifMatch, currentEtag);
+    if (!check.ok) {
+      return reply.code(check.status).send({ error: check.error });
+    }
+  }
+
+  // Check If-None-Match header (for create-only semantics)
+  const ifNoneMatch = request.headers['if-none-match'];
+  if (ifNoneMatch) {
+    const check = checkIfNoneMatchForWrite(ifNoneMatch, currentEtag);
+    if (!check.ok) {
+      return reply.code(check.status).send({ error: check.error });
+    }
+  }
 
   // Get content from request body
   let content = request.body;
@@ -242,9 +273,19 @@ export async function handlePut(request, reply) {
 export async function handleDelete(request, reply) {
   const urlPath = request.url.split('?')[0];
 
-  const existed = await storage.exists(urlPath);
-  if (!existed) {
+  // Check if resource exists and get current ETag
+  const stats = await storage.stat(urlPath);
+  if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
+  }
+
+  // Check If-Match header (for safe deletes)
+  const ifMatch = request.headers['if-match'];
+  if (ifMatch) {
+    const check = checkIfMatch(ifMatch, stats.etag);
+    if (!check.ok) {
+      return reply.code(check.status).send({ error: check.error });
+    }
   }
 
   const success = await storage.remove(urlPath);
@@ -286,7 +327,7 @@ export async function handleOptions(request, reply) {
 
 /**
  * Handle PATCH request
- * Supports N3 Patch format (text/n3) for updating RDF resources
+ * Supports N3 Patch format (text/n3) and SPARQL Update for updating RDF resources
  */
 export async function handlePatch(request, reply) {
   const urlPath = request.url.split('?')[0];
@@ -298,14 +339,13 @@ export async function handlePatch(request, reply) {
 
   // Check content type
   const contentType = request.headers['content-type'] || '';
-  const isN3Patch = contentType.includes('text/n3') ||
-                    contentType.includes('application/n3') ||
-                    contentType.includes('application/sparql-update');
+  const isN3Patch = contentType.includes('text/n3') || contentType.includes('application/n3');
+  const isSparqlUpdate = contentType.includes('application/sparql-update');
 
-  if (!isN3Patch) {
+  if (!isN3Patch && !isSparqlUpdate) {
     return reply.code(415).send({
       error: 'Unsupported Media Type',
-      message: 'PATCH requires Content-Type: text/n3 for N3 Patch format'
+      message: 'PATCH requires Content-Type: text/n3 (N3 Patch) or application/sparql-update (SPARQL Update)'
     });
   }
 
@@ -313,6 +353,15 @@ export async function handlePatch(request, reply) {
   const stats = await storage.stat(urlPath);
   if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
+  }
+
+  // Check If-Match header (for safe updates)
+  const ifMatch = request.headers['if-match'];
+  if (ifMatch) {
+    const check = checkIfMatch(ifMatch, stats.etag);
+    if (!check.ok) {
+      return reply.code(check.status).send({ error: check.error });
+    }
   }
 
   // Read existing content
@@ -338,31 +387,49 @@ export async function handlePatch(request, reply) {
     : request.body;
 
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
-  let patch;
-  try {
-    patch = parseN3Patch(patchContent, resourceUrl);
-  } catch (e) {
-    return reply.code(400).send({
-      error: 'Bad Request',
-      message: 'Invalid N3 Patch format: ' + e.message
-    });
-  }
 
-  // Validate that deletes exist (optional strict mode)
-  // const validation = validatePatch(document, patch, resourceUrl);
-  // if (!validation.valid) {
-  //   return reply.code(409).send({ error: 'Conflict', message: validation.error });
-  // }
-
-  // Apply the patch
   let updatedDocument;
-  try {
-    updatedDocument = applyN3Patch(document, patch, resourceUrl);
-  } catch (e) {
-    return reply.code(409).send({
-      error: 'Conflict',
-      message: 'Failed to apply patch: ' + e.message
-    });
+
+  if (isSparqlUpdate) {
+    // Handle SPARQL Update
+    let update;
+    try {
+      update = parseSparqlUpdate(patchContent, resourceUrl);
+    } catch (e) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Invalid SPARQL Update: ' + e.message
+      });
+    }
+
+    try {
+      updatedDocument = applySparqlUpdate(document, update, resourceUrl);
+    } catch (e) {
+      return reply.code(409).send({
+        error: 'Conflict',
+        message: 'Failed to apply SPARQL Update: ' + e.message
+      });
+    }
+  } else {
+    // Handle N3 Patch
+    let patch;
+    try {
+      patch = parseN3Patch(patchContent, resourceUrl);
+    } catch (e) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Invalid N3 Patch format: ' + e.message
+      });
+    }
+
+    try {
+      updatedDocument = applyN3Patch(document, patch, resourceUrl);
+    } catch (e) {
+      return reply.code(409).send({
+        error: 'Conflict',
+        message: 'Failed to apply patch: ' + e.message
+      });
+    }
   }
 
   // Write updated document

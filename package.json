@@ -1,9 +1,17 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JavaScriptSolidServer/JavaScriptSolidServer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues"
+  },
+  "homepage": "https://github.com/JavaScriptSolidServer/JavaScriptSolidServer#readme",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
