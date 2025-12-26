@@ -1,9 +1,12 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.10",
+  "version": "0.0.11",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
+  "bin": {
+    "jss": "./bin/jss.js"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/JavaScriptSolidServer/JavaScriptSolidServer.git"
@@ -13,13 +16,14 @@
   },
   "homepage": "https://github.com/JavaScriptSolidServer/JavaScriptSolidServer#readme",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node bin/jss.js start",
+    "dev": "node --watch bin/jss.js start",
     "test": "node --test --test-concurrency=1",
     "benchmark": "node benchmark.js"
   },
   "dependencies": {
     "@fastify/websocket": "^8.3.1",
+    "commander": "^14.0.2",
     "fastify": "^4.25.2",
     "fs-extra": "^11.2.0",
     "jose": "^6.1.3",

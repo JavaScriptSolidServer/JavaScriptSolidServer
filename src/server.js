@@ -11,6 +11,8 @@ import { notificationsPlugin } from './notifications/index.js';
  * @param {boolean} options.logger - Enable logging (default true)
  * @param {boolean} options.conneg - Enable content negotiation for RDF (default false)
  * @param {boolean} options.notifications - Enable WebSocket notifications (default false)
+ * @param {object} options.ssl - SSL configuration { key, cert } (default null)
+ * @param {string} options.root - Data directory path (default from env or ./data)
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -18,12 +20,28 @@ export function createServer(options = {}) {
   // WebSocket notifications are OFF by default
   const notificationsEnabled = options.notifications ?? false;
 
-  const fastify = Fastify({
+  // Set data root via environment variable if provided
+  if (options.root) {
+    process.env.DATA_ROOT = options.root;
+  }
+
+  // Fastify options
+  const fastifyOptions = {
     logger: options.logger ?? true,
     trustProxy: true,
     // Handle raw body for non-JSON content
     bodyLimit: 10 * 1024 * 1024 // 10MB
-  });
+  };
+
+  // Add HTTPS support if SSL config provided
+  if (options.ssl && options.ssl.key && options.ssl.cert) {
+    fastifyOptions.https = {
+      key: options.ssl.key,
+      cert: options.ssl.cert,
+    };
+  }
+
+  const fastify = Fastify(fastifyOptions);
 
   // Add raw body parser for all content types
   fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {

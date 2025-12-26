@@ -54,12 +54,14 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.10)
+### Implemented (v0.0.11)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
 - **SPARQL Update** - Standard SPARQL UPDATE protocol for PATCH
 - **Conditional Requests** - If-Match/If-None-Match headers (304, 412)
+- **CLI & Config** - `jss` command with config file/env var support
+- **SSL/TLS** - HTTPS support with certificate configuration
 - **WebSocket Notifications** - Real-time updates via solid-0.1 protocol (SolidOS compatible)
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Create pods at `/<username>/`
@@ -92,17 +94,74 @@ npm run benchmark
 
 ```bash
 npm install
+
+# Or install globally
+npm install -g javascript-solid-server
 ```
 
-### Running
+### Quick Start
 
 ```bash
-# Start server (default port 3000)
-npm start
+# Initialize configuration (interactive)
+jss init
 
-# Development mode with watch
-npm dev
+# Start server
+jss start
+
+# Or with options
+jss start --port 8443 --ssl-key ./key.pem --ssl-cert ./cert.pem
 ```
+
+### CLI Commands
+
+```bash
+jss start [options]    # Start the server
+jss init [options]     # Initialize configuration
+jss --help             # Show help
+```
+
+### Start Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `-p, --port <n>` | Port to listen on | 3000 |
+| `-h, --host <addr>` | Host to bind to | 0.0.0.0 |
+| `-r, --root <path>` | Data directory | ./data |
+| `-c, --config <file>` | Config file path | - |
+| `--ssl-key <path>` | SSL private key (PEM) | - |
+| `--ssl-cert <path>` | SSL certificate (PEM) | - |
+| `--conneg` | Enable Turtle support | false |
+| `--notifications` | Enable WebSocket | false |
+| `-q, --quiet` | Suppress logs | false |
+
+### Environment Variables
+
+All options can be set via environment variables with `JSS_` prefix:
+
+```bash
+export JSS_PORT=8443
+export JSS_SSL_KEY=/path/to/key.pem
+export JSS_SSL_CERT=/path/to/cert.pem
+export JSS_CONNEG=true
+jss start
+```
+
+### Config File
+
+Create `config.json`:
+
+```json
+{
+  "port": 8443,
+  "root": "./data",
+  "sslKey": "./ssl/key.pem",
+  "sslCert": "./ssl/cert.pem",
+  "conneg": true,
+  "notifications": true
+}
+```
+
+Then: `jss start --config config.json`
 
 ### Creating a Pod
 
