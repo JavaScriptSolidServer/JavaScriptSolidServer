@@ -16,13 +16,15 @@ const podTokens = new Map();
 
 /**
  * Start a test server on a random available port
+ * @param {object} options - Server options
+ * @param {boolean} options.conneg - Enable content negotiation (default false)
  * @returns {Promise<{server: object, baseUrl: string}>}
  */
-export async function startTestServer() {
+export async function startTestServer(options = {}) {
   // Clean up any existing test data
   await fs.emptyDir(TEST_DATA_DIR);
 
-  server = createServer({ logger: false });
+  server = createServer({ logger: false, ...options });
   // Use port 0 to let OS assign available port
   await server.listen({ port: 0, host: '127.0.0.1' });
 

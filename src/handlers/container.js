@@ -4,6 +4,7 @@ import { isContainer } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
+import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conneg.js';
 
 /**
  * Handle POST request to container (create new resource)
@@ -14,6 +15,19 @@ export async function handlePost(request, reply) {
   // Ensure target is a container
   if (!isContainer(urlPath)) {
     return reply.code(405).send({ error: 'POST only allowed on containers' });
+  }
+
+  const connegEnabled = request.connegEnabled || false;
+  const contentType = request.headers['content-type'] || '';
+
+  // Check if we can accept this input type
+  if (!canAcceptInput(contentType, connegEnabled)) {
+    return reply.code(415).send({
+      error: 'Unsupported Media Type',
+      message: connegEnabled
+        ? 'Supported types: application/ld+json, text/turtle, text/n3'
+        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+    });
   }
 
   // Check container exists
@@ -33,6 +47,7 @@ export async function handlePost(request, reply) {
   // Generate unique filename
   const filename = await storage.generateUniqueFilename(urlPath, slug, isCreatingContainer);
   const newPath = urlPath + filename + (isCreatingContainer ? '/' : '');
+  const resourceUrl = `${request.protocol}://${request.hostname}${newPath}`;
 
   let success;
   if (isCreatingContainer) {
@@ -49,6 +64,21 @@ export async function handlePost(request, reply) {
     } else {
       content = Buffer.from('');
     }
+
+    // Convert Turtle/N3 to JSON-LD if conneg enabled
+    const inputType = contentType.split(';')[0].trim().toLowerCase();
+    if (connegEnabled && (inputType === RDF_TYPES.TURTLE || inputType === RDF_TYPES.N3)) {
+      try {
+        const jsonLd = await toJsonLd(content, contentType, resourceUrl, connegEnabled);
+        content = Buffer.from(JSON.stringify(jsonLd, null, 2));
+      } catch (e) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'Invalid Turtle/N3 format: ' + e.message
+        });
+      }
+    }
+
     success = await storage.write(newPath, content);
   }
 
@@ -56,14 +86,15 @@ export async function handlePost(request, reply) {
     return reply.code(500).send({ error: 'Create failed' });
   }
 
-  const location = `${request.protocol}://${request.hostname}${newPath}`;
   const origin = request.headers.origin;
 
   const headers = getAllHeaders({
     isContainer: isCreatingContainer,
-    origin
+    origin,
+    connegEnabled
   });
-  headers['Location'] = location;
+  headers['Location'] = resourceUrl;
+  headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
   return reply.code(201).send();

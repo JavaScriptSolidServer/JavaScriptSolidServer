@@ -2,6 +2,8 @@
  * LDP (Linked Data Platform) header utilities
  */
 
+import { getAcceptHeaders } from '../rdf/conneg.js';
+
 const LDP = 'http://www.w3.org/ns/ldp#';
 
 /**
@@ -47,21 +49,21 @@ export function getAclUrl(resourceUrl, isContainer) {
  * @param {object} options
  * @returns {object}
  */
-export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null }) {
+export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null, connegEnabled = false }) {
   // Calculate ACL URL if resource URL provided
   const aclUrl = resourceUrl ? getAclUrl(resourceUrl, isContainer) : null;
 
   const headers = {
     'Link': getLinkHeader(isContainer, aclUrl),
     'WAC-Allow': wacAllow || 'user="read write append control", public="read write append"',
-    'Accept-Patch': 'application/sparql-update',
-    'Allow': 'GET, HEAD, PUT, DELETE, OPTIONS' + (isContainer ? ', POST' : ''),
-    'Vary': 'Accept, Authorization, Origin'
+    'Accept-Patch': 'text/n3, application/sparql-update',
+    'Allow': 'GET, HEAD, PUT, DELETE, PATCH, OPTIONS' + (isContainer ? ', POST' : ''),
+    'Vary': connegEnabled ? 'Accept, Authorization, Origin' : 'Authorization, Origin'
   };
 
-  if (isContainer) {
-    headers['Accept-Post'] = '*/*';
-  }
+  // Add Accept-* headers (conneg-aware)
+  const acceptHeaders = getAcceptHeaders(connegEnabled, isContainer);
+  Object.assign(headers, acceptHeaders);
 
   if (etag) {
     headers['ETag'] = etag;
@@ -95,9 +97,9 @@ export function getCorsHeaders(origin) {
  * @param {object} options
  * @returns {object}
  */
-export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null }) {
+export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null, connegEnabled = false }) {
   return {
-    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow }),
+    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow, connegEnabled }),
     ...getCorsHeaders(origin)
   };
 }

@@ -1,209 +1,230 @@
-# Vision
+# JavaScript Solid Server
 
-The goal of this project is to create a hyper-modern, performant, and minimalist JavaScript Solid server. While drawing inspiration from Node Solid Server (NSS), this new implementation will address its shortcomings and prioritize scalability, modularity, and developer usability.
+A minimal, fast, JSON-LD native Solid server.
 
-## Key Objectives
+## Philosophy: JSON-LD First
 
-- **Performance First:** Capable of handling enterprise-scale loads, targeting thousands to millions of users.
-- **Minimalist Design:** Remove unused and experimental features; focus on what matters most.
-- **Modularity:** Clear separation of identity, authentication, storage, and onboarding.
-- **Developer Friendly:** Clean, well-documented, and extensible codebase that adheres to the Solid specification.
-- **Modern Tooling:** Leverage async/await, native modules, fast HTTP servers like Fastify, and cutting-edge JavaScript runtimes.
-- **HTTP Simplicity:** Prioritize simple HTTP/1.1 compatibility for maximum interoperability.
-- **Frontend Agnostic:** Work with any frontend or application layer via standardized APIs.
-- **Testable and CI Ready:** Fully integrated with Solid test suites and modern CI/CD pipelines.
+This is a **JSON-LD native implementation**. Unlike traditional Solid servers that treat Turtle as the primary format and convert to/from it, this server:
 
----
+- **Stores everything as JSON-LD** - No RDF parsing overhead for standard operations
+- **Serves JSON-LD by default** - Modern web applications can consume responses directly
+- **Content negotiation is optional** - Enable Turtle support with `{ conneg: true }` when needed
+- **Fast by design** - Skip the RDF parsing tax when you don't need it
 
-# ARCHITECTURE
+### Why JSON-LD First?
 
-## Overview
+1. **Performance**: JSON parsing is native to JavaScript - no external RDF libraries needed for basic operations
+2. **Simplicity**: JSON-LD is valid JSON - works with any JSON tooling
+3. **Web-native**: Browsers and web apps understand JSON natively
+4. **Semantic web ready**: JSON-LD is a W3C standard RDF serialization
 
-The architecture is inspired by NSS but modernized and streamlined. Each subsystem is designed to operate independently and follow the single-responsibility principle.
+### When to Enable Content Negotiation
 
-### Components
+Enable `conneg: true` when:
+- Interoperating with Turtle-based Solid apps
+- Serving data to legacy Solid clients
+- Running conformance tests that require Turtle support
 
-- **HTTP Layer**
+```javascript
+import { createServer } from './src/server.js';
 
-  - Fastify server
-  - Routing and middleware based on HTTP verbs and Solid operations
-  - Blazingly fast, with benchmarks from the start
+// Default: JSON-LD only (fast)
+const server = createServer();
 
-- **Identity Provider (IDP)**
+// With Turtle support (for interoperability)
+const serverWithConneg = createServer({ conneg: true });
+```
 
-  - Handles Pod based WebIDs
-  - Handles external WebIDs
-  - Minimal by default, extendable via plugins
+## Features
 
-- **Authenticaion Module (AUthn)**
+### Implemented (v0.0.8)
 
-  - Handles WebID-based authentication, including WebID-TLS
-  - OIDC-compliant with modular Authentication
-  - Single sign-on including WebID-TLS
+- **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
+- **N3 Patch** - Solid's native patch format for RDF updates
+- **Container Management** - Create, list, and manage containers
+- **Multi-user Pods** - Create pods at `/<username>/`
+- **WebID Profiles** - JSON-LD structured data in HTML at pod root
+- **Web Access Control (WAC)** - `.acl` file-based authorization
+- **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
+- **Simple Auth Tokens** - Built-in token authentication for development
+- **Content Negotiation** - Optional Turtle <-> JSON-LD conversion
+- **CORS Support** - Full cross-origin resource sharing
 
-- **Authorization Module (Authz)**
+### HTTP Methods
 
-  - Supports Web Access Control (WAC)
-  - Token-based permissions model
-  - Modular Authorization system
-
-- **Storage Engine**
-
-  - Modular backend adapters (e.g. file system, S3, memory)
-  - POD-level quota management (optional)
-  - Interoperable with existing Cloud
-
-- **Account and Onboarding**
-  - API-first registration
-  - Public, private, invite modes
-  - Extensible account templates
-
-### Deployment Model
-
-- Works as a single binary or serverless function
-- Container-friendly (Docker, Deno, etc.)
-- CLI for local dev setup and testing
-
-### Separation of Concerns
-
-- Each subsystem lives in its own module/package
-- Clear boundaries between IDP and storage
-- Frontend-independent API endpoints
-
-### Compatibility
-
-- Solid-compliant, LWS Compliant
-- API parity with NSS where applicable
-- API parity with CSS where applicable
-
----
-
-# MVP Implementation
-
-This is a minimal viable product (MVP) implementation of the JavaScriptSolid server. It includes the core components needed to demonstrate the concept while omitting some of the more complex features for simplicity.
+| Method | Support |
+|--------|---------|
+| GET | Full - Resources and containers |
+| HEAD | Full |
+| PUT | Full - Create/update resources |
+| POST | Full - Create in containers |
+| DELETE | Full |
+| PATCH | N3 Patch format |
+| OPTIONS | Full with CORS |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18 or higher
+- Node.js 18+
 
 ### Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/javascript-solid-server.git
-cd javascript-solid-server
-
-# Install dependencies
 npm install
 ```
 
-### Running the Server
+### Running
 
 ```bash
-# Start the server
-npm start
-```
-
-The server will be available at http://localhost:3000 by default.
-
-## Features Included in MVP
-
-- **HTTP Server**: Based on Fastify for high performance
-- **Basic Identity Provider**: Simple user registration and login with JWT tokens
-- **Simple Authorization**: Basic implementation of WAC (Web Access Control)
-- **File-based Storage**: Local filesystem storage for Solid resources
-- **Basic Solid Protocol Support**: GET, PUT, DELETE, PATCH, and HEAD operations
-
-## Features Omitted in MVP (to be added later)
-
-1. WebID-TLS Authentication
-2. Full OIDC implementation
-3. Advanced WAC features and ACL file parsing
-4. Quotas and resource limits
-5. Advanced container management
-6. SPARQL and N3 Patch support
-7. Notification systems
-
-## API Usage Examples
-
-### User Registration
-
-```bash
-curl -X POST http://localhost:3000/register \
-  -H "Content-Type: application/json" \
-  -d '{"username": "alice", "password": "secret", "email": "alice@example.com"}'
-```
-
-### Login
-
-```bash
-curl -X POST http://localhost:3000/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "alice", "password": "secret"}'
-```
-
-### Accessing Resources
-
-```bash
-# Get a resource
-curl -X GET http://localhost:3000/alice/profile \
-  -H "Authorization: Bearer YOUR_TOKEN_HERE"
-
-# Create or update a resource
-curl -X PUT http://localhost:3000/alice/profile \
-  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
-  -H "Content-Type: text/turtle" \
-  -d '@prefix foaf: <http://xmlns.com/foaf/0.1/>. <#me> a foaf:Person; foaf:name "Alice".'
-```
-
-## Performance Benchmarking
-
-This project includes a comprehensive benchmarking tool to measure server performance under various loads.
-
-### Running the Benchmark
-
-```bash
-# Make sure the server is running in a separate terminal
+# Start server (default port 3000)
 npm start
 
-# In another terminal, run the benchmark
-npm run benchmark
+# Development mode with watch
+npm dev
 ```
 
-The benchmark will:
-
-1. Create multiple test users
-2. Execute various operations (register, login, read, write, delete)
-3. Measure response times for each operation type
-4. Test different concurrency levels (1, 5, 10, 50, 100 users)
-5. Calculate throughput (operations per second)
-
-### Visualizing Results
-
-After running the benchmark, you can generate a visual report:
+### Creating a Pod
 
 ```bash
-# Generate an HTML report with charts
-npm run visualize benchmark-report-[timestamp].json
+curl -X POST http://localhost:3000/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "alice"}'
 ```
 
-Open the generated HTML file in a browser to see:
+Response:
+```json
+{
+  "name": "alice",
+  "webId": "http://localhost:3000/alice/#me",
+  "podUri": "http://localhost:3000/alice/",
+  "token": "eyJ..."
+}
+```
 
-- Average response times for each operation type
-- Throughput metrics at different concurrency levels
-- Visual charts for easy performance analysis
+### Using the Pod
 
-### Customizing Benchmarks
+```bash
+# Read public profile
+curl http://localhost:3000/alice/
 
-You can customize the benchmark parameters in `benchmark.js`:
+# Write to pod (with token)
+curl -X PUT http://localhost:3000/alice/public/data.json \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/ld+json" \
+  -d '{"@id": "#data", "http://example.org/value": 42}'
 
-- Concurrent users levels
-- Operations per user
-- Test duration
-- Test user credentials
+# Read back
+curl http://localhost:3000/alice/public/data.json
+```
 
-## Contributing
+### PATCH with N3
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```bash
+curl -X PATCH http://localhost:3000/alice/public/data.json \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: text/n3" \
+  -d '@prefix solid: <http://www.w3.org/ns/solid/terms#>.
+      _:patch a solid:InsertDeletePatch;
+        solid:inserts { <#data> <http://example.org/name> "Updated" }.'
+```
+
+## Pod Structure
+
+```
+/alice/
+├── index.html          # WebID profile (HTML with JSON-LD)
+├── .acl                 # Root ACL (owner + public read)
+├── inbox/              # Notifications (public append)
+│   └── .acl
+├── public/             # Public files
+├── private/            # Private files (owner only)
+│   └── .acl
+└── settings/           # User preferences (owner only)
+    ├── .acl
+    ├── prefs
+    ├── publicTypeIndex
+    └── privateTypeIndex
+```
+
+## Authentication
+
+### Simple Tokens (Development)
+
+Use the token returned from pod creation:
+
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/alice/private/
+```
+
+### Solid-OIDC (Production)
+
+The server accepts DPoP-bound access tokens from external Solid identity providers:
+
+```bash
+curl -H "Authorization: DPoP ACCESS_TOKEN" \
+     -H "DPoP: DPOP_PROOF" \
+     http://localhost:3000/alice/private/
+```
+
+## Configuration
+
+```javascript
+createServer({
+  logger: true,     // Enable Fastify logging (default: true)
+  conneg: false     // Enable content negotiation (default: false)
+});
+```
+
+## Running Tests
+
+```bash
+npm test
+```
+
+Currently passing: **105 tests**
+
+## Project Structure
+
+```
+src/
+├── index.js              # Entry point
+├── server.js             # Fastify setup
+├── handlers/
+│   ├── resource.js       # GET, PUT, DELETE, HEAD, PATCH
+│   └── container.js      # POST, pod creation
+├── storage/
+│   └── filesystem.js     # File operations
+├── auth/
+│   ├── middleware.js     # Auth hook
+│   ├── token.js          # Simple token auth
+│   └── solid-oidc.js     # DPoP verification
+├── wac/
+│   ├── parser.js         # ACL parsing
+│   └── checker.js        # Permission checking
+├── ldp/
+│   ├── headers.js        # LDP Link headers
+│   └── container.js      # Container JSON-LD
+├── webid/
+│   └── profile.js        # WebID generation
+├── patch/
+│   └── n3-patch.js       # N3 Patch support
+├── rdf/
+│   ├── turtle.js         # Turtle <-> JSON-LD
+│   └── conneg.js         # Content negotiation
+└── utils/
+    └── url.js            # URL utilities
+```
+
+## Dependencies
+
+Minimal dependencies for a fast, secure server:
+
+- **fastify** - High-performance HTTP server
+- **fs-extra** - Enhanced file operations
+- **jose** - JWT/JWK handling for Solid-OIDC
+- **n3** - Turtle parsing (only used when conneg enabled)
+
+## License
+
+MIT

@@ -3,6 +3,14 @@ import { getAllHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
+import {
+  selectContentType,
+  canAcceptInput,
+  toJsonLd,
+  fromJsonLd,
+  getVaryHeader,
+  RDF_TYPES
+} from '../rdf/conneg.js';
 
 /**
  * Handle GET request
@@ -20,6 +28,8 @@ export async function handleGet(request, reply) {
 
   // Handle container
   if (stats.isDirectory) {
+    const connegEnabled = request.connegEnabled || false;
+
     // Check for index.html (serves as both profile and container representation)
     const indexPath = urlPath.endsWith('/') ? `${urlPath}index.html` : `${urlPath}/index.html`;
     const indexExists = await storage.exists(indexPath);
@@ -34,7 +44,8 @@ export async function handleGet(request, reply) {
         etag: indexStats?.etag || stats.etag,
         contentType: 'text/html',
         origin,
-        resourceUrl
+        resourceUrl,
+        connegEnabled
       });
 
       Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -50,7 +61,8 @@ export async function handleGet(request, reply) {
       etag: stats.etag,
       contentType: 'application/ld+json',
       origin,
-      resourceUrl
+      resourceUrl,
+      connegEnabled
     });
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -63,14 +75,54 @@ export async function handleGet(request, reply) {
     return reply.code(500).send({ error: 'Read error' });
   }
 
-  const contentType = getContentType(urlPath);
+  const storedContentType = getContentType(urlPath);
+  const connegEnabled = request.connegEnabled || false;
+
+  // Content negotiation for RDF resources
+  if (connegEnabled && isRdfContentType(storedContentType)) {
+    try {
+      // Parse stored content as JSON-LD
+      const jsonLd = JSON.parse(content.toString());
+
+      // Select output format based on Accept header
+      const acceptHeader = request.headers.accept;
+      const targetType = selectContentType(acceptHeader, connegEnabled);
+
+      // Convert to requested format
+      const { content: outputContent, contentType: outputType } = await fromJsonLd(
+        jsonLd,
+        targetType,
+        resourceUrl,
+        connegEnabled
+      );
+
+      const headers = getAllHeaders({
+        isContainer: false,
+        etag: stats.etag,
+        contentType: outputType,
+        origin,
+        resourceUrl,
+        connegEnabled
+      });
+      headers['Vary'] = getVaryHeader(connegEnabled);
+
+      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+      return reply.send(outputContent);
+    } catch (e) {
+      // If not valid JSON-LD, serve as-is
+    }
+  }
+
+  // Serve content as-is (no conneg or non-RDF resource)
   const headers = getAllHeaders({
     isContainer: false,
     etag: stats.etag,
-    contentType,
+    contentType: storedContentType,
     origin,
-    resourceUrl
+    resourceUrl,
+    connegEnabled
   });
+  headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
   return reply.send(content);
@@ -118,6 +170,20 @@ export async function handlePut(request, reply) {
     return reply.code(409).send({ error: 'Cannot PUT to container. Use POST instead.' });
   }
 
+  const connegEnabled = request.connegEnabled || false;
+  const contentType = request.headers['content-type'] || '';
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+
+  // Check if we can accept this input type
+  if (!canAcceptInput(contentType, connegEnabled)) {
+    return reply.code(415).send({
+      error: 'Unsupported Media Type',
+      message: connegEnabled
+        ? 'Supported types: application/ld+json, text/turtle, text/n3'
+        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+    });
+  }
+
   // Check if resource already exists
   const existed = await storage.exists(urlPath);
 
@@ -135,15 +201,29 @@ export async function handlePut(request, reply) {
     content = Buffer.from('');
   }
 
+  // Convert Turtle/N3 to JSON-LD if conneg enabled
+  const inputType = contentType.split(';')[0].trim().toLowerCase();
+  if (connegEnabled && (inputType === RDF_TYPES.TURTLE || inputType === RDF_TYPES.N3)) {
+    try {
+      const jsonLd = await toJsonLd(content, contentType, resourceUrl, connegEnabled);
+      content = Buffer.from(JSON.stringify(jsonLd, null, 2));
+    } catch (e) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Invalid Turtle/N3 format: ' + e.message
+      });
+    }
+  }
+
   const success = await storage.write(urlPath, content);
   if (!success) {
     return reply.code(500).send({ error: 'Write failed' });
   }
 
   const origin = request.headers.origin;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
-  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
+  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl, connegEnabled });
   headers['Location'] = resourceUrl;
+  headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
   return reply.code(existed ? 204 : 201).send();

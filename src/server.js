@@ -6,8 +6,14 @@ import { authorize, handleUnauthorized } from './auth/middleware.js';
 
 /**
  * Create and configure Fastify server
+ * @param {object} options - Server options
+ * @param {boolean} options.logger - Enable logging (default true)
+ * @param {boolean} options.conneg - Enable content negotiation for RDF (default false)
  */
 export function createServer(options = {}) {
+  // Content negotiation is OFF by default - we're a JSON-LD native server
+  const connegEnabled = options.conneg ?? false;
+
   const fastify = Fastify({
     logger: options.logger ?? true,
     trustProxy: true,
@@ -18,6 +24,12 @@ export function createServer(options = {}) {
   // Add raw body parser for all content types
   fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
     done(null, body);
+  });
+
+  // Attach server config to requests
+  fastify.decorateRequest('connegEnabled', null);
+  fastify.addHook('onRequest', async (request) => {
+    request.connegEnabled = connegEnabled;
   });
 
   // Global CORS preflight
