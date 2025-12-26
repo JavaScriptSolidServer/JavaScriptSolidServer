@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions } from './handlers/resource.js';
 import { handlePost, handleCreatePod } from './handlers/container.js';
 import { getCorsHeaders } from './ldp/headers.js';
+import { authorize, handleUnauthorized } from './auth/middleware.js';
 
 /**
  * Create and configure Fastify server
@@ -31,6 +32,25 @@ export function createServer(options = {}) {
       reply.header('Allow', 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS');
       reply.code(204).send();
       return reply;
+    }
+  });
+
+  // Authorization hook - check WAC permissions
+  // Skip for pod creation endpoint (needs special handling)
+  fastify.addHook('preHandler', async (request, reply) => {
+    // Skip auth for pod creation and OPTIONS
+    if (request.url === '/.pods' || request.method === 'OPTIONS') {
+      return;
+    }
+
+    const { authorized, webId, wacAllow } = await authorize(request, reply);
+
+    // Store webId and wacAllow on request for handlers to use
+    request.webId = webId;
+    request.wacAllow = wacAllow;
+
+    if (!authorized) {
+      return handleUnauthorized(reply, webId !== null, wacAllow);
     }
   });
 

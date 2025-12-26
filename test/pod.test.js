@@ -8,6 +8,7 @@ import {
   startTestServer,
   stopTestServer,
   request,
+  createTestPod,
   assertStatus,
   assertHeader,
   assertHeaderContains
@@ -80,46 +81,38 @@ describe('Pod Lifecycle', () => {
 
   describe('Pod Structure', () => {
     it('should create standard folders', async () => {
-      await request('/.pods', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'carol' })
-      });
+      await createTestPod('carol');
 
-      // Check inbox exists
-      const inbox = await request('/carol/inbox/');
+      // Check inbox exists (needs auth - inbox only allows public append, not read)
+      const inbox = await request('/carol/inbox/', { auth: 'carol' });
       assertStatus(inbox, 200);
 
-      // Check public exists
+      // Check public exists (public read via root ACL default)
       const pub = await request('/carol/public/');
       assertStatus(pub, 200);
 
-      // Check private exists
-      const priv = await request('/carol/private/');
+      // Check private exists (needs auth)
+      const priv = await request('/carol/private/', { auth: 'carol' });
       assertStatus(priv, 200);
 
-      // Check settings exists
-      const settings = await request('/carol/settings/');
+      // Check settings exists (needs auth)
+      const settings = await request('/carol/settings/', { auth: 'carol' });
       assertStatus(settings, 200);
     });
 
     it('should create settings files', async () => {
-      await request('/.pods', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'dan' })
-      });
+      await createTestPod('dan');
 
-      // Check prefs
-      const prefs = await request('/dan/settings/prefs');
+      // Check prefs (needs auth - settings is private)
+      const prefs = await request('/dan/settings/prefs', { auth: 'dan' });
       assertStatus(prefs, 200);
 
-      // Check public type index
-      const pubIndex = await request('/dan/settings/publicTypeIndex');
+      // Check public type index (needs auth)
+      const pubIndex = await request('/dan/settings/publicTypeIndex', { auth: 'dan' });
       assertStatus(pubIndex, 200);
 
-      // Check private type index
-      const privIndex = await request('/dan/settings/privateTypeIndex');
+      // Check private type index (needs auth)
+      const privIndex = await request('/dan/settings/privateTypeIndex', { auth: 'dan' });
       assertStatus(privIndex, 200);
     });
   });

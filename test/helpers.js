@@ -11,6 +11,9 @@ const TEST_DATA_DIR = './data';
 let server = null;
 let baseUrl = null;
 
+// Store tokens for pods by name
+const podTokens = new Map();
+
 /**
  * Start a test server on a random available port
  * @returns {Promise<{server: object, baseUrl: string}>}
@@ -39,6 +42,8 @@ export async function stopTestServer() {
   }
   // Clean up test data
   await fs.emptyDir(TEST_DATA_DIR);
+  // Clear tokens
+  podTokens.clear();
 }
 
 /**
@@ -51,7 +56,7 @@ export function getBaseUrl() {
 /**
  * Create a pod for testing
  * @param {string} name - Pod name
- * @returns {Promise<{webId: string, podUri: string}>}
+ * @returns {Promise<{webId: string, podUri: string, token: string}>}
  */
 export async function createTestPod(name) {
   const res = await fetch(`${baseUrl}/.pods`, {
@@ -64,18 +69,47 @@ export async function createTestPod(name) {
     throw new Error(`Failed to create pod: ${res.status}`);
   }
 
-  return res.json();
+  const result = await res.json();
+
+  // Store the token for this pod
+  if (result.token) {
+    podTokens.set(name, result.token);
+  }
+
+  return result;
+}
+
+/**
+ * Get token for a pod
+ * @param {string} name - Pod name
+ * @returns {string|null}
+ */
+export function getPodToken(name) {
+  return podTokens.get(name) || null;
 }
 
 /**
  * Make a request to the test server
  * @param {string} path - URL path
- * @param {object} options - fetch options
+ * @param {object} options - fetch options (can include `auth: 'podname'` for authenticated requests)
  * @returns {Promise<Response>}
  */
 export async function request(urlPath, options = {}) {
   const url = urlPath.startsWith('http') ? urlPath : `${baseUrl}${urlPath}`;
-  return fetch(url, options);
+
+  // Handle authentication
+  const { auth, ...fetchOptions } = options;
+  if (auth) {
+    const token = podTokens.get(auth);
+    if (token) {
+      fetchOptions.headers = {
+        ...fetchOptions.headers,
+        'Authorization': `Bearer ${token}`
+      };
+    }
+  }
+
+  return fetch(url, fetchOptions);
 }
 
 /**

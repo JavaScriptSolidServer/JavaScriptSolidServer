@@ -28,8 +28,9 @@ export async function checkAccess({
   const aclResult = await findApplicableAcl(resourceUrl, resourcePath, isContainer);
 
   if (!aclResult) {
-    // No ACL found - deny by default
-    return { allowed: false, wacAllow: 'user="", public=""' };
+    // No ACL found - allow by default (permissive mode)
+    // This allows resources without ACLs to be publicly accessible
+    return { allowed: true, wacAllow: 'user="read write append control", public="read write append"' };
   }
 
   const { authorizations, isDefault, targetUrl } = aclResult;

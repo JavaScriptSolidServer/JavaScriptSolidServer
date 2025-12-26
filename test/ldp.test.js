@@ -41,11 +41,12 @@ describe('LDP CRUD Operations', () => {
     });
 
     it('should return resource content', async () => {
-      // Create resource first
+      // Create resource first (authenticated)
       await request('/ldptest/public/test.json', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hello: 'world' })
+        body: JSON.stringify({ hello: 'world' }),
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/test.json');
@@ -58,7 +59,8 @@ describe('LDP CRUD Operations', () => {
     it('should return ETag header', async () => {
       await request('/ldptest/public/etag-test.txt', {
         method: 'PUT',
-        body: 'test content'
+        body: 'test content',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/etag-test.txt');
@@ -72,7 +74,8 @@ describe('LDP CRUD Operations', () => {
     it('should return headers without body', async () => {
       await request('/ldptest/public/head-test.txt', {
         method: 'PUT',
-        body: 'test content'
+        body: 'test content',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/head-test.txt', {
@@ -101,7 +104,8 @@ describe('LDP CRUD Operations', () => {
       const res = await request('/ldptest/public/new-resource.json', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ created: true })
+        body: JSON.stringify({ created: true }),
+        auth: 'ldptest'
       });
 
       assertStatus(res, 201);
@@ -112,13 +116,15 @@ describe('LDP CRUD Operations', () => {
       // Create
       await request('/ldptest/public/update-me.txt', {
         method: 'PUT',
-        body: 'original'
+        body: 'original',
+        auth: 'ldptest'
       });
 
       // Update
       const res = await request('/ldptest/public/update-me.txt', {
         method: 'PUT',
-        body: 'updated'
+        body: 'updated',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 204);
@@ -132,7 +138,8 @@ describe('LDP CRUD Operations', () => {
     it('should create parent containers', async () => {
       const res = await request('/ldptest/public/nested/deep/file.txt', {
         method: 'PUT',
-        body: 'nested content'
+        body: 'nested content',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 201);
@@ -145,7 +152,8 @@ describe('LDP CRUD Operations', () => {
     it('should reject PUT to container path', async () => {
       const res = await request('/ldptest/public/invalid/', {
         method: 'PUT',
-        body: 'cannot put to container'
+        body: 'cannot put to container',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 409);
@@ -160,7 +168,8 @@ describe('LDP CRUD Operations', () => {
           'Content-Type': 'application/json',
           'Slug': 'posted-resource'
         },
-        body: JSON.stringify({ posted: true })
+        body: JSON.stringify({ posted: true }),
+        auth: 'ldptest'
       });
 
       assertStatus(res, 201);
@@ -179,7 +188,8 @@ describe('LDP CRUD Operations', () => {
           'Content-Type': 'text/plain',
           'Slug': 'my-custom-name.txt'
         },
-        body: 'slug test'
+        body: 'slug test',
+        auth: 'ldptest'
       });
 
       const location = res.headers.get('Location');
@@ -192,7 +202,8 @@ describe('LDP CRUD Operations', () => {
         headers: {
           'Slug': 'new-container',
           'Link': '<http://www.w3.org/ns/ldp#BasicContainer>; rel="type"'
-        }
+        },
+        auth: 'ldptest'
       });
 
       assertStatus(res, 201);
@@ -208,12 +219,14 @@ describe('LDP CRUD Operations', () => {
     it('should reject POST to non-container', async () => {
       await request('/ldptest/public/file-not-container.txt', {
         method: 'PUT',
-        body: 'just a file'
+        body: 'just a file',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/file-not-container.txt', {
         method: 'POST',
-        body: 'trying to post'
+        body: 'trying to post',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 405);
@@ -224,11 +237,13 @@ describe('LDP CRUD Operations', () => {
     it('should delete resource', async () => {
       await request('/ldptest/public/to-delete.txt', {
         method: 'PUT',
-        body: 'delete me'
+        body: 'delete me',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/to-delete.txt', {
-        method: 'DELETE'
+        method: 'DELETE',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 204);
@@ -240,7 +255,8 @@ describe('LDP CRUD Operations', () => {
 
     it('should return 404 for non-existent', async () => {
       const res = await request('/ldptest/public/never-existed.txt', {
-        method: 'DELETE'
+        method: 'DELETE',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 404);
@@ -253,11 +269,13 @@ describe('LDP CRUD Operations', () => {
         headers: {
           'Slug': 'container-to-delete',
           'Link': '<http://www.w3.org/ns/ldp#BasicContainer>; rel="type"'
-        }
+        },
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/container-to-delete/', {
-        method: 'DELETE'
+        method: 'DELETE',
+        auth: 'ldptest'
       });
 
       assertStatus(res, 204);
@@ -291,7 +309,8 @@ describe('LDP CRUD Operations', () => {
     it('should return Link type header for resource', async () => {
       await request('/ldptest/public/resource-link.txt', {
         method: 'PUT',
-        body: 'test'
+        body: 'test',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/resource-link.txt');
@@ -322,7 +341,8 @@ describe('LDP CRUD Operations', () => {
     it('should return acl Link header for resource', async () => {
       await request('/ldptest/public/acl-test.txt', {
         method: 'PUT',
-        body: 'test'
+        body: 'test',
+        auth: 'ldptest'
       });
 
       const res = await request('/ldptest/public/acl-test.txt');

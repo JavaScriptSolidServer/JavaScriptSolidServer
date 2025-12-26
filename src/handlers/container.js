@@ -3,6 +3,7 @@ import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, serializeAcl } from '../wac/parser.js';
+import { createToken } from '../auth/token.js';
 
 /**
  * Handle POST request to container (create new resource)
@@ -161,9 +162,13 @@ export async function handleCreatePod(request, reply) {
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
+  // Generate token for the pod owner
+  const token = createToken(webId);
+
   return reply.code(201).send({
     name,
     webId,
-    podUri
+    podUri,
+    token
   });
 }
