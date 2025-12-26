@@ -5,6 +5,7 @@ import { generateProfile, generatePreferences, generateTypeIndex, serialize } fr
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conneg.js';
+import { emitChange } from '../notifications/events.js';
 
 /**
  * Handle POST request to container (create new resource)
@@ -97,6 +98,12 @@ export async function handlePost(request, reply) {
   headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Emit change notification for WebSocket subscribers
+  if (request.notificationsEnabled) {
+    emitChange(resourceUrl);
+  }
+
   return reply.code(201).send();
 }
 

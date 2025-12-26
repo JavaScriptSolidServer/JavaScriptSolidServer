@@ -1,6 +1,6 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
@@ -10,6 +10,7 @@
     "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
+    "@fastify/websocket": "^8.3.1",
     "fastify": "^4.25.2",
     "fs-extra": "^11.2.0",
     "jose": "^6.1.3",

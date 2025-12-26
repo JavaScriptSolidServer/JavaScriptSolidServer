@@ -49,7 +49,7 @@ export function getAclUrl(resourceUrl, isContainer) {
  * @param {object} options
  * @returns {object}
  */
-export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null, connegEnabled = false }) {
+export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null, connegEnabled = false, updatesVia = null }) {
   // Calculate ACL URL if resource URL provided
   const aclUrl = resourceUrl ? getAclUrl(resourceUrl, isContainer) : null;
 
@@ -64,6 +64,11 @@ export function getResponseHeaders({ isContainer = false, etag = null, contentTy
   // Add Accept-* headers (conneg-aware)
   const acceptHeaders = getAcceptHeaders(connegEnabled, isContainer);
   Object.assign(headers, acceptHeaders);
+
+  // Add Updates-Via header for WebSocket notifications discovery
+  if (updatesVia) {
+    headers['Updates-Via'] = updatesVia;
+  }
 
   if (etag) {
     headers['ETag'] = etag;
@@ -86,7 +91,7 @@ export function getCorsHeaders(origin) {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS',
     'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type, If-Match, If-None-Match, Link, Slug, Origin',
-    'Access-Control-Expose-Headers': 'Accept-Patch, Accept-Post, Allow, Content-Type, ETag, Link, Location, WAC-Allow',
+    'Access-Control-Expose-Headers': 'Accept-Patch, Accept-Post, Allow, Content-Type, ETag, Link, Location, Updates-Via, WAC-Allow',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400'
   };
@@ -97,9 +102,9 @@ export function getCorsHeaders(origin) {
  * @param {object} options
  * @returns {object}
  */
-export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null, connegEnabled = false }) {
+export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null, connegEnabled = false, updatesVia = null }) {
   return {
-    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow, connegEnabled }),
+    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow, connegEnabled, updatesVia }),
     ...getCorsHeaders(origin)
   };
 }

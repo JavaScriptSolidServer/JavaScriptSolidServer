@@ -11,6 +11,7 @@ import {
   getVaryHeader,
   RDF_TYPES
 } from '../rdf/conneg.js';
+import { emitChange } from '../notifications/events.js';
 
 /**
  * Handle GET request
@@ -226,6 +227,12 @@ export async function handlePut(request, reply) {
   headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Emit change notification for WebSocket subscribers
+  if (request.notificationsEnabled) {
+    emitChange(resourceUrl);
+  }
+
   return reply.code(existed ? 204 : 201).send();
 }
 
@@ -249,6 +256,11 @@ export async function handleDelete(request, reply) {
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Emit change notification for WebSocket subscribers
+  if (request.notificationsEnabled) {
+    emitChange(resourceUrl);
+  }
 
   return reply.code(204).send();
 }
@@ -364,6 +376,11 @@ export async function handlePatch(request, reply) {
   const origin = request.headers.origin;
   const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Emit change notification for WebSocket subscribers
+  if (request.notificationsEnabled) {
+    emitChange(resourceUrl);
+  }
 
   return reply.code(204).send();
 }
