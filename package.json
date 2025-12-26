@@ -1,23 +1,21 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.1.0",
-  "description": "A minimalist, high-performance JavaScript Solid Server",
+  "version": "0.0.2",
+  "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test",
-    "benchmark": "node benchmark.js",
-    "visualize": "node visualize-results.js"
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "fastify": "^4.25.2",
-    "@fastify/cors": "^8.5.0",
-    "jose": "^5.2.2",
-    "fs-extra": "^11.2.0",
-    "node-fetch": "^3.3.2"
+    "fs-extra": "^11.2.0"
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": ["solid", "ldp", "linked-data", "decentralized"],
+  "license": "MIT"
 }
