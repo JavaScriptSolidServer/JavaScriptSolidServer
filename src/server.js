@@ -54,14 +54,7 @@ export function createServer(options = {}) {
       const wsProtocol = request.protocol === 'https' ? 'wss' : 'ws';
       reply.header('Updates-Via', `${wsProtocol}://${request.hostname}/.notifications`);
     }
-
-    // Handle preflight OPTIONS
-    if (request.method === 'OPTIONS') {
-      // Add Allow header for LDP compliance
-      reply.header('Allow', 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS');
-      reply.code(204).send();
-      return reply;
-    }
+    // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
 
   // Authorization hook - check WAC permissions

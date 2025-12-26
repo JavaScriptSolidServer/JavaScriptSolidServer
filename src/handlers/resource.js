@@ -315,10 +315,12 @@ export async function handleOptions(request, reply) {
 
   const origin = request.headers.origin;
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const connegEnabled = request.connegEnabled || false;
   const headers = getAllHeaders({
     isContainer: stats?.isDirectory || isContainer(urlPath),
     origin,
-    resourceUrl
+    resourceUrl,
+    connegEnabled
   });
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));

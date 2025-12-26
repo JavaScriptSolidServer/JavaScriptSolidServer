@@ -264,7 +264,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 npm test
 ```
 
-Currently passing: **136 tests**
+Currently passing: **163 tests** (including 27 conformance tests)
 
 ## Project Structure
 
