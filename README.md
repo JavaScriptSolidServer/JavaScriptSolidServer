@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.12)
+### Implemented (v0.0.13)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
