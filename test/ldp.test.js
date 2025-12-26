@@ -318,5 +318,26 @@ describe('LDP CRUD Operations', () => {
 
       assertHeader(res, 'Accept-Post');
     });
+
+    it('should return acl Link header for resource', async () => {
+      await request('/ldptest/public/acl-test.txt', {
+        method: 'PUT',
+        body: 'test'
+      });
+
+      const res = await request('/ldptest/public/acl-test.txt');
+      const link = res.headers.get('Link');
+
+      assert.ok(link.includes('rel="acl"'), 'Should have acl link relation');
+      assert.ok(link.includes('acl-test.txt.acl'), 'ACL should be resource.acl');
+    });
+
+    it('should return acl Link header for container', async () => {
+      const res = await request('/ldptest/public/');
+      const link = res.headers.get('Link');
+
+      assert.ok(link.includes('rel="acl"'), 'Should have acl link relation');
+      assert.ok(link.includes('.acl'), 'Should link to .acl');
+    });
   });
 });

@@ -2,9 +2,7 @@ import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
-
-// Content type for profile card
-const PROFILE_CONTENT_TYPE = 'text/html';
+import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, serializeAcl } from '../wac/parser.js';
 
 /**
  * Handle POST request to container (create new resource)
@@ -132,6 +130,23 @@ export async function handleCreatePod(request, reply) {
 
     const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex`);
     await storage.write(`${podPath}settings/privateTypeIndex`, serialize(privateTypeIndex));
+
+    // Create default ACL files
+    // Pod root: owner full control, public read
+    const rootAcl = generateOwnerAcl(podUri, webId, true);
+    await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
+
+    // Private folder: owner only (no public)
+    const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
+    await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
+
+    // Settings folder: owner only
+    const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+    await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
+
+    // Inbox: owner full, public append
+    const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
+    await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
 
   } catch (err) {
     console.error('Pod creation error:', err);

@@ -15,6 +15,7 @@ export async function handleGet(request, reply) {
   }
 
   const origin = request.headers.origin;
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   // Handle container
   if (stats.isDirectory) {
@@ -31,7 +32,8 @@ export async function handleGet(request, reply) {
         isContainer: true,
         etag: indexStats?.etag || stats.etag,
         contentType: 'text/html',
-        origin
+        origin,
+        resourceUrl
       });
 
       Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -40,14 +42,14 @@ export async function handleGet(request, reply) {
 
     // No index.html, return JSON-LD container listing
     const entries = await storage.listContainer(urlPath);
-    const baseUrl = `${request.protocol}://${request.hostname}${urlPath}`;
-    const jsonLd = generateContainerJsonLd(baseUrl, entries || []);
+    const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
     const headers = getAllHeaders({
       isContainer: true,
       etag: stats.etag,
       contentType: 'application/ld+json',
-      origin
+      origin,
+      resourceUrl
     });
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -65,7 +67,8 @@ export async function handleGet(request, reply) {
     isContainer: false,
     etag: stats.etag,
     contentType,
-    origin
+    origin,
+    resourceUrl
   });
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -84,13 +87,15 @@ export async function handleHead(request, reply) {
   }
 
   const origin = request.headers.origin;
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   const contentType = stats.isDirectory ? 'application/ld+json' : getContentType(urlPath);
 
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
     etag: stats.etag,
     contentType,
-    origin
+    origin,
+    resourceUrl
   });
 
   if (!stats.isDirectory) {
@@ -135,8 +140,9 @@ export async function handlePut(request, reply) {
   }
 
   const origin = request.headers.origin;
-  const headers = getAllHeaders({ isContainer: false, origin });
-  headers['Location'] = `${request.protocol}://${request.hostname}${urlPath}`;
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
+  headers['Location'] = resourceUrl;
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
   return reply.code(existed ? 204 : 201).send();
@@ -159,7 +165,8 @@ export async function handleDelete(request, reply) {
   }
 
   const origin = request.headers.origin;
-  const headers = getAllHeaders({ isContainer: false, origin });
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
   return reply.code(204).send();
@@ -173,9 +180,11 @@ export async function handleOptions(request, reply) {
   const stats = await storage.stat(urlPath);
 
   const origin = request.headers.origin;
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   const headers = getAllHeaders({
     isContainer: stats?.isDirectory || isContainer(urlPath),
-    origin
+    origin,
+    resourceUrl
   });
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
