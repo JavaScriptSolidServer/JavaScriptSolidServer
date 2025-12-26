@@ -1,5 +1,5 @@
 import Fastify from 'fastify';
-import { handleGet, handleHead, handlePut, handleDelete, handleOptions } from './handlers/resource.js';
+import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
 import { handlePost, handleCreatePod } from './handlers/container.js';
 import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
@@ -63,6 +63,7 @@ export function createServer(options = {}) {
   fastify.put('/*', handlePut);
   fastify.delete('/*', handleDelete);
   fastify.post('/*', handlePost);
+  fastify.patch('/*', handlePatch);
   fastify.options('/*', handleOptions);
 
   // Root route

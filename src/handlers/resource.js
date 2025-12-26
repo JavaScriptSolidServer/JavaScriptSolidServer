@@ -2,6 +2,7 @@ import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType } from '../utils/url.js';
+import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
 
 /**
  * Handle GET request
@@ -188,5 +189,101 @@ export async function handleOptions(request, reply) {
   });
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+  return reply.code(204).send();
+}
+
+/**
+ * Handle PATCH request
+ * Supports N3 Patch format (text/n3) for updating RDF resources
+ */
+export async function handlePatch(request, reply) {
+  const urlPath = request.url.split('?')[0];
+
+  // Don't allow PATCH to containers
+  if (isContainer(urlPath)) {
+    return reply.code(409).send({ error: 'Cannot PATCH containers' });
+  }
+
+  // Check content type
+  const contentType = request.headers['content-type'] || '';
+  const isN3Patch = contentType.includes('text/n3') ||
+                    contentType.includes('application/n3') ||
+                    contentType.includes('application/sparql-update');
+
+  if (!isN3Patch) {
+    return reply.code(415).send({
+      error: 'Unsupported Media Type',
+      message: 'PATCH requires Content-Type: text/n3 for N3 Patch format'
+    });
+  }
+
+  // Check if resource exists
+  const stats = await storage.stat(urlPath);
+  if (!stats) {
+    return reply.code(404).send({ error: 'Not Found' });
+  }
+
+  // Read existing content
+  const existingContent = await storage.read(urlPath);
+  if (existingContent === null) {
+    return reply.code(500).send({ error: 'Read error' });
+  }
+
+  // Parse existing document as JSON-LD
+  let document;
+  try {
+    document = JSON.parse(existingContent.toString());
+  } catch (e) {
+    return reply.code(409).send({
+      error: 'Conflict',
+      message: 'Resource is not valid JSON-LD and cannot be patched'
+    });
+  }
+
+  // Parse the patch
+  const patchContent = Buffer.isBuffer(request.body)
+    ? request.body.toString()
+    : request.body;
+
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  let patch;
+  try {
+    patch = parseN3Patch(patchContent, resourceUrl);
+  } catch (e) {
+    return reply.code(400).send({
+      error: 'Bad Request',
+      message: 'Invalid N3 Patch format: ' + e.message
+    });
+  }
+
+  // Validate that deletes exist (optional strict mode)
+  // const validation = validatePatch(document, patch, resourceUrl);
+  // if (!validation.valid) {
+  //   return reply.code(409).send({ error: 'Conflict', message: validation.error });
+  // }
+
+  // Apply the patch
+  let updatedDocument;
+  try {
+    updatedDocument = applyN3Patch(document, patch, resourceUrl);
+  } catch (e) {
+    return reply.code(409).send({
+      error: 'Conflict',
+      message: 'Failed to apply patch: ' + e.message
+    });
+  }
+
+  // Write updated document
+  const updatedContent = JSON.stringify(updatedDocument, null, 2);
+  const success = await storage.write(urlPath, Buffer.from(updatedContent));
+
+  if (!success) {
+    return reply.code(500).send({ error: 'Write failed' });
+  }
+
+  const origin = request.headers.origin;
+  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
+  Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
   return reply.code(204).send();
 }
