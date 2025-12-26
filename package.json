@@ -19,6 +19,7 @@
     "start": "node bin/jss.js start",
     "dev": "node --watch bin/jss.js start",
     "test": "node --test --test-concurrency=1",
+    "test:cth": "node scripts/test-cth-compat.js",
     "benchmark": "node benchmark.js"
   },
   "dependencies": {
