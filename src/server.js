@@ -25,8 +25,10 @@ export function createServer(options = {}) {
     const corsHeaders = getCorsHeaders(request.headers.origin);
     Object.entries(corsHeaders).forEach(([k, v]) => reply.header(k, v));
 
-    // Handle preflight
+    // Handle preflight OPTIONS
     if (request.method === 'OPTIONS') {
+      // Add Allow header for LDP compliance
+      reply.header('Allow', 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS');
       reply.code(204).send();
       return reply;
     }

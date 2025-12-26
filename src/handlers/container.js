@@ -1,6 +1,10 @@
 import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer } from '../utils/url.js';
+import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
+
+// Content type for profile card
+const PROFILE_CONTENT_TYPE = 'text/html';
 
 /**
  * Handle POST request to container (create new resource)
@@ -69,6 +73,16 @@ export async function handlePost(request, reply) {
 /**
  * Create a pod (container) for a user
  * POST /.pods with { "name": "alice" }
+ *
+ * Creates the following structure:
+ *   /{name}/
+ *   /{name}/profile/card     - WebID profile
+ *   /{name}/inbox/           - Notifications
+ *   /{name}/public/          - Public files
+ *   /{name}/private/         - Private files
+ *   /{name}/settings/prefs   - Preferences
+ *   /{name}/settings/publicTypeIndex
+ *   /{name}/settings/privateTypeIndex
  */
 export async function handleCreatePod(request, reply) {
   const { name } = request.body || {};
@@ -89,22 +103,52 @@ export async function handleCreatePod(request, reply) {
     return reply.code(409).send({ error: 'Pod already exists' });
   }
 
-  // Create pod container
-  const success = await storage.createContainer(podPath);
-  if (!success) {
+  // Build URIs
+  // WebID is at pod root: /alice/#me
+  const baseUri = `${request.protocol}://${request.hostname}`;
+  const podUri = `${baseUri}${podPath}`;
+  const webId = `${podUri}#me`;
+  const issuer = baseUri;
+
+  try {
+    // Create pod directory structure
+    await storage.createContainer(podPath);
+    await storage.createContainer(`${podPath}inbox/`);
+    await storage.createContainer(`${podPath}public/`);
+    await storage.createContainer(`${podPath}private/`);
+    await storage.createContainer(`${podPath}settings/`);
+
+    // Generate and write WebID profile as index.html at pod root
+    const profileHtml = generateProfile({ webId, name, podUri, issuer });
+    await storage.write(`${podPath}index.html`, profileHtml);
+
+    // Generate and write preferences
+    const prefs = generatePreferences({ webId, podUri });
+    await storage.write(`${podPath}settings/prefs`, serialize(prefs));
+
+    // Generate and write type indexes
+    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex`);
+    await storage.write(`${podPath}settings/publicTypeIndex`, serialize(publicTypeIndex));
+
+    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex`);
+    await storage.write(`${podPath}settings/privateTypeIndex`, serialize(privateTypeIndex));
+
+  } catch (err) {
+    console.error('Pod creation error:', err);
+    // Cleanup on failure
+    await storage.remove(podPath);
     return reply.code(500).send({ error: 'Failed to create pod' });
   }
 
-  const location = `${request.protocol}://${request.hostname}${podPath}`;
   const origin = request.headers.origin;
-
   const headers = getAllHeaders({ isContainer: true, origin });
-  headers['Location'] = location;
+  headers['Location'] = podUri;
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
   return reply.code(201).send({
     name,
-    url: location
+    webId,
+    podUri
   });
 }

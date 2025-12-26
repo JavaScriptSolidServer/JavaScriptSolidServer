@@ -18,6 +18,27 @@ export async function handleGet(request, reply) {
 
   // Handle container
   if (stats.isDirectory) {
+    // Check for index.html (serves as both profile and container representation)
+    const indexPath = urlPath.endsWith('/') ? `${urlPath}index.html` : `${urlPath}/index.html`;
+    const indexExists = await storage.exists(indexPath);
+
+    if (indexExists) {
+      // Serve index.html (contains JSON-LD structured data)
+      const content = await storage.read(indexPath);
+      const indexStats = await storage.stat(indexPath);
+
+      const headers = getAllHeaders({
+        isContainer: true,
+        etag: indexStats?.etag || stats.etag,
+        contentType: 'text/html',
+        origin
+      });
+
+      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+      return reply.send(content);
+    }
+
+    // No index.html, return JSON-LD container listing
     const entries = await storage.listContainer(urlPath);
     const baseUrl = `${request.protocol}://${request.hostname}${urlPath}`;
     const jsonLd = generateContainerJsonLd(baseUrl, entries || []);

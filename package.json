@@ -1,13 +1,13 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "dependencies": {
     "fastify": "^4.25.2",
