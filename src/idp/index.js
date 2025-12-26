@@ -12,6 +12,10 @@ import {
   handleConsent,
   handleAbort,
 } from './interactions.js';
+import {
+  handleCredentials,
+  handleCredentialsInfo,
+} from './credentials.js';
 
 /**
  * IdP Fastify Plugin
@@ -43,8 +47,8 @@ export async function idpPlugin(fastify, options) {
   // Mount oidc-provider on /idp path
   // oidc-provider is a Koa app, middie handles the bridge
   fastify.use('/idp', (req, res, next) => {
-    // Skip our custom interaction routes
-    if (req.url.startsWith('/interaction/')) {
+    // Skip our custom routes (handled by Fastify)
+    if (req.url.startsWith('/interaction/') || req.url.startsWith('/credentials')) {
       return next();
     }
     // Let oidc-provider handle everything else
@@ -87,6 +91,19 @@ export async function idpPlugin(fastify, options) {
     const jwks = await getPublicJwks();
     reply.header('Cache-Control', 'public, max-age=3600');
     return jwks;
+  });
+
+  // Programmatic credentials endpoint for CTH compatibility
+  // Allows obtaining tokens via email/password without browser interaction
+
+  // GET credentials info
+  fastify.get('/idp/credentials', async (request, reply) => {
+    return handleCredentialsInfo(request, reply, issuer);
+  });
+
+  // POST credentials - obtain tokens
+  fastify.post('/idp/credentials', async (request, reply) => {
+    return handleCredentials(request, reply, issuer);
   });
 
   // Interaction routes (our custom login/consent UI)

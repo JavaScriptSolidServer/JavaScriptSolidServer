@@ -306,6 +306,28 @@ Response:
 
 OIDC Discovery: `/.well-known/openid-configuration`
 
+### Programmatic Login (CTH Compatible)
+
+For automated testing and scripts, use the credentials endpoint:
+
+```bash
+curl -X POST http://localhost:3000/idp/credentials \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alice@example.com", "password": "secret123"}'
+```
+
+Response:
+```json
+{
+  "access_token": "...",
+  "token_type": "Bearer",
+  "expires_in": 3600,
+  "webid": "http://localhost:3000/alice/#me"
+}
+```
+
+For DPoP-bound tokens (Solid-OIDC compliant), include a DPoP proof header.
+
 ### Solid-OIDC (External IdP)
 
 The server also accepts DPoP-bound access tokens from external Solid identity providers:
@@ -355,7 +377,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 npm test
 ```
 
-Currently passing: **174 tests** (including 27 conformance tests)
+Currently passing: **182 tests** (including 27 conformance tests)
 
 ## Project Structure
 

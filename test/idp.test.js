@@ -256,3 +256,172 @@ describe('Identity Provider - Accounts', () => {
     assert.ok(!account.password, 'should not store plain password');
   });
 });
+
+describe('Identity Provider - Credentials Endpoint', () => {
+  let server;
+  const CREDS_DATA_DIR = './test-data-idp-creds';
+  const CREDS_PORT = 3101;
+  const CREDS_URL = `http://${TEST_HOST}:${CREDS_PORT}`;
+
+  before(async () => {
+    await fs.remove(CREDS_DATA_DIR);
+    await fs.ensureDir(CREDS_DATA_DIR);
+
+    server = createServer({
+      logger: false,
+      root: CREDS_DATA_DIR,
+      idp: true,
+      idpIssuer: CREDS_URL,
+    });
+
+    await server.listen({ port: CREDS_PORT, host: TEST_HOST });
+
+    // Create a test user
+    await fetch(`${CREDS_URL}/.pods`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'credtest',
+        email: 'credtest@example.com',
+        password: 'testpassword123',
+      }),
+    });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(CREDS_DATA_DIR);
+  });
+
+  describe('GET /idp/credentials', () => {
+    it('should return endpoint info', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`);
+      assert.strictEqual(res.status, 200);
+
+      const info = await res.json();
+      assert.ok(info.endpoint);
+      assert.strictEqual(info.method, 'POST');
+      assert.ok(info.parameters.email);
+      assert.ok(info.parameters.password);
+    });
+  });
+
+  describe('POST /idp/credentials', () => {
+    it('should return 400 for missing credentials', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+
+      assert.strictEqual(res.status, 400);
+      const body = await res.json();
+      assert.strictEqual(body.error, 'invalid_request');
+    });
+
+    it('should return 401 for wrong password', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'credtest@example.com',
+          password: 'wrongpassword',
+        }),
+      });
+
+      assert.strictEqual(res.status, 401);
+      const body = await res.json();
+      assert.strictEqual(body.error, 'invalid_grant');
+    });
+
+    it('should return 401 for unknown email', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'unknown@example.com',
+          password: 'anypassword',
+        }),
+      });
+
+      assert.strictEqual(res.status, 401);
+    });
+
+    it('should return access token for valid credentials', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'credtest@example.com',
+          password: 'testpassword123',
+        }),
+      });
+
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+
+      assert.ok(body.access_token, 'should have access_token');
+      assert.strictEqual(body.token_type, 'Bearer');
+      assert.ok(body.expires_in > 0, 'should have expires_in');
+      assert.ok(body.webid.includes('credtest'), 'should have webid');
+    });
+
+    it('should return simple token with webid for Bearer auth', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'credtest@example.com',
+          password: 'testpassword123',
+        }),
+      });
+
+      const body = await res.json();
+
+      // Simple tokens have format: base64payload.signature
+      const parts = body.access_token.split('.');
+      assert.strictEqual(parts.length, 2, 'simple token has 2 parts');
+
+      // Decode the payload
+      const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString());
+
+      assert.ok(payload.webId, 'token should have webId');
+      assert.ok(payload.webId.includes('credtest'), 'webId should reference user');
+      assert.ok(payload.exp > payload.iat, 'should have valid expiry');
+    });
+
+    it('should work with form-encoded body', async () => {
+      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'email=credtest%40example.com&password=testpassword123',
+      });
+
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      assert.ok(body.access_token);
+    });
+
+    it('should allow using token to access protected resource', async () => {
+      // Get access token
+      const tokenRes = await fetch(`${CREDS_URL}/idp/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'credtest@example.com',
+          password: 'testpassword123',
+        }),
+      });
+
+      const { access_token } = await tokenRes.json();
+
+      // Try to access private resource
+      const res = await fetch(`${CREDS_URL}/credtest/private/`, {
+        headers: { 'Authorization': `Bearer ${access_token}` },
+      });
+
+      // Should succeed (not 401/403)
+      assert.ok([200, 404].includes(res.status), `expected 200 or 404, got ${res.status}`);
+    });
+  });
+});
