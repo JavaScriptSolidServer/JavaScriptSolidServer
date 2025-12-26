@@ -35,12 +35,30 @@ const server = createServer();
 const serverWithConneg = createServer({ conneg: true });
 ```
 
+## Performance
+
+This server is designed for speed. Benchmark results on a typical development machine:
+
+| Operation | Requests/sec | Avg Latency | p99 Latency |
+|-----------|-------------|-------------|-------------|
+| GET resource | 5,400+ | 1.2ms | 3ms |
+| GET container | 4,700+ | 1.6ms | 3ms |
+| PUT (write) | 5,700+ | 1.1ms | 2ms |
+| POST (create) | 5,200+ | 1.3ms | 3ms |
+| OPTIONS | 10,000+ | 0.4ms | 1ms |
+
+Run benchmarks yourself:
+```bash
+npm run benchmark
+```
+
 ## Features
 
-### Implemented (v0.0.8)
+### Implemented (v0.0.9)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
+- **WebSocket Notifications** - Real-time updates via solid-0.1 protocol (SolidOS compatible)
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Create pods at `/<username>/`
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
@@ -171,9 +189,33 @@ curl -H "Authorization: DPoP ACCESS_TOKEN" \
 
 ```javascript
 createServer({
-  logger: true,     // Enable Fastify logging (default: true)
-  conneg: false     // Enable content negotiation (default: false)
+  logger: true,        // Enable Fastify logging (default: true)
+  conneg: false,       // Enable content negotiation (default: false)
+  notifications: false // Enable WebSocket notifications (default: false)
 });
+```
+
+### WebSocket Notifications
+
+Enable real-time notifications for resource changes:
+
+```javascript
+const server = createServer({ notifications: true });
+```
+
+Clients discover the WebSocket URL via the `Updates-Via` header:
+
+```bash
+curl -I http://localhost:3000/alice/public/
+# Updates-Via: ws://localhost:3000/.notifications
+```
+
+Protocol (solid-0.1, compatible with SolidOS):
+```
+Server: protocol solid-0.1
+Client: sub http://localhost:3000/alice/public/data.json
+Server: ack http://localhost:3000/alice/public/data.json
+Server: pub http://localhost:3000/alice/public/data.json  (on change)
 ```
 
 ## Running Tests
@@ -182,7 +224,7 @@ createServer({
 npm test
 ```
 
-Currently passing: **105 tests**
+Currently passing: **116 tests**
 
 ## Project Structure
 
@@ -209,6 +251,10 @@ src/
 │   └── profile.js        # WebID generation
 ├── patch/
 │   └── n3-patch.js       # N3 Patch support
+├── notifications/
+│   ├── index.js          # WebSocket plugin
+│   ├── events.js         # Event emitter
+│   └── websocket.js      # solid-0.1 protocol
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
@@ -221,6 +267,7 @@ src/
 Minimal dependencies for a fast, secure server:
 
 - **fastify** - High-performance HTTP server
+- **@fastify/websocket** - WebSocket support for notifications
 - **fs-extra** - Enhanced file operations
 - **jose** - JWT/JWK handling for Solid-OIDC
 - **n3** - Turtle parsing (only used when conneg enabled)

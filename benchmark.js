@@ -1,286 +1,182 @@
-import fetch from 'node-fetch';
-import { performance } from 'perf_hooks';
-import { promises as fs } from 'fs';
-import path from 'path';
+#!/usr/bin/env node
+/**
+ * Benchmark script for JavaScript Solid Server
+ *
+ * Measures throughput and latency for common operations.
+ * Run: node benchmark.js
+ */
 
-// Configuration
-const config = {
-  baseUrl: 'http://nostr.social:3000',
-  concurrentUsers: [1, 5, 10, 50, 100], // Different concurrency levels to test
-  operations: 100, // Operations per user
-  testDuration: 30000, // 30 seconds per test
-  testUserPrefix: 'testuser',
-  testPassword: 'benchmark123',
-  results: {
-    registerTime: [],
-    loginTime: [],
-    readTime: [],
-    writeTime: [],
-    deleteTime: [],
-    throughput: []
-  }
-};
+import autocannon from 'autocannon';
+import { createServer } from './src/server.js';
+import fs from 'fs-extra';
 
-// Store tokens for authenticated requests
-const tokens = new Map();
+const PORT = 3030;
+const DURATION = 10; // seconds per test
+const CONNECTIONS = 10;
 
-// Utility function to measure execution time
-async function measureTime (fn) {
-  const start = performance.now();
-  const result = await fn();
-  const end = performance.now();
-  return { result, time: end - start };
-}
+let server;
+let token;
 
-// Register a test user
-async function registerUser (username) {
-  const { result, time } = await measureTime(async () => {
-    const response = await fetch(`${config.baseUrl}/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username,
-        password: config.testPassword,
-        email: `${username}@benchmark.test`
-      })
-    });
-    return response.json();
+async function setup() {
+  // Clean data directory
+  await fs.emptyDir('./data');
+
+  // Start server (no logging for clean benchmark)
+  server = createServer({ logger: false });
+  await server.listen({ port: PORT, host: '127.0.0.1' });
+
+  // Create a test pod
+  const res = await fetch(`http://127.0.0.1:${PORT}/.pods`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'bench' })
   });
+  const data = await res.json();
+  token = data.token;
 
-  config.results.registerTime.push(time);
-  return result;
-}
-
-// Login a test user
-async function loginUser (username) {
-  const { result, time } = await measureTime(async () => {
-    const response = await fetch(`${config.baseUrl}/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username,
-        password: config.testPassword
-      })
-    });
-    return response.json();
-  });
-
-  config.results.loginTime.push(time);
-
-  if (result.id_token) {
-    tokens.set(username, result.id_token);
-  }
-
-  return result;
-}
-
-// Create a resource
-async function createResource (username, resourcePath, content = null) {
-  const token = tokens.get(username);
-  if (!token) throw new Error(`No token for user ${username}`);
-
-  const turtleContent = content || `
-    @prefix foaf: <http://xmlns.com/foaf/0.1/>.
-    <#me> a foaf:Person;
-      foaf:name "${username}";
-      foaf:mbox <mailto:${username}@benchmark.test>.
-  `;
-
-  const { result, time } = await measureTime(async () => {
-    const response = await fetch(`${config.baseUrl}/${username}/${resourcePath}`, {
+  // Create some test resources
+  for (let i = 0; i < 100; i++) {
+    await fetch(`http://127.0.0.1:${PORT}/bench/public/item${i}.json`, {
       method: 'PUT',
       headers: {
-        'Content-Type': 'text/turtle',
+        'Content-Type': 'application/ld+json',
         'Authorization': `Bearer ${token}`
       },
-      body: turtleContent
+      body: JSON.stringify({ '@id': `#item${i}`, 'http://example.org/value': i })
     });
-    return response.status;
-  });
+  }
 
-  config.results.writeTime.push(time);
-  return result;
+  console.log('Setup complete: created pod with 100 resources\n');
 }
 
-// Read a resource
-async function readResource (username, resourcePath) {
-  const token = tokens.get(username);
-  if (!token) throw new Error(`No token for user ${username}`);
+async function teardown() {
+  await server.close();
+  await fs.emptyDir('./data');
+}
 
-  const { result, time } = await measureTime(async () => {
-    const response = await fetch(`${config.baseUrl}/${username}/${resourcePath}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+function runBenchmark(opts) {
+  return new Promise((resolve) => {
+    const instance = autocannon({
+      ...opts,
+      duration: DURATION,
+      connections: CONNECTIONS,
+    }, (err, result) => {
+      resolve(result);
     });
-    return response.status;
-  });
 
-  config.results.readTime.push(time);
-  return result;
+    autocannon.track(instance, { renderProgressBar: false });
+  });
 }
 
-// Delete a resource
-async function deleteResource (username, resourcePath) {
-  const token = tokens.get(username);
-  if (!token) throw new Error(`No token for user ${username}`);
-
-  const { result, time } = await measureTime(async () => {
-    const response = await fetch(`${config.baseUrl}/${username}/${resourcePath}`, {
-      method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    });
-    return response.status;
-  });
-
-  config.results.deleteTime.push(time);
-  return result;
-}
-
-// Run benchmark for specific concurrency
-async function runBenchmark (concurrentUsers) {
-  console.log(`\n=== Running benchmark with ${concurrentUsers} concurrent users ===`);
-
-  // Create test users
-  console.log('Creating test users...');
-  const users = [];
-  for (let i = 0; i < concurrentUsers; i++) {
-    const username = `${config.testUserPrefix}${i}`;
-    users.push(username);
-    await registerUser(username);
-    await loginUser(username);
-  }
-
-  // Prepare operation queue (read/write/delete)
-  const operations = [];
-  for (const username of users) {
-    for (let i = 0; i < config.operations; i++) {
-      const resourcePath = `benchmark/resource${i}.ttl`;
-      operations.push(async () => await createResource(username, resourcePath));
-      operations.push(async () => await readResource(username, resourcePath));
-      operations.push(async () => await deleteResource(username, resourcePath));
-    }
-  }
-
-  // Run operations with measured throughput
-  console.log(`Starting operations (${operations.length} total)...`);
-  const startTime = performance.now();
-  let completedOps = 0;
-  const endTime = startTime + config.testDuration;
-
-  // Create chunks of operations to run in parallel
-  const chunks = [];
-  const chunkSize = operations.length > 100 ? 100 : operations.length;
-
-  for (let i = 0; i < operations.length; i += chunkSize) {
-    chunks.push(operations.slice(i, i + chunkSize));
-  }
-
-  for (const chunk of chunks) {
-    if (performance.now() >= endTime) break;
-
-    await Promise.all(chunk.map(async (operation) => {
-      if (performance.now() < endTime) {
-        await operation();
-        completedOps++;
-      }
-    }));
-  }
-
-  // Calculate throughput (ops/sec)
-  const actualDuration = Math.min(performance.now() - startTime, config.testDuration);
-  const throughput = (completedOps / actualDuration) * 1000;
-  config.results.throughput.push({
-    concurrentUsers,
-    operations: completedOps,
-    duration: actualDuration,
-    throughput
-  });
-
-  console.log(`Completed ${completedOps} operations in ${actualDuration.toFixed(2)}ms`);
-  console.log(`Throughput: ${throughput.toFixed(2)} operations/second`);
-}
-
-// Generate report
-async function generateReport () {
-  // Calculate averages
-  const averages = {
-    register: calculateAverage(config.results.registerTime),
-    login: calculateAverage(config.results.loginTime),
-    read: calculateAverage(config.results.readTime),
-    write: calculateAverage(config.results.writeTime),
-    delete: calculateAverage(config.results.deleteTime)
+function formatResult(result) {
+  return {
+    'Requests/sec': Math.round(result.requests.average),
+    'Latency avg': `${result.latency.average.toFixed(2)}ms`,
+    'Latency p99': `${result.latency.p99.toFixed(2)}ms`,
+    'Throughput': `${(result.throughput.average / 1024 / 1024).toFixed(2)} MB/s`
   };
+}
 
-  // Create report
-  const report = {
-    timestamp: new Date().toISOString(),
-    server: config.baseUrl,
-    testDuration: config.testDuration,
-    averageResponseTimes: averages,
-    throughputResults: config.results.throughput
-  };
-
-  // Save report to file
-  await fs.writeFile(
-    `benchmark-report-${new Date().toISOString().replace(/:/g, '-')}.json`,
-    JSON.stringify(report, null, 2)
-  );
-
-  // Display summary
-  console.log('\n=== BENCHMARK RESULTS ===');
-  console.log('Average Response Times (ms):');
-  console.log(`  Register: ${averages.register.toFixed(2)} ms`);
-  console.log(`  Login: ${averages.login.toFixed(2)} ms`);
-  console.log(`  Read: ${averages.read.toFixed(2)} ms`);
-  console.log(`  Write: ${averages.write.toFixed(2)} ms`);
-  console.log(`  Delete: ${averages.delete.toFixed(2)} ms`);
-
-  console.log('\nThroughput Results:');
-  config.results.throughput.forEach(result => {
-    console.log(`  ${result.concurrentUsers} users: ${result.throughput.toFixed(2)} ops/sec`);
+async function benchmarkGET() {
+  console.log('📖 Benchmarking GET (read resource)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/item0.json`,
+    method: 'GET'
   });
-
-  console.log('\nReport saved to file.');
+  return formatResult(result);
 }
 
-// Calculate average of an array
-function calculateAverage (array) {
-  if (array.length === 0) return 0;
-  return array.reduce((sum, value) => sum + value, 0) / array.length;
+async function benchmarkGETContainer() {
+  console.log('📂 Benchmarking GET (container listing)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/`,
+    method: 'GET'
+  });
+  return formatResult(result);
 }
 
-// Main benchmark function
-async function startBenchmark () {
-  console.log('=== JavaScript Solid Server Benchmark ===');
-  console.log(`Server URL: ${config.baseUrl}`);
-  console.log(`Test Duration: ${config.testDuration / 1000} seconds per concurrency level`);
-
-  try {
-    // Check if server is running
-    const response = await fetch(config.baseUrl);
-    if (response.status < 200 || response.status >= 500) {
-      throw new Error(`Server responded with status ${response.status}`);
+let putCounter = 1000;
+async function benchmarkPUT() {
+  console.log('✏️  Benchmarking PUT (create/update resource)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/new`,
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/ld+json',
+      'Authorization': `Bearer ${token}`
+    },
+    setupClient: (client) => {
+      client.setBody(JSON.stringify({ '@id': '#test', 'http://example.org/v': putCounter++ }));
     }
-  } catch (error) {
-    console.error('Error connecting to server:', error.message);
-    console.error('Please make sure the server is running before starting the benchmark.');
-    return;
-  }
-
-  // Run tests for each concurrency level
-  for (const concurrentUsers of config.concurrentUsers) {
-    await runBenchmark(concurrentUsers);
-  }
-
-  // Generate final report
-  await generateReport();
+  });
+  return formatResult(result);
 }
 
-// Start the benchmark
-startBenchmark().catch(error => {
-  console.error('Benchmark error:', error);
-}); 
+async function benchmarkPOST() {
+  console.log('📝 Benchmarking POST (create in container)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/`,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/ld+json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ '@id': '#new', 'http://example.org/created': true })
+  });
+  return formatResult(result);
+}
+
+async function benchmarkOPTIONS() {
+  console.log('🔍 Benchmarking OPTIONS (discovery)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/item0.json`,
+    method: 'OPTIONS'
+  });
+  return formatResult(result);
+}
+
+async function benchmarkHEAD() {
+  console.log('📋 Benchmarking HEAD (metadata only)...');
+  const result = await runBenchmark({
+    url: `http://127.0.0.1:${PORT}/bench/public/item0.json`,
+    method: 'HEAD'
+  });
+  return formatResult(result);
+}
+
+async function main() {
+  console.log('🚀 JavaScript Solid Server Benchmark');
+  console.log('=====================================');
+  console.log(`Duration: ${DURATION}s per test, ${CONNECTIONS} concurrent connections\n`);
+
+  await setup();
+
+  const results = {};
+
+  results['GET resource'] = await benchmarkGET();
+  results['GET container'] = await benchmarkGETContainer();
+  results['HEAD'] = await benchmarkHEAD();
+  results['OPTIONS'] = await benchmarkOPTIONS();
+  results['PUT'] = await benchmarkPUT();
+  results['POST'] = await benchmarkPOST();
+
+  console.log('\n📊 Results Summary');
+  console.log('==================\n');
+
+  // Print as table
+  console.log('| Operation | Req/sec | Avg Latency | p99 Latency |');
+  console.log('|-----------|---------|-------------|-------------|');
+  for (const [op, data] of Object.entries(results)) {
+    console.log(`| ${op.padEnd(13)} | ${String(data['Requests/sec']).padStart(7)} | ${data['Latency avg'].padStart(11)} | ${data['Latency p99'].padStart(11)} |`);
+  }
+
+  console.log('\n');
+
+  await teardown();
+
+  // Output JSON for README
+  console.log('JSON results:');
+  console.log(JSON.stringify(results, null, 2));
+}
+
+main().catch(console.error);

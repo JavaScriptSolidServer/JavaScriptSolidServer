@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test --test-concurrency=1",
+    "benchmark": "node benchmark.js"
   },
   "dependencies": {
     "@fastify/websocket": "^8.3.1",
@@ -25,5 +26,8 @@
     "linked-data",
     "decentralized"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "autocannon": "^8.0.0"
+  }
 }
