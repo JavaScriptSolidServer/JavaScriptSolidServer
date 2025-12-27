@@ -88,11 +88,12 @@ async function main() {
       const res = await fetch(`${BASE_URL}/.well-known/openid-configuration`);
       if (res.status === 200) {
         const config = await res.json();
-        if (config.issuer === BASE_URL) {
+        // Issuer has trailing slash for CTH compatibility
+        if (config.issuer === BASE_URL + '/') {
           pass('/.well-known/openid-configuration returns valid config');
           passed++;
         } else {
-          fail(`Issuer mismatch: expected ${BASE_URL}, got ${config.issuer}`);
+          fail(`Issuer mismatch: expected ${BASE_URL}/, got ${config.issuer}`);
           failed++;
         }
       } else {

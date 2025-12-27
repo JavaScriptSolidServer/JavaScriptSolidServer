@@ -35,7 +35,7 @@ export function createToken(webId, expiresIn = 3600) {
 }
 
 /**
- * Verify and decode a token
+ * Verify and decode a token (simple 2-part or JWT 3-part)
  * @param {string} token - The token to verify
  * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
  */
@@ -45,6 +45,12 @@ export function verifyToken(token) {
   }
 
   const parts = token.split('.');
+
+  // Handle JWT tokens (3 parts) from credentials endpoint
+  if (parts.length === 3) {
+    return verifyJwtToken(token);
+  }
+
   if (parts.length !== 2) {
     return null;
   }
@@ -71,6 +77,43 @@ export function verifyToken(token) {
     }
 
     return payload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a JWT token from credentials endpoint
+ * JWT tokens are self-contained and signed with the IdP's private key
+ * @param {string} token - JWT token
+ * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
+ */
+function verifyJwtToken(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+
+    // Decode the payload (middle part)
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+
+    // Check expiration
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+
+    // JWT from credentials endpoint uses 'webid' claim (lowercase)
+    if (payload.webid) {
+      return { webId: payload.webid, iat: payload.iat, exp: payload.exp };
+    }
+
+    // Also check uppercase WebId for compatibility
+    if (payload.webId) {
+      return payload;
+    }
+
+    return null;
   } catch {
     return null;
   }

@@ -279,6 +279,46 @@ export function generateInboxAcl(resourceUrl, ownerWebId) {
 }
 
 /**
+ * Generate a public folder ACL (owner full control, public read with inheritance)
+ * Used for /public/ folders where content should be publicly readable
+ * @param {string} resourceUrl - URL of the folder
+ * @param {string} ownerWebId - WebID of the owner
+ * @returns {object} JSON-LD ACL document
+ */
+export function generatePublicFolderAcl(resourceUrl, ownerWebId) {
+  return {
+    '@context': {
+      'acl': ACL,
+      'foaf': FOAF
+    },
+    '@graph': [
+      {
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:agent': { '@id': ownerWebId },
+        'acl:accessTo': { '@id': resourceUrl },
+        'acl:default': { '@id': resourceUrl },
+        'acl:mode': [
+          { '@id': 'acl:Read' },
+          { '@id': 'acl:Write' },
+          { '@id': 'acl:Control' }
+        ]
+      },
+      {
+        '@id': '#public',
+        '@type': 'acl:Authorization',
+        'acl:agentClass': { '@id': 'foaf:Agent' },
+        'acl:accessTo': { '@id': resourceUrl },
+        'acl:default': { '@id': resourceUrl },
+        'acl:mode': [
+          { '@id': 'acl:Read' }
+        ]
+      }
+    ]
+  };
+}
+
+/**
  * Serialize ACL to JSON string
  */
 export function serializeAcl(acl) {

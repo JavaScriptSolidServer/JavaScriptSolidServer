@@ -43,7 +43,8 @@ describe('Identity Provider', () => {
       assert.strictEqual(res.status, 200);
 
       const config = await res.json();
-      assert.strictEqual(config.issuer, BASE_URL);
+      // Issuer has trailing slash for CTH compatibility
+      assert.strictEqual(config.issuer, BASE_URL + '/');
       assert.ok(config.authorization_endpoint);
       assert.ok(config.token_endpoint);
       assert.ok(config.jwks_uri);
@@ -259,17 +260,16 @@ describe('Identity Provider - Accounts', () => {
 
 describe('Identity Provider - Credentials Endpoint', () => {
   let server;
-  const CREDS_DATA_DIR = './test-data-idp-creds';
+  // Use same data dir as other tests (DATA_ROOT is cached at module load)
+  const CREDS_DATA_DIR = './data';
   const CREDS_PORT = 3101;
   const CREDS_URL = `http://${TEST_HOST}:${CREDS_PORT}`;
 
   before(async () => {
-    await fs.remove(CREDS_DATA_DIR);
-    await fs.ensureDir(CREDS_DATA_DIR);
+    await fs.emptyDir(CREDS_DATA_DIR);
 
     server = createServer({
       logger: false,
-      root: CREDS_DATA_DIR,
       idp: true,
       idpIssuer: CREDS_URL,
     });
@@ -277,7 +277,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     await server.listen({ port: CREDS_PORT, host: TEST_HOST });
 
     // Create a test user
-    await fetch(`${CREDS_URL}/.pods`, {
+    const res = await fetch(`${CREDS_URL}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -286,11 +286,14 @@ describe('Identity Provider - Credentials Endpoint', () => {
         password: 'testpassword123',
       }),
     });
+    if (!res.ok) {
+      throw new Error(`Failed to create test user: ${res.status} ${await res.text()}`);
+    }
   });
 
   after(async () => {
     await server.close();
-    await fs.remove(CREDS_DATA_DIR);
+    await fs.emptyDir(CREDS_DATA_DIR);
   });
 
   describe('GET /idp/credentials', () => {
@@ -366,7 +369,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
       assert.ok(body.webid.includes('credtest'), 'should have webid');
     });
 
-    it('should return simple token with webid for Bearer auth', async () => {
+    it('should return JWT token with webid claim', async () => {
       const res = await fetch(`${CREDS_URL}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -378,15 +381,15 @@ describe('Identity Provider - Credentials Endpoint', () => {
 
       const body = await res.json();
 
-      // Simple tokens have format: base64payload.signature
+      // JWT tokens have format: header.payload.signature
       const parts = body.access_token.split('.');
-      assert.strictEqual(parts.length, 2, 'simple token has 2 parts');
+      assert.strictEqual(parts.length, 3, 'JWT token has 3 parts');
 
-      // Decode the payload
-      const payload = JSON.parse(Buffer.from(parts[0], 'base64url').toString());
+      // Decode the payload (second part)
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
 
-      assert.ok(payload.webId, 'token should have webId');
-      assert.ok(payload.webId.includes('credtest'), 'webId should reference user');
+      assert.ok(payload.webid, 'token should have webid claim');
+      assert.ok(payload.webid.includes('credtest'), 'webid should reference user');
       assert.ok(payload.exp > payload.iat, 'should have valid expiry');
     });
 

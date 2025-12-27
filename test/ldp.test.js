@@ -29,7 +29,8 @@ describe('LDP CRUD Operations', () => {
 
   describe('GET', () => {
     it('should return 404 for non-existent resource', async () => {
-      const res = await request('/ldptest/nonexistent.json');
+      // Must use /public/ path for unauthenticated access
+      const res = await request('/ldptest/public/nonexistent.json');
       assertStatus(res, 404);
     });
 
@@ -149,14 +150,18 @@ describe('LDP CRUD Operations', () => {
       assertStatus(parent, 200);
     });
 
-    it('should reject PUT to container path', async () => {
-      const res = await request('/ldptest/public/invalid/', {
+    it('should create container with PUT to path ending in slash', async () => {
+      // Solid spec: PUT to path with trailing / creates container
+      const res = await request('/ldptest/public/new-container/', {
         method: 'PUT',
-        body: 'cannot put to container',
         auth: 'ldptest'
       });
 
-      assertStatus(res, 409);
+      assertStatus(res, 201);
+
+      // Verify it's a container
+      const verify = await request('/ldptest/public/new-container/');
+      assertHeaderContains(verify, 'Link', 'Container');
     });
   });
 

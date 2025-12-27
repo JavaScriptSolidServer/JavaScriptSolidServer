@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.14)
+### Implemented (v0.0.15)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -407,7 +407,7 @@ docker run --rm --network=host \
   --filter="authentication"
 ```
 
-**CTH Status (v0.0.14):**
+**CTH Status (v0.0.15):**
 - Authentication tests: 6/6 passing
 
 ## Project Structure

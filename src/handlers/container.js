@@ -2,7 +2,7 @@ import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
-import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, serializeAcl } from '../wac/parser.js';
+import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
@@ -199,6 +199,10 @@ export async function handleCreatePod(request, reply) {
     // Inbox: owner full, public append
     const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
     await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
+
+    // Public folder: owner full, public read (with inheritance)
+    const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
+    await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
 
   } catch (err) {
     console.error('Pod creation error:', err);
