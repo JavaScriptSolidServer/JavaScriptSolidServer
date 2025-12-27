@@ -36,16 +36,10 @@ curl -s -X POST http://localhost:4000/.pods \
 # 6. Create test container (required by CTH)
 mkdir -p data/alice/cth-test
 
-# 7. Run authentication tests
+# 7. Run authentication tests (assumes test-subjects.ttl and cth.env exist - see Configuration Files below)
 docker run --rm --network=host \
-  -v /tmp/cth-test-subjects.ttl:/app/test-subjects.ttl \
-  -e SOLID_IDENTITY_PROVIDER="http://localhost:4000/" \
-  -e USERS_ALICE_WEBID="http://localhost:4000/alice/#me" \
-  -e USERS_ALICE_USERNAME="alice@example.com" \
-  -e USERS_ALICE_PASSWORD="alicepassword123" \
-  -e USERS_BOB_WEBID="http://localhost:4000/bob/#me" \
-  -e USERS_BOB_USERNAME="bob@example.com" \
-  -e USERS_BOB_PASSWORD="bobpassword123" \
+  -v $(pwd)/test-subjects.ttl:/app/test-subjects.ttl \
+  --env-file cth.env \
   -e SUBJECTS=/app/test-subjects.ttl \
   solidproject/conformance-test-harness:latest \
   --target="https://github.com/solid/conformance-test-harness/jss" \
@@ -56,30 +50,66 @@ docker run --rm --network=host \
 
 ### Test Subjects File (test-subjects.ttl)
 
-Create `/tmp/cth-test-subjects.ttl`:
+Create `test-subjects.ttl`:
 
 ```turtle
+@base <https://github.com/solid/conformance-test-harness/> .
 @prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
-@prefix td: <http://www.w3.org/2006/03/test-description#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-<https://github.com/solid/conformance-test-harness/jss>
-  a solid-test:TestSubject ;
-  solid-test:skip "wac-allow-public", "wac", "acp" ;
-  td:maintainer <https://github.com/JavaScriptSolidServer> .
+<jss>
+    a earl:Software, earl:TestSubject ;
+    doap:name "JavaScript Solid Server"@en ;
+    doap:release <jss#test-subject-release> ;
+    doap:developer <https://github.com/JavaScriptSolidServer> ;
+    doap:homepage <https://github.com/JavaScriptSolidServer/JavaScriptSolidServer> ;
+    doap:description "A minimal, fast, JSON-LD native Solid server."@en ;
+    doap:programming-language "JavaScript"@en ;
+    solid-test:skip "acp", "wac", "wac-allow-public" .
+
+<jss#test-subject-release>
+    doap:revision "0.0.14"@en ;
+    doap:created "2025-12-27"^^xsd:date .
 ```
 
-### Environment Variables
+### Environment File (cth.env)
+
+Create `cth.env`:
+
+```bash
+SERVER_ROOT=http://localhost:4000
+TEST_CONTAINER=/alice/cth-test/
+RESOURCE_SERVER_ROOT=http://localhost:4000
+LOGIN_ENDPOINT=http://localhost:4000/idp/credentials
+SOLID_IDENTITY_PROVIDER=http://localhost:4000/
+USERS_ALICE_IDP=http://localhost:4000/
+USERS_BOB_IDP=http://localhost:4000/
+USERS_ALICE_WEBID=http://localhost:4000/alice/#me
+USERS_BOB_WEBID=http://localhost:4000/bob/#me
+USERS_ALICE_USERNAME=alice@example.com
+USERS_ALICE_PASSWORD=alicepassword123
+USERS_BOB_USERNAME=bob@example.com
+USERS_BOB_PASSWORD=bobpassword123
+```
+
+### Environment Variables Reference
 
 | Variable | Description | Example |
 |----------|-------------|---------|
+| `SERVER_ROOT` | Server base URL | `http://localhost:4000` |
+| `TEST_CONTAINER` | Path to test container | `/alice/cth-test/` |
 | `SOLID_IDENTITY_PROVIDER` | IdP issuer URL (with trailing slash) | `http://localhost:4000/` |
+| `USERS_ALICE_IDP` | Alice's IdP | `http://localhost:4000/` |
 | `USERS_ALICE_WEBID` | Alice's WebID | `http://localhost:4000/alice/#me` |
 | `USERS_ALICE_USERNAME` | Alice's email | `alice@example.com` |
 | `USERS_ALICE_PASSWORD` | Alice's password | `alicepassword123` |
+| `USERS_BOB_IDP` | Bob's IdP | `http://localhost:4000/` |
 | `USERS_BOB_WEBID` | Bob's WebID | `http://localhost:4000/bob/#me` |
 | `USERS_BOB_USERNAME` | Bob's email | `bob@example.com` |
 | `USERS_BOB_PASSWORD` | Bob's password | `bobpassword123` |
-| `SUBJECTS` | Path to test-subjects.ttl | `/app/test-subjects.ttl` |
+| `SUBJECTS` | Path to test-subjects.ttl inside container | `/app/test-subjects.ttl` |
 
 ## Running Specific Test Suites
 
@@ -88,7 +118,7 @@ Create `/tmp/cth-test-subjects.ttl`:
 ```bash
 docker run --rm --network=host \
   --env-file cth.env \
-  -v /tmp/cth-test-subjects.ttl:/app/test-subjects.ttl \
+  -v $(pwd)/test-subjects.ttl:/app/test-subjects.ttl \
   -e SUBJECTS=/app/test-subjects.ttl \
   solidproject/conformance-test-harness:latest \
   --target="https://github.com/solid/conformance-test-harness/jss" \
@@ -102,7 +132,7 @@ docker run --rm --network=host \
 ```bash
 docker run --rm --network=host \
   --env-file cth.env \
-  -v /tmp/cth-test-subjects.ttl:/app/test-subjects.ttl \
+  -v $(pwd)/test-subjects.ttl:/app/test-subjects.ttl \
   -e SUBJECTS=/app/test-subjects.ttl \
   solidproject/conformance-test-harness:latest \
   --target="https://github.com/solid/conformance-test-harness/jss"
@@ -157,20 +187,6 @@ Ensure the server returns JWT access tokens with:
 - `aud: "solid"` claim
 - 3-part JWT format (header.payload.signature)
 - `webid` claim
-
-## Environment File Template
-
-Save as `cth.env`:
-
-```bash
-SOLID_IDENTITY_PROVIDER=http://localhost:4000/
-USERS_ALICE_WEBID=http://localhost:4000/alice/#me
-USERS_ALICE_USERNAME=alice@example.com
-USERS_ALICE_PASSWORD=alicepassword123
-USERS_BOB_WEBID=http://localhost:4000/bob/#me
-USERS_BOB_USERNAME=bob@example.com
-USERS_BOB_PASSWORD=bobpassword123
-```
 
 ## Server Requirements for CTH
 

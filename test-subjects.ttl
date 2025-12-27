@@ -1,0 +1,21 @@
+@base <https://github.com/solid/conformance-test-harness/> .
+@prefix solid-test: <https://github.com/solid/conformance-test-harness/vocab#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix earl: <http://www.w3.org/ns/earl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<jss>
+    a earl:Software, earl:TestSubject ;
+    doap:name "JavaScript Solid Server"@en ;
+    doap:release <jss#test-subject-release> ;
+    doap:developer <https://github.com/JavaScriptSolidServer> ;
+    doap:homepage <https://github.com/JavaScriptSolidServer/JavaScriptSolidServer> ;
+    doap:description "A minimal, fast, JSON-LD native Solid server."@en ;
+    doap:programming-language "JavaScript"@en ;
+    solid-test:skip "acp", "wac", "wac-allow-public" ;
+    rdfs:comment "JSON-LD first Solid server with built-in IdP"@en .
+
+<jss#test-subject-release>
+    doap:revision "0.0.14"@en ;
+    doap:created "2025-12-27"^^xsd:date .
