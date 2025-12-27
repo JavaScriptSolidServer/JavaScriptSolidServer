@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.13)
+### Implemented (v0.0.14)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -378,6 +378,37 @@ npm test
 ```
 
 Currently passing: **182 tests** (including 27 conformance tests)
+
+### Conformance Test Harness (CTH)
+
+This server passes the Solid Conformance Test Harness authentication tests:
+
+```bash
+# Start server with IdP and content negotiation
+JSS_PORT=4000 JSS_CONNEG=true JSS_IDP=true jss start
+
+# Create test users
+curl -X POST http://localhost:4000/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "alice", "email": "alice@example.com", "password": "alicepassword123"}'
+
+curl -X POST http://localhost:4000/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "bob", "email": "bob@example.com", "password": "bobpassword123"}'
+
+# Run CTH authentication tests
+docker run --rm --network=host \
+  -e SOLID_IDENTITY_PROVIDER="http://localhost:4000/" \
+  -e USERS_ALICE_WEBID="http://localhost:4000/alice/#me" \
+  -e USERS_ALICE_PASSWORD="alicepassword123" \
+  -e USERS_BOB_WEBID="http://localhost:4000/bob/#me" \
+  -e USERS_BOB_PASSWORD="bobpassword123" \
+  solidproject/conformance-test-harness:latest \
+  --filter="authentication"
+```
+
+**CTH Status (v0.0.14):**
+- Authentication tests: 6/6 passing
 
 ## Project Structure
 
