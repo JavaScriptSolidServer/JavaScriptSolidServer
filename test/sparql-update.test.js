@@ -157,15 +157,20 @@ describe('SPARQL Update', () => {
   });
 
   describe('Error handling', () => {
-    it('should return 404 for non-existent resource', async () => {
+    it('should create resource if it does not exist', async () => {
       const sparql = `INSERT DATA { <#x> <http://example.org/p> "v" }`;
-      const res = await request('/sparqltest/public/nonexistent.json', {
+      const res = await request('/sparqltest/public/sparql-created.json', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/sparql-update' },
         body: sparql,
         auth: 'sparqltest'
       });
-      assertStatus(res, 404);
+      // PATCH creates resources in Solid
+      assertStatus(res, 201);
+
+      // Verify resource was created
+      const getRes = await request('/sparqltest/public/sparql-created.json');
+      assertStatus(getRes, 200);
     });
 
     it('should return 415 for unsupported content type', async () => {

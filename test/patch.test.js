@@ -207,21 +207,26 @@ describe('PATCH Operations', () => {
       assertStatus(res, 415);
     });
 
-    it('should return 404 for non-existent resource', async () => {
+    it('should create resource if it does not exist', async () => {
       const patch = `
         @prefix solid: <http://www.w3.org/ns/solid/terms#>.
         _:patch a solid:InsertDeletePatch;
           solid:inserts { <#me> <http://example.org/p> "test" }.
       `;
 
-      const res = await request('/patchtest/public/nonexistent.json', {
+      const res = await request('/patchtest/public/patch-created.json', {
         method: 'PATCH',
         headers: { 'Content-Type': 'text/n3' },
         body: patch,
         auth: 'patchtest'
       });
 
-      assertStatus(res, 404);
+      // PATCH creates resources in Solid
+      assertStatus(res, 201);
+
+      // Verify resource was created with the inserted data
+      const getRes = await request('/patchtest/public/patch-created.json');
+      assertStatus(getRes, 200);
     });
 
     it('should return 409 when patching non-JSON-LD resource', async () => {

@@ -451,40 +451,44 @@ export async function handlePatch(request, reply) {
     });
   }
 
-  // Check if resource exists
+  // Check if resource exists - PATCH can create resources in Solid
   const stats = await storage.stat(storagePath);
-  if (!stats) {
-    const origin = request.headers.origin;
-    const connegEnabled = request.connegEnabled || false;
-    const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
-    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-    return reply.code(404).send({ error: 'Not Found' });
-  }
+  const resourceExists = !!stats;
 
-  // Check If-Match header (for safe updates)
-  const ifMatch = request.headers['if-match'];
-  if (ifMatch) {
-    const check = checkIfMatch(ifMatch, stats.etag);
-    if (!check.ok) {
-      return reply.code(check.status).send({ error: check.error });
+  // Check If-Match header (for safe updates) - only if resource exists
+  if (resourceExists) {
+    const ifMatch = request.headers['if-match'];
+    if (ifMatch) {
+      const check = checkIfMatch(ifMatch, stats.etag);
+      if (!check.ok) {
+        return reply.code(check.status).send({ error: check.error });
+      }
     }
   }
 
-  // Read existing content
-  const existingContent = await storage.read(storagePath);
-  if (existingContent === null) {
-    return reply.code(500).send({ error: 'Read error' });
-  }
-
-  // Parse existing document as JSON-LD
+  // Read existing content or start with empty JSON-LD document
   let document;
-  try {
-    document = JSON.parse(existingContent.toString());
-  } catch (e) {
-    return reply.code(409).send({
-      error: 'Conflict',
-      message: 'Resource is not valid JSON-LD and cannot be patched'
-    });
+  if (resourceExists) {
+    const existingContent = await storage.read(storagePath);
+    if (existingContent === null) {
+      return reply.code(500).send({ error: 'Read error' });
+    }
+
+    // Parse existing document as JSON-LD
+    try {
+      document = JSON.parse(existingContent.toString());
+    } catch (e) {
+      return reply.code(409).send({
+        error: 'Conflict',
+        message: 'Resource is not valid JSON-LD and cannot be patched'
+      });
+    }
+  } else {
+    // Create empty JSON-LD document for new resource
+    document = {
+      '@context': {},
+      '@graph': []
+    };
   }
 
   // Parse the patch
@@ -553,5 +557,6 @@ export async function handlePatch(request, reply) {
     emitChange(resourceUrl);
   }
 
-  return reply.code(204).send();
+  // Return 201 Created if resource was created, 204 No Content if updated
+  return reply.code(resourceExists ? 204 : 201).send();
 }
