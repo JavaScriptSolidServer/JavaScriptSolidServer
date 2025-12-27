@@ -1,6 +1,6 @@
 import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
-import { isContainer } from '../utils/url.js';
+import { isContainer, getEffectiveUrlPath } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
@@ -8,10 +8,23 @@ import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conne
 import { emitChange } from '../notifications/events.js';
 
 /**
+ * Get the storage path and resource URL for a request
+ * In subdomain mode, storage path includes pod name, URL uses subdomain
+ */
+function getRequestPaths(request) {
+  const urlPath = request.url.split('?')[0];
+  // Storage path - includes pod name in subdomain mode
+  const storagePath = getEffectiveUrlPath(request);
+  // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  return { urlPath, storagePath, resourceUrl };
+}
+
+/**
  * Handle POST request to container (create new resource)
  */
 export async function handlePost(request, reply) {
-  const urlPath = request.url.split('?')[0];
+  const { urlPath, storagePath } = getRequestPaths(request);
 
   // Ensure target is a container
   if (!isContainer(urlPath)) {
@@ -32,10 +45,10 @@ export async function handlePost(request, reply) {
   }
 
   // Check container exists
-  const stats = await storage.stat(urlPath);
+  const stats = await storage.stat(storagePath);
   if (!stats || !stats.isDirectory) {
     // Create container if it doesn't exist
-    await storage.createContainer(urlPath);
+    await storage.createContainer(storagePath);
   }
 
   // Get slug from header or generate UUID
@@ -46,13 +59,14 @@ export async function handlePost(request, reply) {
   const isCreatingContainer = linkHeader.includes('Container') || linkHeader.includes('BasicContainer');
 
   // Generate unique filename
-  const filename = await storage.generateUniqueFilename(urlPath, slug, isCreatingContainer);
-  const newPath = urlPath + filename + (isCreatingContainer ? '/' : '');
-  const resourceUrl = `${request.protocol}://${request.hostname}${newPath}`;
+  const filename = await storage.generateUniqueFilename(storagePath, slug, isCreatingContainer);
+  const newUrlPath = urlPath + filename + (isCreatingContainer ? '/' : '');
+  const newStoragePath = storagePath + filename + (isCreatingContainer ? '/' : '');
+  const resourceUrl = `${request.protocol}://${request.hostname}${newUrlPath}`;
 
   let success;
   if (isCreatingContainer) {
-    success = await storage.createContainer(newPath);
+    success = await storage.createContainer(newStoragePath);
   } else {
     // Get content from request body
     let content = request.body;
@@ -80,7 +94,7 @@ export async function handlePost(request, reply) {
       }
     }
 
-    success = await storage.write(newPath, content);
+    success = await storage.write(newStoragePath, content);
   }
 
   if (!success) {
@@ -153,10 +167,24 @@ export async function handleCreatePod(request, reply) {
   }
 
   // Build URIs
-  // WebID is at pod root: /alice/#me
-  const baseUri = `${request.protocol}://${request.hostname}`;
-  const podUri = `${baseUri}${podPath}`;
-  const webId = `${podUri}#me`;
+  // WebID is at pod root: /alice/#me (path mode) or alice.example.com/#me (subdomain mode)
+  const subdomainsEnabled = request.subdomainsEnabled;
+  const baseDomain = request.baseDomain;
+
+  let baseUri, podUri, webId;
+  if (subdomainsEnabled && baseDomain) {
+    // Subdomain mode: alice.example.com/
+    const podHost = `${name}.${baseDomain}`;
+    baseUri = `${request.protocol}://${baseDomain}`;
+    podUri = `${request.protocol}://${podHost}/`;
+    webId = `${podUri}#me`;
+  } else {
+    // Path mode: example.com/alice/
+    baseUri = `${request.protocol}://${request.hostname}`;
+    podUri = `${baseUri}${podPath}`;
+    webId = `${podUri}#me`;
+  }
+
   // Issuer needs trailing slash for CTH compatibility
   const issuer = baseUri + '/';
 

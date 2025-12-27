@@ -7,6 +7,7 @@
 import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import * as storage from '../storage/filesystem.js';
+import { getEffectiveUrlPath } from '../utils/url.js';
 
 /**
  * Check if request is authorized
@@ -27,27 +28,32 @@ export async function authorize(request, reply) {
   // Get WebID from token (supports both simple and Solid-OIDC tokens)
   const { webId, error: authError } = await getWebIdFromRequestAsync(request);
 
+  // Get effective storage path (includes pod name in subdomain mode)
+  const storagePath = getEffectiveUrlPath(request);
+
   // Get resource info
-  const stats = await storage.stat(urlPath);
+  const stats = await storage.stat(storagePath);
   const resourceExists = stats !== null;
   const isContainer = stats?.isDirectory || urlPath.endsWith('/');
 
-  // Build resource URL
+  // Build resource URL (uses actual request hostname which may be subdomain)
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   // Get required access mode for this method
   const requiredMode = getRequiredMode(method);
 
   // For write operations on non-existent resources, check parent container
-  let checkPath = urlPath;
+  let checkPath = storagePath;
   let checkUrl = resourceUrl;
   let checkIsContainer = isContainer;
 
   if (!resourceExists && (method === 'PUT' || method === 'POST' || method === 'PATCH')) {
     // Check write permission on parent container
-    const parentPath = getParentPath(urlPath);
+    const parentPath = getParentPath(storagePath);
     checkPath = parentPath;
-    checkUrl = `${request.protocol}://${request.hostname}${parentPath}`;
+    // For URL, also need to get parent
+    const parentUrlPath = getParentPath(urlPath);
+    checkUrl = `${request.protocol}://${request.hostname}${parentUrlPath}`;
     checkIsContainer = true;
   }
 

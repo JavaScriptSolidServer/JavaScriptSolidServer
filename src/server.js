@@ -16,6 +16,8 @@ import { idpPlugin } from './idp/index.js';
  * @param {string} options.idpIssuer - IdP issuer URL (default: server URL)
  * @param {object} options.ssl - SSL configuration { key, cert } (default null)
  * @param {string} options.root - Data directory path (default from env or ./data)
+ * @param {boolean} options.subdomains - Enable subdomain-based pods for XSS protection (default false)
+ * @param {string} options.baseDomain - Base domain for subdomain pods (e.g., "example.com")
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -25,6 +27,9 @@ export function createServer(options = {}) {
   // Identity Provider is OFF by default
   const idpEnabled = options.idp ?? false;
   const idpIssuer = options.idpIssuer;
+  // Subdomain mode is OFF by default - use path-based pods
+  const subdomainsEnabled = options.subdomains ?? false;
+  const baseDomain = options.baseDomain || null;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -58,10 +63,29 @@ export function createServer(options = {}) {
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
   fastify.decorateRequest('idpEnabled', null);
+  fastify.decorateRequest('subdomainsEnabled', null);
+  fastify.decorateRequest('baseDomain', null);
+  fastify.decorateRequest('podName', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
     request.idpEnabled = idpEnabled;
+    request.subdomainsEnabled = subdomainsEnabled;
+    request.baseDomain = baseDomain;
+
+    // Extract pod name from subdomain if enabled
+    if (subdomainsEnabled && baseDomain) {
+      const host = request.hostname;
+      // Check if host is a subdomain of baseDomain
+      if (host !== baseDomain && host.endsWith('.' + baseDomain)) {
+        // Extract subdomain (e.g., "alice.example.com" -> "alice")
+        const subdomain = host.slice(0, -(baseDomain.length + 1));
+        // Only single-level subdomains (no dots)
+        if (!subdomain.includes('.')) {
+          request.podName = subdomain;
+        }
+      }
+    }
   });
 
   // Register WebSocket notifications plugin if enabled

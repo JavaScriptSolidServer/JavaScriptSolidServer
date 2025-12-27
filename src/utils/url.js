@@ -20,6 +20,58 @@ export function urlToPath(urlPath) {
 }
 
 /**
+ * Convert URL path to filesystem path in subdomain mode
+ * In subdomain mode, the pod is determined by the hostname, not the path
+ * @param {string} urlPath - The URL path (e.g., /public/file.txt)
+ * @param {string} podName - The pod name from subdomain (e.g., "alice")
+ * @returns {string} - Filesystem path (e.g., DATA_ROOT/alice/public/file.txt)
+ */
+export function urlToPathWithPod(urlPath, podName) {
+  // Normalize: remove leading slash, decode URI
+  let normalized = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+  normalized = decodeURIComponent(normalized);
+
+  // Security: prevent path traversal
+  normalized = normalized.replace(/\.\./g, '');
+
+  // Prepend pod name to path
+  return path.join(DATA_ROOT, podName, normalized);
+}
+
+/**
+ * Get the effective path for a request (subdomain-aware)
+ * @param {object} request - Fastify request object
+ * @returns {string} - Filesystem path
+ */
+export function getPathFromRequest(request) {
+  const urlPath = request.url.split('?')[0];
+
+  // In subdomain mode with a recognized pod subdomain
+  if (request.subdomainsEnabled && request.podName) {
+    return urlToPathWithPod(urlPath, request.podName);
+  }
+
+  // Path-based mode (default)
+  return urlToPath(urlPath);
+}
+
+/**
+ * Get the effective URL path for a request (with pod prefix in subdomain mode)
+ * @param {object} request - Fastify request object
+ * @returns {string} - URL path with pod prefix if needed
+ */
+export function getEffectiveUrlPath(request) {
+  const urlPath = request.url.split('?')[0];
+
+  // In subdomain mode with a recognized pod subdomain, prepend pod name
+  if (request.subdomainsEnabled && request.podName) {
+    return '/' + request.podName + urlPath;
+  }
+
+  return urlPath;
+}
+
+/**
  * Check if URL path represents a container (ends with /)
  * @param {string} urlPath
  * @returns {boolean}

@@ -33,6 +33,10 @@ export const defaults = {
   idp: false,
   idpIssuer: null,
 
+  // Subdomain mode (XSS protection)
+  subdomains: false,
+  baseDomain: null,
+
   // Logging
   logger: true,
   quiet: false,
@@ -57,6 +61,8 @@ const envMap = {
   JSS_CONFIG_PATH: 'configPath',
   JSS_IDP: 'idp',
   JSS_IDP_ISSUER: 'idpIssuer',
+  JSS_SUBDOMAINS: 'subdomains',
+  JSS_BASE_DOMAIN: 'baseDomain',
 };
 
 /**
@@ -188,5 +194,6 @@ export function printConfig(config) {
   console.log(`  Conneg:        ${config.conneg}`);
   console.log(`  Notifications: ${config.notifications}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
+  console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
   console.log('─'.repeat(40));
 }

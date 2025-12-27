@@ -1,7 +1,7 @@
 import * as storage from '../storage/filesystem.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
-import { isContainer, getContentType, isRdfContentType } from '../utils/url.js';
+import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
 import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
 import {
@@ -16,11 +16,24 @@ import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 
 /**
+ * Get the storage path and resource URL for a request
+ * In subdomain mode, storage path includes pod name, URL uses subdomain
+ */
+function getRequestPaths(request) {
+  const urlPath = request.url.split('?')[0];
+  // Storage path - includes pod name in subdomain mode
+  const storagePath = getEffectiveUrlPath(request);
+  // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  return { urlPath, storagePath, resourceUrl };
+}
+
+/**
  * Handle GET request
  */
 export async function handleGet(request, reply) {
-  const urlPath = request.url.split('?')[0]; // Remove query string
-  const stats = await storage.stat(urlPath);
+  const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
+  const stats = await storage.stat(storagePath);
 
   if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
@@ -36,14 +49,13 @@ export async function handleGet(request, reply) {
   }
 
   const origin = request.headers.origin;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   // Handle container
   if (stats.isDirectory) {
     const connegEnabled = request.connegEnabled || false;
 
     // Check for index.html (serves as both profile and container representation)
-    const indexPath = urlPath.endsWith('/') ? `${urlPath}index.html` : `${urlPath}/index.html`;
+    const indexPath = storagePath.endsWith('/') ? `${storagePath}index.html` : `${storagePath}/index.html`;
     const indexExists = await storage.exists(indexPath);
 
     if (indexExists) {
@@ -105,7 +117,7 @@ export async function handleGet(request, reply) {
     }
 
     // No index.html, return JSON-LD container listing
-    const entries = await storage.listContainer(urlPath);
+    const entries = await storage.listContainer(storagePath);
     const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
     const headers = getAllHeaders({
@@ -122,12 +134,12 @@ export async function handleGet(request, reply) {
   }
 
   // Handle resource
-  const content = await storage.read(urlPath);
+  const content = await storage.read(storagePath);
   if (content === null) {
     return reply.code(500).send({ error: 'Read error' });
   }
 
-  const storedContentType = getContentType(urlPath);
+  const storedContentType = getContentType(storagePath);
   const connegEnabled = request.connegEnabled || false;
 
   // Content negotiation for RDF resources
@@ -184,16 +196,15 @@ export async function handleGet(request, reply) {
  * Handle HEAD request
  */
 export async function handleHead(request, reply) {
-  const urlPath = request.url.split('?')[0];
-  const stats = await storage.stat(urlPath);
+  const { storagePath, resourceUrl } = getRequestPaths(request);
+  const stats = await storage.stat(storagePath);
 
   if (!stats) {
     return reply.code(404).send();
   }
 
   const origin = request.headers.origin;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
-  const contentType = stats.isDirectory ? 'application/ld+json' : getContentType(urlPath);
+  const contentType = stats.isDirectory ? 'application/ld+json' : getContentType(storagePath);
 
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
@@ -215,20 +226,19 @@ export async function handleHead(request, reply) {
  * Handle PUT request
  */
 export async function handlePut(request, reply) {
-  const urlPath = request.url.split('?')[0];
+  const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
   const connegEnabled = request.connegEnabled || false;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   // Handle container creation via PUT
   if (isContainer(urlPath)) {
-    const stats = await storage.stat(urlPath);
+    const stats = await storage.stat(storagePath);
     if (stats?.isDirectory) {
       // Container already exists - don't allow PUT to modify
       return reply.code(409).send({ error: 'Cannot PUT to existing container' });
     }
 
     // Create the container (and any intermediate containers)
-    const success = await storage.createContainer(urlPath);
+    const success = await storage.createContainer(storagePath);
     if (!success) {
       return reply.code(500).send({ error: 'Failed to create container' });
     }
@@ -258,7 +268,7 @@ export async function handlePut(request, reply) {
   }
 
   // Check if resource already exists and get current ETag
-  const stats = await storage.stat(urlPath);
+  const stats = await storage.stat(storagePath);
   const existed = stats !== null;
   const currentEtag = stats?.etag || null;
 
@@ -308,7 +318,7 @@ export async function handlePut(request, reply) {
     }
   }
 
-  const success = await storage.write(urlPath, content);
+  const success = await storage.write(storagePath, content);
   if (!success) {
     return reply.code(500).send({ error: 'Write failed' });
   }
@@ -332,10 +342,10 @@ export async function handlePut(request, reply) {
  * Handle DELETE request
  */
 export async function handleDelete(request, reply) {
-  const urlPath = request.url.split('?')[0];
+  const { storagePath, resourceUrl } = getRequestPaths(request);
 
   // Check if resource exists and get current ETag
-  const stats = await storage.stat(urlPath);
+  const stats = await storage.stat(storagePath);
   if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
   }
@@ -349,13 +359,12 @@ export async function handleDelete(request, reply) {
     }
   }
 
-  const success = await storage.remove(urlPath);
+  const success = await storage.remove(storagePath);
   if (!success) {
     return reply.code(500).send({ error: 'Delete failed' });
   }
 
   const origin = request.headers.origin;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
@@ -371,11 +380,10 @@ export async function handleDelete(request, reply) {
  * Handle OPTIONS request
  */
 export async function handleOptions(request, reply) {
-  const urlPath = request.url.split('?')[0];
-  const stats = await storage.stat(urlPath);
+  const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
+  const stats = await storage.stat(storagePath);
 
   const origin = request.headers.origin;
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   const connegEnabled = request.connegEnabled || false;
   const headers = getAllHeaders({
     isContainer: stats?.isDirectory || isContainer(urlPath),
@@ -393,7 +401,7 @@ export async function handleOptions(request, reply) {
  * Supports N3 Patch format (text/n3) and SPARQL Update for updating RDF resources
  */
 export async function handlePatch(request, reply) {
-  const urlPath = request.url.split('?')[0];
+  const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
 
   // Don't allow PATCH to containers
   if (isContainer(urlPath)) {
@@ -413,7 +421,7 @@ export async function handlePatch(request, reply) {
   }
 
   // Check if resource exists
-  const stats = await storage.stat(urlPath);
+  const stats = await storage.stat(storagePath);
   if (!stats) {
     return reply.code(404).send({ error: 'Not Found' });
   }
@@ -428,7 +436,7 @@ export async function handlePatch(request, reply) {
   }
 
   // Read existing content
-  const existingContent = await storage.read(urlPath);
+  const existingContent = await storage.read(storagePath);
   if (existingContent === null) {
     return reply.code(500).send({ error: 'Read error' });
   }
@@ -448,8 +456,6 @@ export async function handlePatch(request, reply) {
   const patchContent = Buffer.isBuffer(request.body)
     ? request.body.toString()
     : request.body;
-
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   let updatedDocument;
 
@@ -497,7 +503,7 @@ export async function handlePatch(request, reply) {
 
   // Write updated document
   const updatedContent = JSON.stringify(updatedDocument, null, 2);
-  const success = await storage.write(urlPath, Buffer.from(updatedContent));
+  const success = await storage.write(storagePath, Buffer.from(updatedContent));
 
   if (!success) {
     return reply.code(500).send({ error: 'Write failed' });

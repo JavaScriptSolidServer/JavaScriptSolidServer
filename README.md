@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.15)
+### Implemented (v0.0.16)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -64,7 +64,8 @@ npm run benchmark
 - **SSL/TLS** - HTTPS support with certificate configuration
 - **WebSocket Notifications** - Real-time updates via solid-0.1 protocol (SolidOS compatible)
 - **Container Management** - Create, list, and manage containers
-- **Multi-user Pods** - Create pods at `/<username>/`
+- **Multi-user Pods** - Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
+- **Subdomain Mode** - XSS protection via origin isolation
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
 - **Web Access Control (WAC)** - `.acl` file-based authorization
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
@@ -135,6 +136,8 @@ jss --help             # Show help
 | `--notifications` | Enable WebSocket | false |
 | `--idp` | Enable built-in IdP | false |
 | `--idp-issuer <url>` | IdP issuer URL | (auto) |
+| `--subdomains` | Enable subdomain-based pods | false |
+| `--base-domain <domain>` | Base domain for subdomains | - |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -146,6 +149,8 @@ export JSS_PORT=8443
 export JSS_SSL_KEY=/path/to/key.pem
 export JSS_SSL_CERT=/path/to/cert.pem
 export JSS_CONNEG=true
+export JSS_SUBDOMAINS=true
+export JSS_BASE_DOMAIN=example.com
 jss start
 ```
 
@@ -338,13 +343,66 @@ curl -H "Authorization: DPoP ACCESS_TOKEN" \
      http://localhost:3000/alice/private/
 ```
 
+## Subdomain Mode (XSS Protection)
+
+By default, JSS uses **path-based pods** (`/alice/`, `/bob/`). This is simple but has a security limitation: all pods share the same origin, making cross-site scripting (XSS) attacks possible between pods.
+
+**Subdomain mode** provides **origin isolation** - each pod gets its own subdomain (`alice.example.com`, `bob.example.com`), preventing XSS attacks between pods.
+
+### Why Subdomain Mode?
+
+| Mode | URL | Origin | XSS Risk |
+|------|-----|--------|----------|
+| Path-based | `example.com/alice/` | `example.com` | Shared origin - pods can XSS each other |
+| Subdomain | `alice.example.com/` | `alice.example.com` | Isolated - browser's Same-Origin Policy protects |
+
+### Enabling Subdomain Mode
+
+```bash
+jss start --subdomains --base-domain example.com
+```
+
+Or via environment variables:
+
+```bash
+export JSS_SUBDOMAINS=true
+export JSS_BASE_DOMAIN=example.com
+jss start
+```
+
+### DNS Configuration
+
+You need a **wildcard DNS record** pointing to your server:
+
+```
+*.example.com  A  <your-server-ip>
+```
+
+### Pod URLs in Subdomain Mode
+
+| Path Mode | Subdomain Mode |
+|-----------|----------------|
+| `example.com/alice/` | `alice.example.com/` |
+| `example.com/alice/public/file.txt` | `alice.example.com/public/file.txt` |
+| `example.com/alice/#me` | `alice.example.com/#me` |
+
+Pod creation still uses the main domain:
+
+```bash
+curl -X POST https://example.com/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "alice"}'
+```
+
 ## Configuration
 
 ```javascript
 createServer({
   logger: true,        // Enable Fastify logging (default: true)
   conneg: false,       // Enable content negotiation (default: false)
-  notifications: false // Enable WebSocket notifications (default: false)
+  notifications: false, // Enable WebSocket notifications (default: false)
+  subdomains: false,   // Enable subdomain-based pods (default: false)
+  baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
 });
 ```
 
