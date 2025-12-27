@@ -552,4 +552,6 @@ Minimal dependencies for a fast, secure server:
 
 ## License
 
-MIT
+AGPL-3.0-only
+
+This project is licensed under the GNU Affero General Public License v3.0. If you run a modified version as a network service, you must make the source code available to users of that service.

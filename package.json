@@ -42,7 +42,7 @@
     "linked-data",
     "decentralized"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "devDependencies": {
     "autocannon": "^8.0.0"
   }
