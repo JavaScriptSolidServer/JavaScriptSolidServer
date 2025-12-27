@@ -120,7 +120,13 @@ export function getContentType(filePath) {
     '.jpeg': 'image/jpeg',
     '.gif': 'image/gif',
     '.svg': 'image/svg+xml',
-    '.pdf': 'application/pdf'
+    '.pdf': 'application/pdf',
+    '.ttl': 'text/turtle',
+    '.n3': 'text/n3',
+    '.nt': 'application/n-triples',
+    '.rdf': 'application/rdf+xml',
+    '.nq': 'application/n-quads',
+    '.trig': 'application/trig'
   };
   return types[ext] || 'application/octet-stream';
 }
@@ -131,5 +137,15 @@ export function getContentType(filePath) {
  * @returns {boolean}
  */
 export function isRdfContentType(contentType) {
-  return contentType === 'application/ld+json' || contentType === 'application/json';
+  const rdfTypes = [
+    'application/ld+json',
+    'application/json',
+    'text/turtle',
+    'text/n3',
+    'application/n-triples',
+    'application/rdf+xml',
+    'application/n-quads',
+    'application/trig'
+  ];
+  return rdfTypes.includes(contentType);
 }

@@ -118,20 +118,22 @@ export async function handleLogin(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Login successful');
 
-    // For CTH compatibility, we need to return a response that CTH can handle.
-    // CTH expects either:
-    // 1. A redirect it can follow (but Java HttpClient follows to final destination which fails)
-    // 2. A 200 response with "location" in body (CSS v3+ style)
-    //
-    // We use interactionResult to get the redirect URL, then save it and return JSON
+    // Detect if this is a browser (wants HTML/redirect) or programmatic client (wants JSON)
+    const acceptHeader = request.headers.accept || '';
+    const wantsBrowserRedirect = acceptHeader.includes('text/html') && !acceptHeader.includes('application/json');
 
-    // Save the login result to the interaction for programmatic clients
-    // This allows the auth endpoint to continue the flow when resumed
+    // Save the login result to the interaction
     interaction.result = result;
     await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
 
-    // For CTH and programmatic clients: use interactionFinished with hijacked response
-    // to properly complete the interaction while returning JSON
+    // For browsers (mashlib, etc): do a proper HTTP redirect
+    if (wantsBrowserRedirect) {
+      reply.hijack();
+      return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    }
+
+    // For CTH and programmatic clients: return JSON with location
+    // CTH expects a 200 response with "location" in body (CSS v3+ style)
     try {
       reply.hijack();
 
@@ -188,7 +190,6 @@ export async function handleLogin(request, reply, provider) {
       request.log.warn({ err: err.message, errName: err.name, uid }, 'interactionFinished failed, using fallback');
 
       // Fallback: return the redirect URL for manual following
-      // The interaction result is already saved above
       const redirectTo = `/idp/auth/${uid}`;
       return reply
         .code(200)
