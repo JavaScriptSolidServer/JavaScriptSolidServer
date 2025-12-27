@@ -122,6 +122,63 @@ export async function handlePost(request, reply) {
 }
 
 /**
+ * Create pod directory structure (reusable for registration)
+ * @param {string} name - Pod name (username)
+ * @param {string} webId - User's WebID URI
+ * @param {string} baseUrl - Base URL (without trailing slash)
+ */
+export async function createPodStructure(name, webId, baseUrl) {
+  const podPath = `/${name}/`;
+  const podUri = `${baseUrl}/${name}/`;
+  const issuer = baseUrl + '/';
+
+  // Create pod directory structure
+  await storage.createContainer(podPath);
+  await storage.createContainer(`${podPath}inbox/`);
+  await storage.createContainer(`${podPath}public/`);
+  await storage.createContainer(`${podPath}private/`);
+  await storage.createContainer(`${podPath}settings/`);
+
+  // Generate and write WebID profile as index.html at pod root
+  const profileHtml = generateProfile({ webId, name, podUri, issuer });
+  await storage.write(`${podPath}index.html`, profileHtml);
+
+  // Generate and write preferences
+  const prefs = generatePreferences({ webId, podUri });
+  await storage.write(`${podPath}settings/prefs`, serialize(prefs));
+
+  // Generate and write type indexes
+  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex`);
+  await storage.write(`${podPath}settings/publicTypeIndex`, serialize(publicTypeIndex));
+
+  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex`);
+  await storage.write(`${podPath}settings/privateTypeIndex`, serialize(privateTypeIndex));
+
+  // Create default ACL files
+  // Pod root: owner full control, public read
+  const rootAcl = generateOwnerAcl(podUri, webId, true);
+  await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
+
+  // Private folder: owner only (no public)
+  const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
+  await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
+
+  // Settings folder: owner only
+  const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+  await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
+
+  // Inbox: owner full, public append
+  const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
+  await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
+
+  // Public folder: owner full, public read (with inheritance)
+  const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
+  await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
+
+  return { podPath, podUri };
+}
+
+/**
  * Create a pod (container) for a user
  * POST /.pods with { "name": "alice" }
  * With IdP enabled: { "name": "alice", "email": "alice@example.com", "password": "secret" }
@@ -149,8 +206,8 @@ export async function handleCreatePod(request, reply) {
     if (!email || typeof email !== 'string') {
       return reply.code(400).send({ error: 'Email required for account creation' });
     }
-    if (!password || password.length < 8) {
-      return reply.code(400).send({ error: 'Password required (minimum 8 characters)' });
+    if (!password) {
+      return reply.code(400).send({ error: 'Password required' });
     }
   }
 
@@ -189,49 +246,8 @@ export async function handleCreatePod(request, reply) {
   const issuer = baseUri + '/';
 
   try {
-    // Create pod directory structure
-    await storage.createContainer(podPath);
-    await storage.createContainer(`${podPath}inbox/`);
-    await storage.createContainer(`${podPath}public/`);
-    await storage.createContainer(`${podPath}private/`);
-    await storage.createContainer(`${podPath}settings/`);
-
-    // Generate and write WebID profile as index.html at pod root
-    const profileHtml = generateProfile({ webId, name, podUri, issuer });
-    await storage.write(`${podPath}index.html`, profileHtml);
-
-    // Generate and write preferences
-    const prefs = generatePreferences({ webId, podUri });
-    await storage.write(`${podPath}settings/prefs`, serialize(prefs));
-
-    // Generate and write type indexes
-    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex`);
-    await storage.write(`${podPath}settings/publicTypeIndex`, serialize(publicTypeIndex));
-
-    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex`);
-    await storage.write(`${podPath}settings/privateTypeIndex`, serialize(privateTypeIndex));
-
-    // Create default ACL files
-    // Pod root: owner full control, public read
-    const rootAcl = generateOwnerAcl(podUri, webId, true);
-    await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
-
-    // Private folder: owner only (no public)
-    const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
-    await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
-
-    // Settings folder: owner only
-    const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
-    await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
-
-    // Inbox: owner full, public append
-    const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
-    await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
-
-    // Public folder: owner full, public read (with inheritance)
-    const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
-    await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
-
+    // Use shared pod creation function
+    await createPodStructure(name, webId, baseUri);
   } catch (err) {
     console.error('Pod creation error:', err);
     // Cleanup on failure
@@ -249,7 +265,7 @@ export async function handleCreatePod(request, reply) {
   if (idpEnabled) {
     try {
       const { createAccount } = await import('../idp/accounts.js');
-      await createAccount({ email, password, webId, podName: name });
+      await createAccount({ username: name, email, password, webId, podName: name });
 
       return reply.code(201).send({
         name,

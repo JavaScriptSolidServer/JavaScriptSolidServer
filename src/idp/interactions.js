@@ -1,10 +1,12 @@
 /**
- * Interaction handlers for login and consent flows
+ * Interaction handlers for login, consent, and registration flows
  * Handles the user-facing parts of the authentication flow
  */
 
-import { authenticate, findById } from './accounts.js';
-import { loginPage, consentPage, errorPage } from './views.js';
+import { authenticate, findById, createAccount } from './accounts.js';
+import { loginPage, consentPage, errorPage, registerPage } from './views.js';
+import * as storage from '../storage/filesystem.js';
+import { createPodStructure } from '../handlers/container.js';
 
 /**
  * Handle GET /idp/interaction/:uid
@@ -81,11 +83,11 @@ export async function handleLogin(request, reply, provider) {
   }
   // If it's already an object, use as-is
 
-  // Support both 'email' and 'username' fields for CTH compatibility
-  const email = parsedBody.email || parsedBody.username;
+  // Support username, email, or legacy 'email' field for backwards compatibility
+  const identifier = parsedBody.username || parsedBody.email;
   const password = parsedBody.password;
 
-  request.log.info({ email, hasPassword: !!password, bodyType: typeof request.body, keys: Object.keys(parsedBody) }, 'Login attempt');
+  request.log.info({ identifier, hasPassword: !!password, bodyType: typeof request.body, keys: Object.keys(parsedBody) }, 'Login attempt');
 
   try {
     const interaction = await provider.Interaction.find(uid);
@@ -94,16 +96,16 @@ export async function handleLogin(request, reply, provider) {
     }
 
     // Validate input
-    if (!email || !password) {
-      interaction.lastError = 'Email and password are required';
+    if (!identifier || !password) {
+      interaction.lastError = 'Username and password are required';
       await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
       return reply.redirect(`/idp/interaction/${uid}`);
     }
 
     // Authenticate
-    const account = await authenticate(email, password);
+    const account = await authenticate(identifier, password);
     if (!account) {
-      interaction.lastError = 'Invalid email or password';
+      interaction.lastError = 'Invalid username or password';
       await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
       return reply.redirect(`/idp/interaction/${uid}`);
     }
@@ -289,5 +291,102 @@ export async function handleAbort(request, reply, provider) {
   } catch (err) {
     request.log.error(err, 'Abort error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
+ * Handle GET /idp/register
+ * Shows registration page
+ */
+export async function handleRegisterGet(request, reply) {
+  const uid = request.query.uid || null;
+  return reply.type('text/html').send(registerPage(uid));
+}
+
+/**
+ * Handle POST /idp/register
+ * Creates account and pod
+ */
+export async function handleRegisterPost(request, reply, issuer) {
+  const uid = request.query.uid || null;
+
+  // Parse body
+  let parsedBody = request.body || {};
+  const contentType = request.headers['content-type'] || '';
+
+  if (Buffer.isBuffer(parsedBody)) {
+    const bodyStr = parsedBody.toString();
+    if (contentType.includes('application/json')) {
+      try {
+        parsedBody = JSON.parse(bodyStr);
+      } catch (e) {
+        parsedBody = {};
+      }
+    } else {
+      const params = new URLSearchParams(bodyStr);
+      parsedBody = Object.fromEntries(params.entries());
+    }
+  } else if (typeof parsedBody === 'string') {
+    const params = new URLSearchParams(parsedBody);
+    parsedBody = Object.fromEntries(params.entries());
+  }
+
+  const { username, password, confirmPassword } = parsedBody;
+
+  // Validate input
+  if (!username || !password) {
+    return reply.type('text/html').send(registerPage(uid, 'Username and password are required'));
+  }
+
+  // Validate username format
+  const usernameRegex = /^[a-z0-9]+$/;
+  if (!usernameRegex.test(username)) {
+    return reply.type('text/html').send(registerPage(uid, 'Username must contain only lowercase letters and numbers'));
+  }
+
+  if (username.length < 3) {
+    return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters'));
+  }
+
+
+  if (password !== confirmPassword) {
+    return reply.type('text/html').send(registerPage(uid, 'Passwords do not match'));
+  }
+
+  try {
+    // Build URLs
+    const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
+    const podUri = `${baseUrl}/${username}/`;
+    const webId = `${podUri}#me`;
+
+    // Check if pod already exists
+    const podPath = `${username}/`;
+    const podExists = await storage.exists(podPath);
+    if (podExists) {
+      return reply.type('text/html').send(registerPage(uid, 'Username is already taken'));
+    }
+
+    // Create pod structure
+    await createPodStructure(username, webId, baseUrl);
+
+    // Create account
+    await createAccount({
+      username,
+      password,
+      webId,
+      podName: username,
+    });
+
+    request.log.info({ username, webId }, 'Account and pod created');
+
+    // Redirect to login
+    if (uid) {
+      return reply.redirect(`/idp/interaction/${uid}`);
+    } else {
+      return reply.type('text/html').send(registerPage(null, null, `Account created! You can now sign in as "${username}".`));
+    }
+  } catch (err) {
+    request.log.error(err, 'Registration error');
+    return reply.type('text/html').send(registerPage(uid, err.message));
   }
 }

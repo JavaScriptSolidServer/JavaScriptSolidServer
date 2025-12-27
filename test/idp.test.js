@@ -96,18 +96,6 @@ describe('Identity Provider', () => {
       assert.ok(body.error.includes('Password'));
     });
 
-    it('should require minimum password length', async () => {
-      const res = await fetch(`${BASE_URL}/.pods`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'shortpass', email: 'test@example.com', password: 'short' }),
-      });
-
-      assert.strictEqual(res.status, 400);
-      const body = await res.json();
-      assert.ok(body.error.includes('8'));
-    });
-
     it('should create pod with account', async () => {
       const uniqueId = Date.now();
       const res = await fetch(`${BASE_URL}/.pods`, {

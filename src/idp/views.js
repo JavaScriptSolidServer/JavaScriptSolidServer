@@ -52,6 +52,7 @@ const styles = `
     color: #333;
     margin-bottom: 6px;
   }
+  input[type="text"],
   input[type="email"],
   input[type="password"] {
     width: 100%;
@@ -160,6 +161,8 @@ const scopeDescriptions = {
  * Login page HTML
  */
 export function loginPage(uid, clientId, error = null) {
+  const appName = clientId || 'An application';
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -175,11 +178,16 @@ export function loginPage(uid, clientId, error = null) {
     <h1>Sign In</h1>
     <p class="subtitle">Sign in to your Solid Pod</p>
 
+    <div class="client-info">
+      <div class="client-name">${escapeHtml(appName)}</div>
+      <div class="client-uri">is requesting access to your pod</div>
+    </div>
+
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
     <form method="POST" action="/idp/interaction/${uid}/login">
-      <label for="email">Email</label>
-      <input type="email" id="email" name="email" required autofocus placeholder="you@example.com">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" required autofocus placeholder="Your username">
 
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required placeholder="Your password">
@@ -190,6 +198,10 @@ export function loginPage(uid, clientId, error = null) {
     <form method="POST" action="/idp/interaction/${uid}/abort">
       <button type="submit" class="btn btn-secondary">Cancel</button>
     </form>
+
+    <p style="text-align: center; margin-top: 24px; color: #666; font-size: 14px;">
+      Don't have an account? <a href="/idp/register?uid=${uid}" style="color: #0066cc;">Register</a>
+    </p>
   </div>
 </body>
 </html>
@@ -275,6 +287,54 @@ export function errorPage(title, message) {
     <h1 style="color: #c00;">${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
     <a href="/" class="btn btn-secondary">Go Home</a>
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Registration page HTML
+ */
+export function registerPage(uid = null, error = null, success = null) {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register - Solid IdP</title>
+  <style>${styles}</style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">${solidLogo}</div>
+    <h1>Create Account</h1>
+    <p class="subtitle">Register for a new Solid Pod</p>
+
+    ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+    ${success ? `<div class="error" style="background: #efe; border-color: #cfc; color: #060;">${escapeHtml(success)}</div>` : ''}
+
+    <form method="POST" action="/idp/register${uid ? `?uid=${uid}` : ''}">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" required autofocus
+             placeholder="Choose a username" pattern="[a-z0-9]+"
+             title="Lowercase letters and numbers only">
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required
+             placeholder="Choose a password">
+
+      <label for="confirmPassword">Confirm Password</label>
+      <input type="password" id="confirmPassword" name="confirmPassword" required
+             placeholder="Confirm your password">
+
+      <button type="submit" class="btn btn-primary">Create Account</button>
+    </form>
+
+    <p style="text-align: center; margin-top: 24px; color: #666; font-size: 14px;">
+      Already have an account? <a href="${uid ? `/idp/interaction/${uid}` : '/idp/auth'}" style="color: #0066cc;">Sign In</a>
+    </p>
   </div>
 </body>
 </html>

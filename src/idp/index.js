@@ -11,6 +11,8 @@ import {
   handleLogin,
   handleConsent,
   handleAbort,
+  handleRegisterGet,
+  handleRegisterPost,
 } from './interactions.js';
 import {
   handleCredentials,
@@ -218,6 +220,15 @@ export async function idpPlugin(fastify, options) {
   // POST abort
   fastify.post('/idp/interaction/:uid/abort', async (request, reply) => {
     return handleAbort(request, reply, provider);
+  });
+
+  // Registration routes
+  fastify.get('/idp/register', async (request, reply) => {
+    return handleRegisterGet(request, reply);
+  });
+
+  fastify.post('/idp/register', async (request, reply) => {
+    return handleRegisterPost(request, reply, issuer);
   });
 
   fastify.log.info(`IdP initialized with issuer: ${issuer}`);

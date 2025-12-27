@@ -1,6 +1,7 @@
 /**
  * Account management for the Identity Provider
- * Handles user accounts with email/password authentication
+ * Handles user accounts with username/password authentication
+ * Email is optional - internally uses username@jss if not provided
  */
 
 import bcrypt from 'bcrypt';
@@ -8,12 +9,19 @@ import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 
+// Internal domain for generated emails
+const INTERNAL_DOMAIN = 'jss';
+
 /**
  * Get accounts directory (computed dynamically to support changing DATA_ROOT)
  */
 function getAccountsDir() {
   const dataRoot = process.env.DATA_ROOT || './data';
   return path.join(dataRoot, '.idp', 'accounts');
+}
+
+function getUsernameIndexPath() {
+  return path.join(getAccountsDir(), '_username_index.json');
 }
 
 function getEmailIndexPath() {
@@ -55,21 +63,34 @@ async function saveIndex(indexPath, index) {
 /**
  * Create a new user account
  * @param {object} options - Account options
- * @param {string} options.email - User email
+ * @param {string} options.username - Username (typically same as podName)
  * @param {string} options.password - Plain text password
  * @param {string} options.webId - User's WebID URI
  * @param {string} options.podName - Pod name
+ * @param {string} [options.email] - Optional email (defaults to username@jss)
  * @returns {Promise<object>} - Created account (without password)
  */
-export async function createAccount({ email, password, webId, podName }) {
+export async function createAccount({ username, password, webId, podName, email }) {
   await ensureDir();
 
-  const normalizedEmail = email.toLowerCase().trim();
+  const normalizedUsername = username.toLowerCase().trim();
+  // Use provided email or generate internal one
+  const normalizedEmail = email
+    ? email.toLowerCase().trim()
+    : `${normalizedUsername}@${INTERNAL_DOMAIN}`;
 
-  // Check email uniqueness
-  const existingByEmail = await findByEmail(normalizedEmail);
-  if (existingByEmail) {
-    throw new Error('Email already registered');
+  // Check username uniqueness
+  const existingByUsername = await findByUsername(normalizedUsername);
+  if (existingByUsername) {
+    throw new Error('Username already taken');
+  }
+
+  // Check email uniqueness (if real email provided)
+  if (email) {
+    const existingByEmail = await findByEmail(normalizedEmail);
+    if (existingByEmail) {
+      throw new Error('Email already registered');
+    }
   }
 
   // Check webId uniqueness
@@ -84,6 +105,7 @@ export async function createAccount({ email, password, webId, podName }) {
 
   const account = {
     id,
+    username: normalizedUsername,
     email: normalizedEmail,
     passwordHash,
     webId,
@@ -95,6 +117,11 @@ export async function createAccount({ email, password, webId, podName }) {
   // Save account
   const accountPath = path.join(getAccountsDir(), `${id}.json`);
   await fs.writeJson(accountPath, account, { spaces: 2 });
+
+  // Update username index
+  const usernameIndex = await loadIndex(getUsernameIndexPath());
+  usernameIndex[normalizedUsername] = id;
+  await saveIndex(getUsernameIndexPath(), usernameIndex);
 
   // Update email index
   const emailIndex = await loadIndex(getEmailIndexPath());
@@ -112,13 +139,17 @@ export async function createAccount({ email, password, webId, podName }) {
 }
 
 /**
- * Authenticate a user with email and password
- * @param {string} email - User email
+ * Authenticate a user with username/email and password
+ * @param {string} identifier - Username or email
  * @param {string} password - Plain text password
  * @returns {Promise<object|null>} - Account if valid, null if invalid
  */
-export async function authenticate(email, password) {
-  const account = await findByEmail(email);
+export async function authenticate(identifier, password) {
+  // Try to find by username first, then by email
+  let account = await findByUsername(identifier);
+  if (!account) {
+    account = await findByEmail(identifier);
+  }
   if (!account) return null;
 
   const valid = await bcrypt.compare(password, account.passwordHash);
@@ -147,6 +178,19 @@ export async function findById(id) {
     if (err.code === 'ENOENT') return null;
     throw err;
   }
+}
+
+/**
+ * Find an account by username
+ * @param {string} username - Username
+ * @returns {Promise<object|null>} - Account or null
+ */
+export async function findByUsername(username) {
+  const normalizedUsername = username.toLowerCase().trim();
+  const usernameIndex = await loadIndex(getUsernameIndexPath());
+  const id = usernameIndex[normalizedUsername];
+  if (!id) return null;
+  return findById(id);
 }
 
 /**
@@ -201,6 +245,12 @@ export async function deleteAccount(id) {
   if (!account) return;
 
   // Remove from indexes
+  if (account.username) {
+    const usernameIndex = await loadIndex(getUsernameIndexPath());
+    delete usernameIndex[account.username];
+    await saveIndex(getUsernameIndexPath(), usernameIndex);
+  }
+
   const emailIndex = await loadIndex(getEmailIndexPath());
   delete emailIndex[account.email];
   await saveIndex(getEmailIndexPath(), emailIndex);
