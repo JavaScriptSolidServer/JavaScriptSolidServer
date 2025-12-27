@@ -59,6 +59,9 @@ program
     try {
       const config = await loadConfig(options, options.config);
 
+      // Set DATA_ROOT env var so all modules use the same data directory
+      process.env.DATA_ROOT = path.resolve(config.root);
+
       if (options.printConfig) {
         printConfig(config);
         process.exit(0);

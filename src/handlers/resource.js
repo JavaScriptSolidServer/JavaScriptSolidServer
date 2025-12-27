@@ -1,5 +1,5 @@
 import * as storage from '../storage/filesystem.js';
-import { getAllHeaders } from '../ldp/headers.js';
+import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
@@ -37,6 +37,10 @@ export async function handleGet(request, reply) {
   const stats = await storage.stat(storagePath);
 
   if (!stats) {
+    const origin = request.headers.origin;
+    const connegEnabled = request.connegEnabled || false;
+    const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.code(404).send({ error: 'Not Found' });
   }
 
@@ -219,6 +223,10 @@ export async function handleHead(request, reply) {
   const stats = await storage.stat(storagePath);
 
   if (!stats) {
+    const origin = request.headers.origin;
+    const connegEnabled = request.connegEnabled || false;
+    const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.code(404).send();
   }
 
@@ -366,6 +374,10 @@ export async function handleDelete(request, reply) {
   // Check if resource exists and get current ETag
   const stats = await storage.stat(storagePath);
   if (!stats) {
+    const origin = request.headers.origin;
+    const connegEnabled = request.connegEnabled || false;
+    const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.code(404).send({ error: 'Not Found' });
   }
 
@@ -442,6 +454,10 @@ export async function handlePatch(request, reply) {
   // Check if resource exists
   const stats = await storage.stat(storagePath);
   if (!stats) {
+    const origin = request.headers.origin;
+    const connegEnabled = request.connegEnabled || false;
+    const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.code(404).send({ error: 'Not Found' });
   }
 
