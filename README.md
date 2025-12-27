@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.16)
+### Implemented (v0.0.17)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -66,6 +66,7 @@ npm run benchmark
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
 - **Subdomain Mode** - XSS protection via origin isolation
+- **Mashlib Data Browser** - Optional SolidOS UI for browsing RDF resources
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
 - **Web Access Control (WAC)** - `.acl` file-based authorization
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
@@ -138,6 +139,8 @@ jss --help             # Show help
 | `--idp-issuer <url>` | IdP issuer URL | (auto) |
 | `--subdomains` | Enable subdomain-based pods | false |
 | `--base-domain <domain>` | Base domain for subdomains | - |
+| `--mashlib` | Enable Mashlib data browser | false |
+| `--mashlib-version <ver>` | Mashlib version | 2.0.0 |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -151,6 +154,7 @@ export JSS_SSL_CERT=/path/to/cert.pem
 export JSS_CONNEG=true
 export JSS_SUBDOMAINS=true
 export JSS_BASE_DOMAIN=example.com
+export JSS_MASHLIB=true
 jss start
 ```
 
@@ -403,8 +407,28 @@ createServer({
   notifications: false, // Enable WebSocket notifications (default: false)
   subdomains: false,   // Enable subdomain-based pods (default: false)
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
+  mashlib: false,      // Enable Mashlib data browser (default: false)
+  mashlibVersion: '2.0.0', // Mashlib version to use
 });
 ```
+
+### Mashlib Data Browser
+
+Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources:
+
+```bash
+jss start --mashlib --conneg
+```
+
+When enabled, requesting an RDF resource with `Accept: text/html` returns an interactive data browser UI instead of raw data. Mashlib is loaded from the unpkg CDN.
+
+**How it works:**
+1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
+2. Server returns Mashlib HTML wrapper (loads JS/CSS from CDN)
+3. Mashlib fetches the actual data via content negotiation
+4. Mashlib renders an interactive, editable view
+
+**Note:** Mashlib works best with `--conneg` enabled for Turtle support. Pod profiles (`/alice/`) continue to serve our JSON-LD-in-HTML format.
 
 ### WebSocket Notifications
 

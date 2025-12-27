@@ -50,6 +50,9 @@ program
   .option('--subdomains', 'Enable subdomain-based pods (XSS protection)')
   .option('--no-subdomains', 'Disable subdomain-based pods')
   .option('--base-domain <domain>', 'Base domain for subdomain pods (e.g., "example.com")')
+  .option('--mashlib', 'Enable Mashlib data browser for RDF resources')
+  .option('--no-mashlib', 'Disable Mashlib data browser')
+  .option('--mashlib-version <version>', 'Mashlib version to use (default: 2.0.0)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -85,6 +88,8 @@ program
         root: config.root,
         subdomains: config.subdomains,
         baseDomain: config.baseDomain,
+        mashlib: config.mashlib,
+        mashlibVersion: config.mashlibVersion,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -98,6 +103,7 @@ program
         if (config.notifications) console.log('  WebSocket: enabled');
         if (config.idp) console.log(`  IdP: ${idpIssuer}`);
         if (config.subdomains) console.log(`  Subdomains: ${config.baseDomain} (XSS protection enabled)`);
+        if (config.mashlib) console.log(`  Mashlib: v${config.mashlibVersion} (data browser enabled)`);
         console.log('\n  Press Ctrl+C to stop\n');
       }
 

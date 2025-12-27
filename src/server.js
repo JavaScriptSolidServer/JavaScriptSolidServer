@@ -30,6 +30,9 @@ export function createServer(options = {}) {
   // Subdomain mode is OFF by default - use path-based pods
   const subdomainsEnabled = options.subdomains ?? false;
   const baseDomain = options.baseDomain || null;
+  // Mashlib data browser is OFF by default
+  const mashlibEnabled = options.mashlib ?? false;
+  const mashlibVersion = options.mashlibVersion ?? '2.0.0';
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -66,12 +69,16 @@ export function createServer(options = {}) {
   fastify.decorateRequest('subdomainsEnabled', null);
   fastify.decorateRequest('baseDomain', null);
   fastify.decorateRequest('podName', null);
+  fastify.decorateRequest('mashlibEnabled', null);
+  fastify.decorateRequest('mashlibVersion', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
     request.idpEnabled = idpEnabled;
     request.subdomainsEnabled = subdomainsEnabled;
     request.baseDomain = baseDomain;
+    request.mashlibEnabled = mashlibEnabled;
+    request.mashlibVersion = mashlibVersion;
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {

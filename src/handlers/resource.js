@@ -14,6 +14,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
+import { generateDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
 
 /**
  * Get the storage path and resource URL for a request
@@ -134,13 +135,31 @@ export async function handleGet(request, reply) {
   }
 
   // Handle resource
+  const storedContentType = getContentType(storagePath);
+  const connegEnabled = request.connegEnabled || false;
+
+  // Check if we should serve Mashlib data browser
+  // Only for RDF resources when Accept: text/html is requested
+  if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+    const html = generateDatabrowserHtml(resourceUrl, request.mashlibVersion);
+    const headers = getAllHeaders({
+      isContainer: false,
+      etag: stats.etag,
+      contentType: 'text/html',
+      origin,
+      resourceUrl,
+      connegEnabled
+    });
+    headers['Vary'] = 'Accept';
+
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+    return reply.type('text/html').send(html);
+  }
+
   const content = await storage.read(storagePath);
   if (content === null) {
     return reply.code(500).send({ error: 'Read error' });
   }
-
-  const storedContentType = getContentType(storagePath);
-  const connegEnabled = request.connegEnabled || false;
 
   // Content negotiation for RDF resources
   if (connegEnabled && isRdfContentType(storedContentType)) {
