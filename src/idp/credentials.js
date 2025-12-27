@@ -5,16 +5,15 @@
 
 import * as jose from 'jose';
 import crypto from 'crypto';
-import { authenticate, findByEmail } from './accounts.js';
+import { authenticate } from './accounts.js';
 import { getJwks } from './keys.js';
-import { createToken as createSimpleToken } from '../auth/token.js';
 
 /**
  * Handle POST /idp/credentials
- * Accepts email/password and returns access token
+ * Accepts email/password (or username/password) and returns access token
  *
  * Request body (JSON or form):
- * - email: User email
+ * - email or username: User email address
  * - password: User password
  *
  * Optional headers:
@@ -47,22 +46,22 @@ export async function handleCredentials(request, reply, issuer) {
         // Not valid JSON
       }
     }
-    email = body?.email;
+    email = body?.email || body?.username;
     password = body?.password;
   } else if (contentType.includes('application/x-www-form-urlencoded')) {
     // Parse form-encoded body
     if (typeof body === 'string') {
       const params = new URLSearchParams(body);
-      email = params.get('email');
+      email = params.get('email') || params.get('username');
       password = params.get('password');
     } else if (typeof body === 'object') {
-      email = body?.email;
+      email = body?.email || body?.username;
       password = body?.password;
     }
   } else {
     // Try to parse as object
     if (typeof body === 'object') {
-      email = body?.email;
+      email = body?.email || body?.username;
       password = body?.password;
     }
   }
@@ -71,7 +70,7 @@ export async function handleCredentials(request, reply, issuer) {
   if (!email || !password) {
     return reply.code(400).send({
       error: 'invalid_request',
-      error_description: 'Email and password are required',
+      error_description: 'Username/email and password are required',
     });
   }
 
@@ -92,7 +91,8 @@ export async function handleCredentials(request, reply, issuer) {
   if (dpopHeader) {
     try {
       // Validate DPoP proof and extract thumbprint
-      dpopJkt = await validateDpopProof(dpopHeader, 'POST', `${issuer}/idp/credentials`);
+      const credUrl = `${issuer.replace(/\/$/, '')}/idp/credentials`;
+      dpopJkt = await validateDpopProof(dpopHeader, 'POST', credUrl);
     } catch (err) {
       return reply.code(400).send({
         error: 'invalid_dpop_proof',
@@ -102,38 +102,37 @@ export async function handleCredentials(request, reply, issuer) {
   }
 
   const expiresIn = 3600; // 1 hour
-  let accessToken;
+
+  // Always generate a proper JWT - CTH requires JWT format
+  const jwks = await getJwks();
+  const signingKey = jwks.keys[0];
+  const privateKey = await jose.importJWK(signingKey, 'ES256');
+
+  const now = Math.floor(Date.now() / 1000);
+  const tokenPayload = {
+    iss: issuer,
+    sub: account.id,
+    aud: 'solid', // Solid-OIDC requires this audience
+    webid: account.webId,
+    iat: now,
+    exp: now + expiresIn,
+    jti: crypto.randomUUID(),
+    client_id: 'credentials_client',
+    scope: 'openid webid',
+  };
+
+  // Add DPoP binding confirmation if DPoP proof was provided
   let tokenType;
-
   if (dpopJkt) {
-    // Generate DPoP-bound JWT for Solid-OIDC clients
-    const jwks = await getJwks();
-    const signingKey = jwks.keys[0];
-    const privateKey = await jose.importJWK(signingKey, 'ES256');
-
-    const now = Math.floor(Date.now() / 1000);
-    const tokenPayload = {
-      iss: issuer,
-      sub: account.id,
-      aud: 'solid',
-      webid: account.webId,
-      iat: now,
-      exp: now + expiresIn,
-      jti: crypto.randomUUID(),
-      client_id: 'credentials_client',
-      scope: 'openid webid',
-      cnf: { jkt: dpopJkt },
-    };
-
-    accessToken = await new jose.SignJWT(tokenPayload)
-      .setProtectedHeader({ alg: 'ES256', kid: signingKey.kid })
-      .sign(privateKey);
+    tokenPayload.cnf = { jkt: dpopJkt };
     tokenType = 'DPoP';
   } else {
-    // Generate simple token for Bearer auth (development/testing)
-    accessToken = createSimpleToken(account.webId, expiresIn);
     tokenType = 'Bearer';
   }
+
+  const accessToken = await new jose.SignJWT(tokenPayload)
+    .setProtectedHeader({ alg: 'ES256', kid: signingKey.kid })
+    .sign(privateKey);
 
   // Response
   const response = {
@@ -206,10 +205,11 @@ export function handleCredentialsInfo(request, reply, issuer) {
   return {
     endpoint: `${issuer}/idp/credentials`,
     method: 'POST',
-    description: 'Obtain access tokens using email and password',
+    description: 'Obtain access tokens using email/username and password',
     content_types: ['application/json', 'application/x-www-form-urlencoded'],
     parameters: {
-      email: 'User email address',
+      email: 'User email address (or use "username")',
+      username: 'Alias for email (for CTH compatibility)',
       password: 'User password',
     },
     optional_headers: {

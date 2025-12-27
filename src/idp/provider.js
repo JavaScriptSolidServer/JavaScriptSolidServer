@@ -27,16 +27,19 @@ export async function createProvider(issuer) {
     // Cookie configuration
     cookies: {
       keys: cookieKeys,
+      // Use root path so cookies work across all endpoints
       long: {
         signed: true,
         maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
         httpOnly: true,
         sameSite: 'lax',
+        path: '/',
       },
       short: {
         signed: true,
         httpOnly: true,
         sameSite: 'lax',
+        path: '/',
       },
     },
 
@@ -94,13 +97,16 @@ export async function createProvider(issuer) {
         enabled: false, // Keep disabled for MVP
       },
 
-      // Allow resource parameter
+      // Allow resource parameter - always use JWT format for access tokens
+      // Resource must be a valid URI, but audience can be 'solid' for Solid-OIDC
       resourceIndicators: {
         enabled: true,
-        defaultResource: () => undefined,
+        // Default to a URI resource that maps to audience 'solid'
+        defaultResource: () => 'urn:solid',
         getResourceServerInfo: () => ({
           scope: 'openid webid profile email offline_access',
           accessTokenFormat: 'jwt',
+          audience: 'solid', // Solid-OIDC requires this audience
         }),
         useGrantedResource: () => true,
       },
@@ -176,6 +182,60 @@ export async function createProvider(issuer) {
       },
     },
 
+    // Auto-approve consent by loading/creating grants automatically
+    // This skips the consent prompt for all clients (appropriate for test/dev servers)
+    loadExistingGrant: async (ctx) => {
+      // Check if there's an existing grant for this client/account pair
+      const grantId = ctx.oidc.session?.grantIdFor(ctx.oidc.client?.clientId);
+
+      if (grantId) {
+        const existingGrant = await ctx.oidc.provider.Grant.find(grantId);
+        if (existingGrant) {
+          return existingGrant;
+        }
+      }
+
+      // Auto-approve: create a new grant with all requested scopes
+      if (ctx.oidc.session?.accountId && ctx.oidc.client?.clientId) {
+        const grant = new ctx.oidc.provider.Grant({
+          accountId: ctx.oidc.session.accountId,
+          clientId: ctx.oidc.client.clientId,
+        });
+
+        // Grant all requested OIDC scopes
+        if (ctx.oidc.params?.scope) {
+          grant.addOIDCScope(ctx.oidc.params.scope);
+        }
+
+        // Grant all requested resource scopes
+        if (ctx.oidc.params?.resource) {
+          const resources = Array.isArray(ctx.oidc.params.resource)
+            ? ctx.oidc.params.resource
+            : [ctx.oidc.params.resource];
+          for (const resource of resources) {
+            grant.addResourceScope(resource, ctx.oidc.params.scope || 'openid');
+          }
+        }
+
+        await grant.save();
+        return grant;
+      }
+
+      return undefined;
+    },
+
+    // Configure routes with /idp prefix so oidc-provider uses correct paths
+    routes: {
+      authorization: '/idp/auth',
+      token: '/idp/token',
+      userinfo: '/idp/me',
+      jwks: '/.well-known/jwks.json',
+      registration: '/idp/reg',
+      introspection: '/idp/token/introspection',
+      revocation: '/idp/token/revocation',
+      end_session: '/idp/session/end',
+    },
+
     // Enable refresh token rotation
     rotateRefreshToken: (ctx) => {
       return true;
@@ -186,6 +246,7 @@ export async function createProvider(issuer) {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none', // Public clients by default
+      id_token_signed_response_alg: 'ES256', // ES256 is what we support
     },
 
     // Response modes
@@ -199,6 +260,11 @@ export async function createProvider(issuer) {
     pkce: {
       required: () => true,
       methods: ['S256'],
+    },
+
+    // Enable RS256 for DPoP (CTH uses RS256)
+    enabledJWA: {
+      dPoPSigningAlgValues: ['ES256', 'RS256', 'Ed25519', 'EdDSA'],
     },
 
     // Enable request parameter

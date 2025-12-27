@@ -199,9 +199,13 @@ function jsonLdToQuads(jsonLd, baseUri) {
       const predicateUri = expandUri(key, context);
       const predicate = namedNode(predicateUri);
 
+      // Check if context specifies this property should be a URI (@type: "@id")
+      const propContext = context[key];
+      const isIdType = propContext && typeof propContext === 'object' && propContext['@type'] === '@id';
+
       const values = Array.isArray(value) ? value : [value];
       for (const v of values) {
-        const object = valueToTerm(v, baseUri, context);
+        const object = valueToTerm(v, baseUri, context, isIdType);
         if (object) {
           quads.push(quad(subject, predicate, object));
         }
@@ -265,14 +269,23 @@ function termToJsonLd(term, baseUri, prefixes) {
 
 /**
  * Convert JSON-LD value to N3.js term
+ * @param {any} value - The value to convert
+ * @param {string} baseUri - Base URI for resolving relative URIs
+ * @param {object} context - JSON-LD context
+ * @param {boolean} isIdType - Whether the property context specifies @type: "@id"
  */
-function valueToTerm(value, baseUri, context) {
+function valueToTerm(value, baseUri, context, isIdType = false) {
   if (value === null || value === undefined) {
     return null;
   }
 
   // Plain values
   if (typeof value === 'string') {
+    // If context says this should be a URI, treat it as a named node
+    if (isIdType) {
+      const uri = resolveUri(value, baseUri);
+      return namedNode(uri);
+    }
     return literal(value);
   }
   if (typeof value === 'number') {

@@ -241,13 +241,22 @@ export async function getAccountForProvider(id) {
       // Always include webid for Solid-OIDC
       result.webid = account.webId;
 
+      // Handle scope being a string, array, Set, or object with keys
+      const hasScope = (s) => {
+        if (typeof scope === 'string') return scope.includes(s);
+        if (Array.isArray(scope)) return scope.includes(s);
+        if (scope instanceof Set) return scope.has(s);
+        if (scope && typeof scope === 'object') return s in scope || Object.keys(scope).includes(s);
+        return false;
+      };
+
       // Profile scope
-      if (scope.includes('profile')) {
+      if (hasScope('profile')) {
         result.name = account.podName;
       }
 
       // Email scope
-      if (scope.includes('email')) {
+      if (hasScope('email')) {
         result.email = account.email;
         result.email_verified = false; // We don't have email verification yet
       }

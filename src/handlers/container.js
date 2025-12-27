@@ -157,7 +157,8 @@ export async function handleCreatePod(request, reply) {
   const baseUri = `${request.protocol}://${request.hostname}`;
   const podUri = `${baseUri}${podPath}`;
   const webId = `${podUri}#me`;
-  const issuer = baseUri;
+  // Issuer needs trailing slash for CTH compatibility
+  const issuer = baseUri + '/';
 
   try {
     // Create pod directory structure
@@ -223,7 +224,7 @@ export async function handleCreatePod(request, reply) {
         webId,
         podUri,
         idpIssuer: issuer,
-        loginUrl: `${issuer}/idp/auth`,
+        loginUrl: `${baseUri}/idp/auth`,
       });
     } catch (err) {
       console.error('Account creation error:', err);

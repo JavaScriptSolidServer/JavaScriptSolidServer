@@ -51,6 +51,46 @@ export async function handleGet(request, reply) {
       const content = await storage.read(indexPath);
       const indexStats = await storage.stat(indexPath);
 
+      // Check if RDF format requested via content negotiation
+      const acceptHeader = request.headers.accept || '';
+      const wantsTurtle = connegEnabled && (
+        acceptHeader.includes('text/turtle') ||
+        acceptHeader.includes('text/n3') ||
+        acceptHeader.includes('application/n-triples')
+      );
+
+      if (wantsTurtle) {
+        // Extract JSON-LD from HTML and convert to Turtle
+        try {
+          const htmlStr = content.toString();
+          const jsonLdMatch = htmlStr.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+          if (jsonLdMatch) {
+            const jsonLd = JSON.parse(jsonLdMatch[1]);
+            const { content: turtleContent } = await fromJsonLd(
+              jsonLd,
+              'text/turtle',
+              resourceUrl,
+              true
+            );
+
+            const headers = getAllHeaders({
+              isContainer: true,
+              etag: indexStats?.etag || stats.etag,
+              contentType: 'text/turtle',
+              origin,
+              resourceUrl,
+              connegEnabled
+            });
+
+            Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+            return reply.send(turtleContent);
+          }
+        } catch (err) {
+          // Fall through to serve HTML if conversion fails
+          console.error('Failed to convert profile to Turtle:', err.message);
+        }
+      }
+
       const headers = getAllHeaders({
         isContainer: true,
         etag: indexStats?.etag || stats.etag,
@@ -176,15 +216,36 @@ export async function handleHead(request, reply) {
  */
 export async function handlePut(request, reply) {
   const urlPath = request.url.split('?')[0];
+  const connegEnabled = request.connegEnabled || false;
+  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
-  // Don't allow PUT to containers
+  // Handle container creation via PUT
   if (isContainer(urlPath)) {
-    return reply.code(409).send({ error: 'Cannot PUT to container. Use POST instead.' });
+    const stats = await storage.stat(urlPath);
+    if (stats?.isDirectory) {
+      // Container already exists - don't allow PUT to modify
+      return reply.code(409).send({ error: 'Cannot PUT to existing container' });
+    }
+
+    // Create the container (and any intermediate containers)
+    const success = await storage.createContainer(urlPath);
+    if (!success) {
+      return reply.code(500).send({ error: 'Failed to create container' });
+    }
+
+    const origin = request.headers.origin;
+    const headers = getAllHeaders({
+      isContainer: true,
+      origin,
+      connegEnabled
+    });
+    headers['Location'] = resourceUrl;
+    Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+    emitChange(request.protocol + '://' + request.hostname, urlPath, 'created');
+    return reply.code(201).send();
   }
 
-  const connegEnabled = request.connegEnabled || false;
   const contentType = request.headers['content-type'] || '';
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {

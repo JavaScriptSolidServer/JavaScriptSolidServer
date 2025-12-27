@@ -62,7 +62,11 @@ program
       const protocol = config.ssl ? 'https' : 'http';
       const serverHost = config.host === '0.0.0.0' ? 'localhost' : config.host;
       const baseUrl = `${protocol}://${serverHost}:${config.port}`;
-      const idpIssuer = config.idpIssuer || baseUrl;
+      // Ensure issuer has trailing slash for CTH compatibility
+      let idpIssuer = config.idpIssuer || baseUrl;
+      if (idpIssuer && !idpIssuer.endsWith('/')) {
+        idpIssuer = idpIssuer + '/';
+      }
 
       // Create and start server
       const server = createServer({

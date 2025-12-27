@@ -190,9 +190,11 @@ export function generateOwnerAcl(resourceUrl, ownerWebId, isContainer = false) {
   ];
 
   // Add default rules for containers
+  // Only owner gets default - children don't inherit public read
   if (isContainer) {
     graph[0]['acl:default'] = { '@id': resourceUrl };
-    graph[1]['acl:default'] = { '@id': resourceUrl };
+    // Note: intentionally not adding default to #public
+    // so child resources require authentication by default
   }
 
   return {

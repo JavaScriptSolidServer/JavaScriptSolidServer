@@ -48,7 +48,44 @@ export async function handleInteractionGet(request, reply, provider) {
  */
 export async function handleLogin(request, reply, provider) {
   const { uid } = request.params;
-  const { email, password } = request.body || {};
+
+  // Parse body - handle multiple formats (Buffer, string, object)
+  let parsedBody = request.body || {};
+  const contentType = request.headers['content-type'] || '';
+
+  if (Buffer.isBuffer(parsedBody)) {
+    const bodyStr = parsedBody.toString();
+    if (contentType.includes('application/json')) {
+      try {
+        parsedBody = JSON.parse(bodyStr);
+      } catch (e) {
+        parsedBody = {};
+      }
+    } else {
+      // Assume form-urlencoded
+      const params = new URLSearchParams(bodyStr);
+      parsedBody = Object.fromEntries(params.entries());
+    }
+  } else if (typeof parsedBody === 'string') {
+    // Body might be a string for form-urlencoded
+    if (contentType.includes('application/json')) {
+      try {
+        parsedBody = JSON.parse(parsedBody);
+      } catch (e) {
+        parsedBody = {};
+      }
+    } else {
+      const params = new URLSearchParams(parsedBody);
+      parsedBody = Object.fromEntries(params.entries());
+    }
+  }
+  // If it's already an object, use as-is
+
+  // Support both 'email' and 'username' fields for CTH compatibility
+  const email = parsedBody.email || parsedBody.username;
+  const password = parsedBody.password;
+
+  request.log.info({ email, hasPassword: !!password, bodyType: typeof request.body, keys: Object.keys(parsedBody) }, 'Login attempt');
 
   try {
     const interaction = await provider.Interaction.find(uid);
@@ -79,14 +116,86 @@ export async function handleLogin(request, reply, provider) {
       },
     };
 
-    const redirectTo = await provider.interactionResult(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: false }
-    );
+    request.log.info({ accountId: account.id, uid }, 'Login successful');
 
-    return reply.redirect(redirectTo);
+    // For CTH compatibility, we need to return a response that CTH can handle.
+    // CTH expects either:
+    // 1. A redirect it can follow (but Java HttpClient follows to final destination which fails)
+    // 2. A 200 response with "location" in body (CSS v3+ style)
+    //
+    // We use interactionResult to get the redirect URL, then save it and return JSON
+
+    // Save the login result to the interaction for programmatic clients
+    // This allows the auth endpoint to continue the flow when resumed
+    interaction.result = result;
+    await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+
+    // For CTH and programmatic clients: use interactionFinished with hijacked response
+    // to properly complete the interaction while returning JSON
+    try {
+      reply.hijack();
+
+      // Create a mock response that captures the redirect and returns JSON
+      let capturedLocation = null;
+      let headersSent = false;
+      const mockRes = {
+        statusCode: 200,
+        headersSent: false,
+        setHeader: (name, value) => {
+          if (name.toLowerCase() === 'location') {
+            capturedLocation = value;
+          }
+          return mockRes;
+        },
+        getHeader: (name) => {
+          if (name.toLowerCase() === 'location') return capturedLocation;
+          return undefined;
+        },
+        removeHeader: () => mockRes,
+        writeHead: (status, headers) => {
+          if (headers) {
+            if (typeof headers === 'object' && !Array.isArray(headers)) {
+              for (const [key, value] of Object.entries(headers)) {
+                if (key.toLowerCase() === 'location') {
+                  capturedLocation = value;
+                }
+              }
+            }
+          }
+          return mockRes;
+        },
+        write: () => mockRes,
+        end: (body) => {
+          if (!headersSent) {
+            headersSent = true;
+            const location = capturedLocation || `/idp/auth/${uid}`;
+            reply.raw.writeHead(200, {
+              'Content-Type': 'application/json',
+              'Location': location,
+            });
+            reply.raw.end(JSON.stringify({ location }));
+          }
+        },
+        finished: false,
+        on: () => mockRes,
+        once: () => mockRes,
+        emit: () => mockRes,
+      };
+
+      await provider.interactionFinished(request.raw, mockRes, result, { mergeWithLastSubmission: false });
+      return;
+    } catch (err) {
+      request.log.warn({ err: err.message, errName: err.name, uid }, 'interactionFinished failed, using fallback');
+
+      // Fallback: return the redirect URL for manual following
+      // The interaction result is already saved above
+      const redirectTo = `/idp/auth/${uid}`;
+      return reply
+        .code(200)
+        .header('Location', redirectTo)
+        .type('application/json')
+        .send({ location: redirectTo });
+    }
   } catch (err) {
     request.log.error(err, 'Login error');
     return reply.code(500).type('text/html').send(errorPage('Login failed', err.message));
@@ -138,14 +247,16 @@ export async function handleConsent(request, reply, provider) {
       },
     };
 
-    const redirectTo = await provider.interactionResult(
+    // Mark reply as sent since interactionFinished will handle the response
+    reply.hijack();
+
+    // Use interactionFinished which handles the redirect directly
+    return provider.interactionFinished(
       request.raw,
       reply.raw,
       result,
       { mergeWithLastSubmission: true }
     );
-
-    return reply.redirect(redirectTo);
   } catch (err) {
     request.log.error(err, 'Consent error');
     return reply.code(500).type('text/html').send(errorPage('Consent failed', err.message));
@@ -165,6 +276,7 @@ export async function handleAbort(request, reply, provider) {
       error_description: 'User cancelled the authorization request',
     };
 
+    // oidc-provider is configured with /idp routes, so redirectTo will have correct path
     const redirectTo = await provider.interactionResult(
       request.raw,
       reply.raw,

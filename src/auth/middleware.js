@@ -79,12 +79,16 @@ function getParentPath(path) {
  * @param {boolean} isAuthenticated - Whether user is authenticated
  * @param {string} wacAllow - WAC-Allow header value
  * @param {string|null} authError - Authentication error message (for DPoP failures)
+ * @param {string|null} issuer - IdP issuer URL for WWW-Authenticate header
  */
-export function handleUnauthorized(reply, isAuthenticated, wacAllow, authError = null) {
+export function handleUnauthorized(reply, isAuthenticated, wacAllow, authError = null, issuer = null) {
   reply.header('WAC-Allow', wacAllow);
 
   if (!isAuthenticated) {
-    // Not authenticated - return 401
+    // Not authenticated - return 401 with WWW-Authenticate header
+    // Solid-OIDC requires DPoP authentication
+    const realm = issuer || 'Solid';
+    reply.header('WWW-Authenticate', `DPoP realm="${realm}", Bearer realm="${realm}"`);
     return reply.code(401).send({
       error: 'Unauthorized',
       message: authError || 'Authentication required'
