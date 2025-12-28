@@ -1,13 +1,15 @@
 /**
  * Token-based authentication
  *
- * Supports two modes:
+ * Supports multiple modes:
  * 1. Simple tokens (for local/dev use): base64(JSON({webId, iat, exp})) + HMAC signature
  * 2. Solid-OIDC DPoP tokens (for federation): verified via external IdP JWKS
+ * 3. Nostr NIP-98 tokens: Schnorr signatures, returns did:nostr identity
  */
 
 import crypto from 'crypto';
 import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
+import { verifyNostrAuth, hasNostrAuth } from './nostr.js';
 
 // Secret for signing tokens (in production, use env var)
 const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
@@ -151,6 +153,11 @@ export function getWebIdFromRequest(request) {
     return null;
   }
 
+  // Skip Nostr tokens - use async version for those
+  if (authHeader && authHeader.startsWith('Nostr ')) {
+    return null;
+  }
+
   const token = extractToken(authHeader);
 
   if (!token) {
@@ -176,6 +183,11 @@ export async function getWebIdFromRequestAsync(request) {
   // Try Solid-OIDC first (DPoP tokens)
   if (hasSolidOidcAuth(request)) {
     return verifySolidOidc(request);
+  }
+
+  // Try Nostr NIP-98 (Schnorr signatures)
+  if (hasNostrAuth(request)) {
+    return verifyNostrAuth(request);
   }
 
   // Fall back to simple Bearer tokens
