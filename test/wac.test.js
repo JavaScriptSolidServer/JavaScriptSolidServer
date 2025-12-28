@@ -18,7 +18,7 @@ import { checkAccess, getRequiredMode } from '../src/wac/checker.js';
 
 describe('WAC Parser', () => {
   describe('parseAcl', () => {
-    it('should parse a simple ACL', () => {
+    it('should parse a simple ACL', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
         '@graph': [{
@@ -30,7 +30,7 @@ describe('WAC Parser', () => {
         }]
       };
 
-      const auths = parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
 
       assert.strictEqual(auths.length, 1);
       assert.ok(auths[0].agents.includes('https://alice.example/#me'));
@@ -38,7 +38,7 @@ describe('WAC Parser', () => {
       assert.ok(auths[0].modes.includes(AccessMode.WRITE));
     });
 
-    it('should parse public access', () => {
+    it('should parse public access', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#', 'foaf': 'http://xmlns.com/foaf/0.1/' },
         '@graph': [{
@@ -50,14 +50,14 @@ describe('WAC Parser', () => {
         }]
       };
 
-      const auths = parseAcl(JSON.stringify(acl), 'https://alice.example/public/.acl');
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/public/.acl');
 
       assert.strictEqual(auths.length, 1);
       assert.ok(auths[0].agentClasses.includes('foaf:Agent'));
       assert.ok(auths[0].modes.includes(AccessMode.READ));
     });
 
-    it('should parse default authorizations for containers', () => {
+    it('should parse default authorizations for containers', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
         '@graph': [{
@@ -69,15 +69,34 @@ describe('WAC Parser', () => {
         }]
       };
 
-      const auths = parseAcl(JSON.stringify(acl), 'https://alice.example/folder/.acl');
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/folder/.acl');
 
       assert.strictEqual(auths.length, 1);
       assert.ok(auths[0].default.includes('https://alice.example/folder/'));
     });
 
-    it('should handle invalid JSON gracefully', () => {
-      const auths = parseAcl('not valid json', 'https://example.com/.acl');
+    it('should handle invalid JSON gracefully', async () => {
+      const auths = await parseAcl('not valid json', 'https://example.com/.acl');
       assert.strictEqual(auths.length, 0);
+    });
+
+    it('should parse Turtle ACL format', async () => {
+      const turtleAcl = `
+@prefix acl: <http://www.w3.org/ns/auth/acl#>.
+
+<#owner>
+    a acl:Authorization;
+    acl:agent <did:nostr:abc123>;
+    acl:accessTo <https://example.com/resource>;
+    acl:mode acl:Read, acl:Write.
+`;
+
+      const auths = await parseAcl(turtleAcl, 'https://example.com/.acl');
+
+      assert.strictEqual(auths.length, 1);
+      assert.ok(auths[0].agents.includes('did:nostr:abc123'));
+      assert.ok(auths[0].modes.includes(AccessMode.READ));
+      assert.ok(auths[0].modes.includes(AccessMode.WRITE));
     });
   });
 

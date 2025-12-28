@@ -12,14 +12,7 @@
  */
 
 import { verifyEvent } from 'nostr-tools';
-import {
-  unpackEventFromToken,
-  validateEventKind,
-  validateEventTimestamp,
-  validateEventUrlTag,
-  validateEventMethodTag,
-  validateEventPayloadTag
-} from 'nostr-tools/nip98';
+import crypto from 'crypto';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -50,6 +43,34 @@ export function extractNostrToken(authHeader) {
 }
 
 /**
+ * Decode NIP-98 event from base64 token
+ * @param {string} token - Base64 encoded event
+ * @returns {object|null} Decoded event or null
+ */
+function decodeEvent(token) {
+  try {
+    const decoded = Buffer.from(token, 'base64').toString('utf8');
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get tag value from event
+ * @param {object} event - Nostr event
+ * @param {string} tagName - Tag name (e.g., 'u', 'method')
+ * @returns {string|null} Tag value or null
+ */
+function getTagValue(event, tagName) {
+  if (!event.tags || !Array.isArray(event.tags)) {
+    return null;
+  }
+  const tag = event.tags.find(t => Array.isArray(t) && t[0] === tagName);
+  return tag ? tag[1] : null;
+}
+
+/**
  * Convert Nostr pubkey to did:nostr URI
  * @param {string} pubkey - 64-char hex public key
  * @returns {string} did:nostr URI
@@ -70,24 +91,21 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Missing Nostr token' };
   }
 
-  let event;
-  try {
-    event = unpackEventFromToken(token);
-  } catch (err) {
-    return { webId: null, error: 'Invalid token format: ' + err.message };
-  }
-
+  // Decode the event
+  const event = decodeEvent(token);
   if (!event) {
-    return { webId: null, error: 'Could not decode event from token' };
+    return { webId: null, error: 'Invalid token format: could not decode base64 JSON' };
   }
 
   // Validate event kind (must be 27235)
-  if (!validateEventKind(event, HTTP_AUTH_KIND)) {
+  if (event.kind !== HTTP_AUTH_KIND) {
     return { webId: null, error: `Invalid event kind: expected ${HTTP_AUTH_KIND}, got ${event.kind}` };
   }
 
   // Validate timestamp (within ±60 seconds)
-  if (!validateEventTimestamp(event, TIMESTAMP_TOLERANCE)) {
+  const now = Math.floor(Date.now() / 1000);
+  const eventTime = event.created_at;
+  if (!eventTime || Math.abs(now - eventTime) > TIMESTAMP_TOLERANCE) {
     return { webId: null, error: 'Event timestamp outside acceptable window (±60s)' };
   }
 
@@ -97,21 +115,32 @@ export async function verifyNostrAuth(request) {
   const fullUrl = `${protocol}://${host}${request.url}`;
 
   // Validate URL tag matches request URL
-  if (!validateEventUrlTag(event, fullUrl)) {
-    // Also try without query string for compatibility
-    const urlWithoutQuery = fullUrl.split('?')[0];
-    if (!validateEventUrlTag(event, urlWithoutQuery)) {
-      return { webId: null, error: `URL mismatch: event URL does not match request URL` };
-    }
+  const eventUrl = getTagValue(event, 'u');
+  if (!eventUrl) {
+    return { webId: null, error: 'Missing URL tag in event' };
+  }
+
+  // Compare URLs (normalize by removing trailing slashes)
+  const normalizedEventUrl = eventUrl.replace(/\/$/, '');
+  const normalizedRequestUrl = fullUrl.replace(/\/$/, '');
+  const normalizedRequestUrlNoQuery = fullUrl.split('?')[0].replace(/\/$/, '');
+
+  if (normalizedEventUrl !== normalizedRequestUrl && normalizedEventUrl !== normalizedRequestUrlNoQuery) {
+    return { webId: null, error: `URL mismatch: event URL "${eventUrl}" does not match request URL "${fullUrl}"` };
   }
 
   // Validate method tag matches request method
-  if (!validateEventMethodTag(event, request.method)) {
-    return { webId: null, error: `Method mismatch: expected ${request.method}` };
+  const eventMethod = getTagValue(event, 'method');
+  if (!eventMethod) {
+    return { webId: null, error: 'Missing method tag in event' };
+  }
+  if (eventMethod.toUpperCase() !== request.method.toUpperCase()) {
+    return { webId: null, error: `Method mismatch: expected ${request.method}, got ${eventMethod}` };
   }
 
   // Validate payload hash if present and request has body
-  if (request.body && event.tags.some(t => t[0] === 'payload')) {
+  const payloadTag = getTagValue(event, 'payload');
+  if (payloadTag && request.body) {
     let bodyString;
     if (typeof request.body === 'string') {
       bodyString = request.body;
@@ -121,9 +150,15 @@ export async function verifyNostrAuth(request) {
       bodyString = JSON.stringify(request.body);
     }
 
-    if (!validateEventPayloadTag(event, bodyString)) {
+    const expectedHash = crypto.createHash('sha256').update(bodyString).digest('hex');
+    if (payloadTag.toLowerCase() !== expectedHash.toLowerCase()) {
       return { webId: null, error: 'Payload hash mismatch' };
     }
+  }
+
+  // Validate pubkey exists
+  if (!event.pubkey || typeof event.pubkey !== 'string' || event.pubkey.length !== 64) {
+    return { webId: null, error: 'Invalid or missing pubkey' };
   }
 
   // Verify Schnorr signature
@@ -154,7 +189,7 @@ export async function getNostrPubkey(request) {
   }
 
   try {
-    const event = unpackEventFromToken(token);
+    const event = decodeEvent(token);
     return event?.pubkey || null;
   } catch {
     return null;

@@ -1,7 +1,9 @@
 /**
  * WAC (Web Access Control) Parser
- * Parses JSON-LD .acl files into authorization rules
+ * Parses ACL files (JSON-LD or Turtle) into authorization rules
  */
+
+import { turtleToJsonLd } from '../rdf/turtle.js';
 
 const ACL = 'http://www.w3.org/ns/auth/acl#';
 const FOAF = 'http://xmlns.com/foaf/0.1/';
@@ -21,16 +23,31 @@ export const AgentClass = {
 };
 
 /**
- * Parse a JSON-LD ACL document
- * @param {string|object} content - JSON-LD content (string or parsed object)
+ * Parse an ACL document (JSON-LD or Turtle)
+ * @param {string|object} content - ACL content (JSON-LD string/object or Turtle string)
  * @param {string} aclUrl - URL of the ACL document
- * @returns {Array<Authorization>} List of authorization rules
+ * @returns {Promise<Array<Authorization>>} List of authorization rules
  */
-export function parseAcl(content, aclUrl) {
+export async function parseAcl(content, aclUrl) {
   let doc;
-  try {
-    doc = typeof content === 'string' ? JSON.parse(content) : content;
-  } catch {
+
+  // If already an object, use it directly
+  if (typeof content === 'object' && content !== null) {
+    doc = content;
+  } else if (typeof content === 'string') {
+    // Try JSON-LD first
+    try {
+      doc = JSON.parse(content);
+    } catch {
+      // Not JSON, try Turtle
+      try {
+        doc = await turtleToJsonLd(content, aclUrl);
+      } catch (turtleError) {
+        // Neither JSON-LD nor valid Turtle
+        return [];
+      }
+    }
+  } else {
     return [];
   }
 
