@@ -134,3 +134,13 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Test files
+.nostr-test-key
+.nostr-sk
+nostr-token.js
+nostr-curl.js
+test-nostr-acl.js
+test-dpop-flow.js
+cth-config/
+test-data-idp-accounts/
