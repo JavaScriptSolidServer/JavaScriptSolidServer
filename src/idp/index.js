@@ -184,6 +184,8 @@ export async function idpPlugin(fastify, options) {
       claims_supported: ['sub', 'webid', 'name', 'email', 'email_verified'],
       code_challenge_methods_supported: ['S256'],
       dpop_signing_alg_values_supported: ['ES256', 'RS256'],
+      // RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
+      authorization_response_iss_parameter_supported: true,
       // Solid-OIDC specific
       solid_oidc_supported: 'https://solidproject.org/TR/solid-oidc',
     };
