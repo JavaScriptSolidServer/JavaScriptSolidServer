@@ -2,6 +2,15 @@
 
 A minimal, fast, JSON-LD native Solid server.
 
+## Comparison
+
+| Server | Size | Deps | Notes |
+|--------|------|------|-------|
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | 432 KB | 10 | Minimal, JSON-LD native |
+| [NSS](https://github.com/nodeSolidServer/node-solid-server) | 777 KB | 58 | Original Solid server |
+| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
+| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
+
 ## Philosophy: JSON-LD First
 
 This is a **JSON-LD native implementation**. Unlike traditional Solid servers that treat Turtle as the primary format and convert to/from it, this server:
