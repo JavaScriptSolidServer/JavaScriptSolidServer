@@ -70,6 +70,25 @@ export async function idpPlugin(fastify, options) {
       const req = request.raw;
       const res = reply.raw;
 
+      // Set CORS headers on raw response before oidc-provider handles it
+      // This is needed because oidc-provider writes directly to the raw response
+      const origin = request.headers.origin;
+      if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Accept, Authorization, Content-Type, DPoP, If-Match, If-None-Match, Link, Slug, Origin');
+        res.setHeader('Access-Control-Expose-Headers', 'Accept-Patch, Accept-Post, Allow, Content-Type, ETag, Link, Location, Updates-Via, WAC-Allow');
+        res.setHeader('Access-Control-Max-Age', '86400');
+      }
+
+      // Handle OPTIONS preflight requests directly
+      if (request.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return resolve();
+      }
+
       // oidc-provider is now configured with /idp routes, no stripping needed
       // Ensure parsed body is accessible to oidc-provider
       // Fastify parses body into request.body, oidc-provider looks for req.body
@@ -116,7 +135,7 @@ export async function idpPlugin(fastify, options) {
 
   for (const path of oidcPaths) {
     fastify.route({
-      method: ['GET', 'POST', 'DELETE'],
+      method: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       url: path,
       handler: forwardToProvider,
     });
