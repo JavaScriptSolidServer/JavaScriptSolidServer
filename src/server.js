@@ -157,25 +157,40 @@ export function createServer(options = {}) {
 
   // Mashlib static files (served from root like NSS does)
   if (mashlibEnabled) {
-    const mashlibDir = join(__dirname, 'mashlib-local', 'dist');
-    const mashlibFiles = {
-      '/mashlib.min.js': { file: 'mashlib.min.js', type: 'application/javascript' },
-      '/mashlib.min.js.map': { file: 'mashlib.min.js.map', type: 'application/json' },
-      '/mash.css': { file: 'mash.css', type: 'text/css' },
-      '/mash.css.map': { file: 'mash.css.map', type: 'application/json' },
-      '/841.mashlib.min.js': { file: '841.mashlib.min.js', type: 'application/javascript' },
-      '/841.mashlib.min.js.map': { file: '841.mashlib.min.js.map', type: 'application/json' }
-    };
+    if (mashlibCdn) {
+      // CDN mode: redirect chunk requests to CDN
+      // Mashlib uses code splitting, so it loads chunks like 789.mashlib.min.js
+      const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
+      const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
 
-    for (const [path, config] of Object.entries(mashlibFiles)) {
-      fastify.get(path, async (request, reply) => {
-        try {
-          const content = await readFile(join(mashlibDir, config.file));
-          return reply.type(config.type).send(content);
-        } catch {
-          return reply.code(404).send({ error: 'Not Found' });
+      fastify.addHook('onRequest', async (request, reply) => {
+        if (chunkPattern.test(request.url)) {
+          const filename = request.url.split('/').pop();
+          return reply.redirect(302, `${cdnBase}/${filename}`);
         }
       });
+    } else {
+      // Local mode: serve from local files
+      const mashlibDir = join(__dirname, 'mashlib-local', 'dist');
+      const mashlibFiles = {
+        '/mashlib.min.js': { file: 'mashlib.min.js', type: 'application/javascript' },
+        '/mashlib.min.js.map': { file: 'mashlib.min.js.map', type: 'application/json' },
+        '/mash.css': { file: 'mash.css', type: 'text/css' },
+        '/mash.css.map': { file: 'mash.css.map', type: 'application/json' },
+        '/841.mashlib.min.js': { file: '841.mashlib.min.js', type: 'application/javascript' },
+        '/841.mashlib.min.js.map': { file: '841.mashlib.min.js.map', type: 'application/json' }
+      };
+
+      for (const [path, config] of Object.entries(mashlibFiles)) {
+        fastify.get(path, async (request, reply) => {
+          try {
+            const content = await readFile(join(mashlibDir, config.file));
+            return reply.type(config.type).send(content);
+          } catch {
+            return reply.code(404).send({ error: 'Not Found' });
+          }
+        });
+      }
     }
   }
 

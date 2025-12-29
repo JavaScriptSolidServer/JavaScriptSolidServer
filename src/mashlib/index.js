@@ -55,14 +55,29 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     return false;
   }
 
-  // Don't serve mashlib for iframe/embed requests (prevents recursive loop)
-  if (secFetchDest === 'iframe' || secFetchDest === 'embed' || secFetchDest === 'object') {
+  // Only serve mashlib for top-level document navigation
+  // sec-fetch-dest: 'document' = browser navigation (serve mashlib)
+  // sec-fetch-dest: 'empty' = JavaScript fetch/XHR (serve RDF data)
+  if (secFetchDest && secFetchDest !== 'document') {
     return false;
   }
 
-  // Must explicitly accept HTML
+  // Must explicitly accept HTML as a primary type (not via */*)
+  // Browser navigation: "text/html,application/xhtml+xml,..."
+  // Mashlib fetch: "application/rdf+xml;q=0.9, */*;q=0.1,..."
   if (!accept.includes('text/html')) {
     return false;
+  }
+
+  // Don't serve mashlib if RDF types appear BEFORE text/html in Accept header
+  // This handles cases like "application/rdf+xml, text/html" where RDF is preferred
+  const htmlPos = accept.indexOf('text/html');
+  const acceptRdfTypes = ['application/rdf+xml', 'text/turtle', 'application/ld+json', 'text/n3', 'application/n-triples'];
+  for (const rdfType of acceptRdfTypes) {
+    const rdfPos = accept.indexOf(rdfType);
+    if (rdfPos !== -1 && rdfPos < htmlPos) {
+      return false; // RDF type is preferred over HTML
+    }
   }
 
   // Only serve mashlib for RDF content types
