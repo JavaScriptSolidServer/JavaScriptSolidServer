@@ -125,12 +125,11 @@ export async function handlePost(request, reply) {
  * Create pod directory structure (reusable for registration)
  * @param {string} name - Pod name (username)
  * @param {string} webId - User's WebID URI
- * @param {string} baseUrl - Base URL (without trailing slash)
+ * @param {string} podUri - Pod root URI (e.g., https://alice.example.com/ or https://example.com/alice/)
+ * @param {string} issuer - OIDC issuer URI
  */
-export async function createPodStructure(name, webId, baseUrl) {
+export async function createPodStructure(name, webId, podUri, issuer) {
   const podPath = `/${name}/`;
-  const podUri = `${baseUrl}/${name}/`;
-  const issuer = baseUrl + '/';
 
   // Create pod directory structure
   await storage.createContainer(podPath);
@@ -253,7 +252,7 @@ export async function handleCreatePod(request, reply) {
 
   try {
     // Use shared pod creation function
-    await createPodStructure(name, webId, baseUri);
+    await createPodStructure(name, webId, podUri, issuer);
   } catch (err) {
     console.error('Pod creation error:', err);
     // Cleanup on failure

@@ -355,9 +355,20 @@ export async function handleRegisterPost(request, reply, issuer) {
 
   try {
     // Build URLs - WebID follows standard Solid convention: /profile/card#me
+    const subdomainsEnabled = request.subdomainsEnabled;
+    const baseDomain = request.baseDomain;
     const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
-    const podUri = `${baseUrl}/${username}/`;
-    const webId = `${podUri}profile/card#me`;
+
+    let podUri, webId;
+    if (subdomainsEnabled && baseDomain) {
+      // Subdomain mode: alice.example.com/profile/card#me
+      podUri = `${request.protocol}://${username}.${baseDomain}/`;
+      webId = `${podUri}profile/card#me`;
+    } else {
+      // Path mode: example.com/alice/profile/card#me
+      podUri = `${baseUrl}/${username}/`;
+      webId = `${podUri}profile/card#me`;
+    }
 
     // Check if pod already exists
     const podPath = `${username}/`;
@@ -367,7 +378,7 @@ export async function handleRegisterPost(request, reply, issuer) {
     }
 
     // Create pod structure
-    await createPodStructure(username, webId, baseUrl);
+    await createPodStructure(username, webId, podUri, issuer);
 
     // Create account
     await createAccount({

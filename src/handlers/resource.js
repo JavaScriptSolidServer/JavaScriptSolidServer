@@ -146,6 +146,42 @@ export async function handleGet(request, reply) {
       return reply.type('text/html').send(html);
     }
 
+    // Check if Turtle/N3 format is requested via content negotiation
+    const acceptHeader = request.headers.accept || '';
+    const wantsTurtle = connegEnabled && (
+      acceptHeader.includes('text/turtle') ||
+      acceptHeader.includes('text/n3') ||
+      acceptHeader.includes('application/n-triples')
+    );
+
+    if (wantsTurtle) {
+      // Convert container JSON-LD to Turtle
+      try {
+        const { content: turtleContent } = await fromJsonLd(
+          jsonLd,
+          'text/turtle',
+          resourceUrl,
+          true
+        );
+
+        const headers = getAllHeaders({
+          isContainer: true,
+          etag: stats.etag,
+          contentType: 'text/turtle',
+          origin,
+          resourceUrl,
+          connegEnabled
+        });
+        headers['Vary'] = 'Accept';
+
+        Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+        return reply.send(turtleContent);
+      } catch (err) {
+        // Fall through to JSON-LD if conversion fails
+        console.error('Failed to convert container to Turtle:', err.message);
+      }
+    }
+
     const headers = getAllHeaders({
       isContainer: true,
       etag: stats.etag,
@@ -196,7 +232,9 @@ export async function handleGet(request, reply) {
   if (connegEnabled) {
     const contentStr = content.toString();
     const acceptHeader = request.headers.accept || '';
-    const wantsTurtle = acceptHeader.includes('text/turtle') ||
+    // Serve Turtle if: URL ends with .ttl OR Accept header requests it
+    const wantsTurtle = urlPath.endsWith('.ttl') ||
+                        acceptHeader.includes('text/turtle') ||
                         acceptHeader.includes('text/n3') ||
                         acceptHeader.includes('application/n-triples');
 
@@ -233,7 +271,8 @@ export async function handleGet(request, reply) {
       // Plain JSON-LD file
       try {
         const jsonLd = JSON.parse(contentStr);
-        const targetType = selectContentType(acceptHeader, connegEnabled);
+        // Use Turtle if URL ends with .ttl, otherwise use Accept header preference
+        const targetType = wantsTurtle ? 'text/turtle' : selectContentType(acceptHeader, connegEnabled);
         const { content: outputContent, contentType: outputType } = await fromJsonLd(
           jsonLd,
           targetType,
