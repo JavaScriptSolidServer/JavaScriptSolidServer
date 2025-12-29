@@ -188,9 +188,10 @@ export async function fromJsonLd(jsonLd, targetType, baseUri, connegEnabled = fa
 
 /**
  * Get Vary header value for content negotiation
+ * Include Accept when conneg or mashlib is enabled (response varies by Accept header)
  */
-export function getVaryHeader(connegEnabled) {
-  return connegEnabled ? 'Accept, Origin' : 'Origin';
+export function getVaryHeader(connegEnabled, mashlibEnabled = false) {
+  return (connegEnabled || mashlibEnabled) ? 'Accept, Origin' : 'Origin';
 }
 
 /**

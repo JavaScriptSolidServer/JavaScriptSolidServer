@@ -197,7 +197,7 @@ export async function handleGet(request, reply) {
         resourceUrl,
         connegEnabled
       });
-      headers['Vary'] = getVaryHeader(connegEnabled);
+      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
       Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
       return reply.send(outputContent);
@@ -215,7 +215,7 @@ export async function handleGet(request, reply) {
     resourceUrl,
     connegEnabled
   });
-  headers['Vary'] = getVaryHeader(connegEnabled);
+  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
   return reply.send(content);
@@ -359,7 +359,7 @@ export async function handlePut(request, reply) {
   const origin = request.headers.origin;
   const headers = getAllHeaders({ isContainer: false, origin, resourceUrl, connegEnabled });
   headers['Location'] = resourceUrl;
-  headers['Vary'] = getVaryHeader(connegEnabled);
+  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
