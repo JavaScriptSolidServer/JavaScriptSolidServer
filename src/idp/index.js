@@ -70,6 +70,19 @@ export async function idpPlugin(fastify, options) {
       const req = request.raw;
       const res = reply.raw;
 
+      // Intercept setHeader to strip 'iss' parameter from Location redirects
+      // oidc-provider v9+ always includes 'iss' (RFC 9207) but Mashlib's auth doesn't handle it
+      const originalSetHeader = res.setHeader.bind(res);
+      res.setHeader = (name, value) => {
+        if (name.toLowerCase() === 'location' && typeof value === 'string' && value.includes('iss=')) {
+          // Strip the iss parameter from the redirect URL
+          const url = new URL(value, 'http://localhost');
+          url.searchParams.delete('iss');
+          value = url.pathname + url.search + url.hash;
+        }
+        return originalSetHeader(name, value);
+      };
+
       // oidc-provider is now configured with /idp routes, no stripping needed
       // Ensure parsed body is accessible to oidc-provider
       // Fastify parses body into request.body, oidc-provider looks for req.body
