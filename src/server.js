@@ -131,9 +131,10 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, and well-known endpoints
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, and notifications
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     if (request.url === '/.pods' ||
+        request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
         request.url.startsWith('/.well-known/') ||
