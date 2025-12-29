@@ -354,10 +354,10 @@ export async function handleRegisterPost(request, reply, issuer) {
   }
 
   try {
-    // Build URLs
+    // Build URLs - WebID follows standard Solid convention: /profile/card#me
     const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
     const podUri = `${baseUrl}/${username}/`;
-    const webId = `${podUri}#me`;
+    const webId = `${podUri}profile/card#me`;
 
     // Check if pod already exists
     const podPath = `${username}/`;

@@ -138,10 +138,11 @@ export async function createPodStructure(name, webId, baseUrl) {
   await storage.createContainer(`${podPath}public/`);
   await storage.createContainer(`${podPath}private/`);
   await storage.createContainer(`${podPath}settings/`);
+  await storage.createContainer(`${podPath}profile/`);
 
-  // Generate and write WebID profile as index.html at pod root
+  // Generate and write WebID profile at /profile/card (standard Solid location)
   const profileHtml = generateProfile({ webId, name, podUri, issuer });
-  await storage.write(`${podPath}index.html`, profileHtml);
+  await storage.write(`${podPath}profile/card`, profileHtml);
 
   // Generate and write preferences
   const prefs = generatePreferences({ webId, podUri });
@@ -174,6 +175,11 @@ export async function createPodStructure(name, webId, baseUrl) {
   // Public folder: owner full, public read (with inheritance)
   const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
   await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
+
+  // Profile folder: owner full, public read (with inheritance)
+  // Profile documents must be publicly readable for WebID verification
+  const profileAcl = generatePublicFolderAcl(`${podUri}profile/`, webId);
+  await storage.write(`${podPath}profile/.acl`, serializeAcl(profileAcl));
 
   return { podPath, podUri };
 }
@@ -224,22 +230,22 @@ export async function handleCreatePod(request, reply) {
   }
 
   // Build URIs
-  // WebID is at pod root: /alice/#me (path mode) or alice.example.com/#me (subdomain mode)
+  // WebID follows standard Solid convention: /alice/profile/card#me
   const subdomainsEnabled = request.subdomainsEnabled;
   const baseDomain = request.baseDomain;
 
   let baseUri, podUri, webId;
   if (subdomainsEnabled && baseDomain) {
-    // Subdomain mode: alice.example.com/
+    // Subdomain mode: alice.example.com/profile/card#me
     const podHost = `${name}.${baseDomain}`;
     baseUri = `${request.protocol}://${baseDomain}`;
     podUri = `${request.protocol}://${podHost}/`;
-    webId = `${podUri}#me`;
+    webId = `${podUri}profile/card#me`;
   } else {
-    // Path mode: example.com/alice/
+    // Path mode: example.com/alice/profile/card#me
     baseUri = `${request.protocol}://${request.hostname}`;
     podUri = `${baseUri}${podPath}`;
-    webId = `${podUri}#me`;
+    webId = `${podUri}profile/card#me`;
   }
 
   // Issuer needs trailing slash for CTH compatibility
