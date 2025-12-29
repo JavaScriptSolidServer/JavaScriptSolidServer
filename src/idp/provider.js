@@ -149,8 +149,9 @@ export async function createProvider(issuer) {
     scopes: ['openid', 'webid', 'profile', 'email', 'offline_access'],
 
     // Claims configuration
+    // Always include webid with openid scope for Solid-OIDC compliance
     claims: {
-      openid: ['sub'],
+      openid: ['sub', 'webid'],
       webid: ['webid'],
       profile: ['name'],
       email: ['email', 'email_verified'],
