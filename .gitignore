@@ -144,3 +144,6 @@ test-nostr-acl.js
 test-dpop-flow.js
 cth-config/
 test-data-idp-accounts/
+
+# Local mashlib build (for development)
+src/mashlib-local/
