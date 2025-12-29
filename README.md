@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.17)
+### Implemented (v0.0.23)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -66,11 +66,13 @@ npm run benchmark
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
 - **Subdomain Mode** - XSS protection via origin isolation
-- **Mashlib Data Browser** - Optional SolidOS UI for browsing RDF resources
+- **Mashlib Data Browser** - Optional SolidOS UI (CDN or local hosting)
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
 - **Web Access Control (WAC)** - `.acl` file-based authorization
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
+- **NSS-style Registration** - Username/password auth compatible with Solid apps
+- **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Optional Turtle <-> JSON-LD conversion
 - **CORS Support** - Full cross-origin resource sharing
