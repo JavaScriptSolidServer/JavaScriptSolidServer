@@ -151,14 +151,15 @@ function quadsToJsonLd(quads, baseUri, prefixes = {}) {
     nodes.push(jsonNode);
   }
 
-  // Build result
+  // Build result - return array if multiple nodes, single object otherwise
   const context = buildContext(prefixes);
 
   if (nodes.length === 1) {
     return { '@context': context, ...nodes[0] };
   }
 
-  return { '@context': context, '@graph': nodes };
+  // Multiple nodes: return as array (no @graph)
+  return nodes.map((node, i) => i === 0 ? { '@context': context, ...node } : node);
 }
 
 /**
@@ -166,10 +167,25 @@ function quadsToJsonLd(quads, baseUri, prefixes = {}) {
  */
 function jsonLdToQuads(jsonLd, baseUri) {
   const quads = [];
-  const context = jsonLd['@context'] || {};
 
-  // Handle @graph or single object
-  const nodes = jsonLd['@graph'] || [jsonLd];
+  // Handle array of JSON-LD objects (e.g., from multiple PATCH operations)
+  const documents = Array.isArray(jsonLd) ? jsonLd : [jsonLd];
+
+  // Merge all contexts and collect all nodes
+  let mergedContext = {};
+  let nodes = [];
+
+  for (const doc of documents) {
+    if (doc['@context']) {
+      mergedContext = { ...mergedContext, ...doc['@context'] };
+    }
+    // Each document with @id is a node (no @graph needed)
+    if (doc['@id']) {
+      nodes.push(doc);
+    }
+  }
+
+  const context = mergedContext;
 
   for (const node of nodes) {
     if (!node['@id']) continue;

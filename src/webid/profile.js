@@ -33,25 +33,17 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'inbox': { '@id': 'ldp:inbox', '@type': '@id' },
       'storage': { '@id': 'pim:storage', '@type': '@id' },
       'oidcIssuer': { '@id': 'solid:oidcIssuer', '@type': '@id' },
-      'preferencesFile': { '@id': 'pim:preferencesFile', '@type': '@id' }
+      'preferencesFile': { '@id': 'pim:preferencesFile', '@type': '@id' },
+      'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' }
     },
-    '@graph': [
-      {
-        '@id': profileDoc,
-        '@type': 'foaf:PersonalProfileDocument',
-        'foaf:maker': { '@id': webId },
-        'foaf:primaryTopic': { '@id': webId }
-      },
-      {
-        '@id': webId,
-        '@type': ['foaf:Person', 'schema:Person'],
-        'foaf:name': name,
-        'inbox': `${pod}inbox/`,
-        'storage': pod,
-        'oidcIssuer': issuer,
-        'preferencesFile': `${pod}settings/prefs`
-      }
-    ]
+    '@id': webId,
+    '@type': ['foaf:Person', 'schema:Person'],
+    'foaf:name': name,
+    'mainEntityOfPage': profileDoc,
+    'inbox': `${pod}inbox/`,
+    'storage': pod,
+    'oidcIssuer': issuer,
+    'preferencesFile': `${pod}settings/prefs`
   };
 }
 
