@@ -192,38 +192,70 @@ export async function handleGet(request, reply) {
     return reply.code(500).send({ error: 'Read error' });
   }
 
-  // Content negotiation for RDF resources
-  if (connegEnabled && isRdfContentType(storedContentType)) {
-    try {
-      // Parse stored content as JSON-LD
-      const jsonLd = JSON.parse(content.toString());
+  // Content negotiation for RDF resources (including HTML with JSON-LD data islands)
+  if (connegEnabled) {
+    const contentStr = content.toString();
+    const acceptHeader = request.headers.accept || '';
+    const wantsTurtle = acceptHeader.includes('text/turtle') ||
+                        acceptHeader.includes('text/n3') ||
+                        acceptHeader.includes('application/n-triples');
 
-      // Select output format based on Accept header
-      const acceptHeader = request.headers.accept;
-      const targetType = selectContentType(acceptHeader, connegEnabled);
+    // Check if this is HTML with JSON-LD data island
+    const isHtmlWithDataIsland = contentStr.trimStart().startsWith('<!DOCTYPE') ||
+                                  contentStr.trimStart().startsWith('<html');
 
-      // Convert to requested format
-      const { content: outputContent, contentType: outputType } = await fromJsonLd(
-        jsonLd,
-        targetType,
-        resourceUrl,
-        connegEnabled
-      );
+    if (isHtmlWithDataIsland && wantsTurtle) {
+      // Extract JSON-LD from HTML data island and convert to Turtle
+      try {
+        const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+        if (jsonLdMatch) {
+          const jsonLd = JSON.parse(jsonLdMatch[1]);
+          const { content: turtleContent } = await fromJsonLd(jsonLd, 'text/turtle', resourceUrl, true);
 
-      const headers = getAllHeaders({
-        isContainer: false,
-        etag: stats.etag,
-        contentType: outputType,
-        origin,
-        resourceUrl,
-        connegEnabled
-      });
-      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+          const headers = getAllHeaders({
+            isContainer: false,
+            etag: stats.etag,
+            contentType: 'text/turtle',
+            origin,
+            resourceUrl,
+            connegEnabled
+          });
+          headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
-      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-      return reply.send(outputContent);
-    } catch (e) {
-      // If not valid JSON-LD, serve as-is
+          Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+          return reply.send(turtleContent);
+        }
+      } catch (err) {
+        // Fall through to serve HTML if conversion fails
+        console.error('Failed to convert HTML data island to Turtle:', err.message);
+      }
+    } else if (isRdfContentType(storedContentType)) {
+      // Plain JSON-LD file
+      try {
+        const jsonLd = JSON.parse(contentStr);
+        const targetType = selectContentType(acceptHeader, connegEnabled);
+        const { content: outputContent, contentType: outputType } = await fromJsonLd(
+          jsonLd,
+          targetType,
+          resourceUrl,
+          connegEnabled
+        );
+
+        const headers = getAllHeaders({
+          isContainer: false,
+          etag: stats.etag,
+          contentType: outputType,
+          origin,
+          resourceUrl,
+          connegEnabled
+        });
+        headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+
+        Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+        return reply.send(outputContent);
+      } catch (e) {
+        // If not valid JSON-LD, serve as-is
+      }
     }
   }
 
