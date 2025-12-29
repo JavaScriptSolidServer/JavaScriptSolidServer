@@ -4,7 +4,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.23)
+### Implemented (v0.0.31)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -17,14 +17,14 @@ A minimal, fast, JSON-LD native Solid server.
 - **Multi-user Pods** - Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
 - **Subdomain Mode** - XSS protection via origin isolation
 - **Mashlib Data Browser** - Optional SolidOS UI (CDN or local hosting)
-- **WebID Profiles** - JSON-LD structured data in HTML at pod root
+- **WebID Profiles** - HTML with JSON-LD data islands, rendered with mashlib-jss + solidos-lite
 - **Web Access Control (WAC)** - `.acl` file-based authorization
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **NSS-style Registration** - Username/password auth compatible with Solid apps
 - **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures
 - **Simple Auth Tokens** - Built-in token authentication for development
-- **Content Negotiation** - Optional Turtle <-> JSON-LD conversion
+- **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
 
 ### HTTP Methods
@@ -36,7 +36,7 @@ A minimal, fast, JSON-LD native Solid server.
 | PUT | Full - Create/update resources |
 | POST | Full - Create in containers |
 | DELETE | Full |
-| PATCH | N3 Patch format |
+| PATCH | N3 Patch + SPARQL Update |
 | OPTIONS | Full with CORS |
 
 ## Getting Started
@@ -285,7 +285,15 @@ npm install && npm run build
 3. Mashlib fetches the actual data via content negotiation
 4. Mashlib renders an interactive, editable view
 
-**Note:** Mashlib works best with `--conneg` enabled for Turtle support. Pod profiles (`/alice/`) continue to serve our JSON-LD-in-HTML format.
+**Note:** Mashlib works best with `--conneg` enabled for Turtle support.
+
+### Profile Pages
+
+Pod profiles (`/alice/`) use HTML with embedded JSON-LD data islands and are rendered using:
+- [mashlib-jss](https://github.com/JavaScriptSolidServer/mashlib-jss) - A fork of mashlib with `getPod()` fix for path-based pods
+- [solidos-lite](https://github.com/SolidOS/solidos-lite) - Parses JSON-LD data islands into the RDF store
+
+This allows profiles to work without server-side content negotiation while still providing full SolidOS editing capabilities.
 
 ### WebSocket Notifications
 
