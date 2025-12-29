@@ -90,7 +90,7 @@ export function getCorsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS',
-    'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type, If-Match, If-None-Match, Link, Slug, Origin',
+    'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type, DPoP, If-Match, If-None-Match, Link, Slug, Origin',
     'Access-Control-Expose-Headers': 'Accept-Patch, Accept-Post, Allow, Content-Type, ETag, Link, Location, Updates-Via, WAC-Allow',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400'
