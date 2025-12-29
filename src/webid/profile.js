@@ -56,17 +56,17 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
 }
 
 /**
- * Generate HTML profile with embedded JSON-LD
+ * Generate HTML profile with embedded JSON-LD data island
+ * The page uses mashlib + solidos-lite to render the profile from the data island
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI
  * @param {string} options.issuer - OIDC issuer URI
- * @returns {string} HTML document with JSON-LD
+ * @returns {string} HTML document with JSON-LD data island
  */
 export function generateProfile({ webId, name, podUri, issuer }) {
   const jsonLd = generateProfileJsonLd({ webId, name, podUri, issuer });
-  const pod = podUri.endsWith('/') ? podUri : podUri + '/';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -74,30 +74,52 @@ export function generateProfile({ webId, name, podUri, issuer }) {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(name)}'s Profile</title>
+  <link rel="stylesheet" href="https://javascriptsolidserver.github.io/mashlib-jss/dist/mash.css">
   <script type="application/ld+json">
 ${JSON.stringify(jsonLd, null, 2)}
   </script>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { color: #333; }
-    .card { background: #f5f5f5; padding: 1.5rem; border-radius: 8px; }
-    dt { font-weight: bold; margin-top: 1rem; }
-    dd { margin-left: 0; color: #666; }
-    a { color: #7c4dff; }
+    body { margin: 0; font-family: system-ui, sans-serif; }
+    .loading { padding: 2rem; text-align: center; color: #666; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>${escapeHtml(name)}</h1>
-    <dl>
-      <dt>WebID</dt>
-      <dd><a href="${escapeHtml(webId)}">${escapeHtml(webId)}</a></dd>
-      <dt>Storage</dt>
-      <dd><a href="${escapeHtml(pod)}">${escapeHtml(pod)}</a></dd>
-      <dt>Inbox</dt>
-      <dd><a href="${escapeHtml(pod)}inbox/">${escapeHtml(pod)}inbox/</a></dd>
-    </dl>
+  <div class="TabulatorOutline" id="DummyUUID" role="main">
+    <table id="outline"></table>
+    <div id="GlobalDashboard"></div>
   </div>
+  <div class="loading" id="loading">Loading profile...</div>
+
+  <script src="https://javascriptsolidserver.github.io/mashlib-jss/dist/mashlib.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/solidos-lite/solidos-lite.js"></script>
+  <script>
+  document.addEventListener('DOMContentLoaded', function() {
+    const loadingEl = document.getElementById('loading');
+
+    // Initialize solidos-lite to handle data islands
+    const success = SolidOSLite.init({ verbose: false });
+    if (!success) {
+      loadingEl.textContent = 'Failed to initialize. Please try refreshing.';
+      return;
+    }
+
+    // Parse data islands into the RDF store
+    SolidOSLite.parseAllIslands();
+
+    // Mark this document as already fetched
+    const pageBase = window.location.href.split('?')[0].split('#')[0];
+    const fetcher = SolidLogic.store.fetcher;
+    fetcher.requested[pageBase] = 'done';
+    fetcher.requested[pageBase.replace(/\\/$/, '')] = 'done';
+
+    // Navigate to #me
+    const subject = $rdf.sym(pageBase + '#me');
+    const outliner = panes.getOutliner(document);
+    outliner.GotoSubject(subject, true, undefined, true, undefined);
+
+    loadingEl.style.display = 'none';
+  });
+  </script>
 </body>
 </html>`;
 }

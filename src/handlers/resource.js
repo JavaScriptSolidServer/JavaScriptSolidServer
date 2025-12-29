@@ -495,20 +495,53 @@ export async function handlePatch(request, reply) {
 
   // Read existing content or start with empty JSON-LD document
   let document;
+  let htmlWrapper = null; // Track HTML wrapper for data island re-embedding
+
   if (resourceExists) {
     const existingContent = await storage.read(storagePath);
     if (existingContent === null) {
       return reply.code(500).send({ error: 'Read error' });
     }
 
-    // Parse existing document as JSON-LD
-    try {
-      document = JSON.parse(existingContent.toString());
-    } catch (e) {
-      return reply.code(409).send({
-        error: 'Conflict',
-        message: 'Resource is not valid JSON-LD and cannot be patched'
-      });
+    const contentStr = existingContent.toString();
+
+    // Check if this is HTML with embedded JSON-LD data island
+    if (contentStr.trimStart().startsWith('<!DOCTYPE') || contentStr.trimStart().startsWith('<html')) {
+      // Extract JSON-LD from <script type="application/ld+json"> tag
+      const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+
+      if (!jsonLdMatch) {
+        return reply.code(409).send({
+          error: 'Conflict',
+          message: 'HTML document does not contain a JSON-LD data island'
+        });
+      }
+
+      try {
+        document = JSON.parse(jsonLdMatch[1]);
+        // Save the HTML parts for re-embedding after patch
+        const jsonLdStart = contentStr.indexOf(jsonLdMatch[0]) + jsonLdMatch[0].indexOf('>') + 1;
+        const jsonLdEnd = jsonLdStart + jsonLdMatch[1].length;
+        htmlWrapper = {
+          before: contentStr.substring(0, jsonLdStart),
+          after: contentStr.substring(jsonLdEnd)
+        };
+      } catch (e) {
+        return reply.code(409).send({
+          error: 'Conflict',
+          message: 'HTML data island contains invalid JSON-LD'
+        });
+      }
+    } else {
+      // Parse as plain JSON-LD
+      try {
+        document = JSON.parse(contentStr);
+      } catch (e) {
+        return reply.code(409).send({
+          error: 'Conflict',
+          message: 'Resource is not valid JSON-LD and cannot be patched'
+        });
+      }
     }
   } else {
     // Create empty JSON-LD document for new resource
@@ -568,7 +601,14 @@ export async function handlePatch(request, reply) {
   }
 
   // Write updated document
-  const updatedContent = JSON.stringify(updatedDocument, null, 2);
+  let updatedContent;
+  if (htmlWrapper) {
+    // Re-embed JSON-LD into HTML wrapper
+    const jsonLdStr = JSON.stringify(updatedDocument, null, 2);
+    updatedContent = htmlWrapper.before + '\n' + jsonLdStr + '\n  ' + htmlWrapper.after;
+  } else {
+    updatedContent = JSON.stringify(updatedDocument, null, 2);
+  }
   const success = await storage.write(storagePath, Buffer.from(updatedContent));
 
   if (!success) {
