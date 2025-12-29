@@ -2,65 +2,6 @@
 
 A minimal, fast, JSON-LD native Solid server.
 
-## Comparison
-
-| Server | Size | Deps | Notes |
-|--------|------|------|-------|
-| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | 432 KB | 10 | Minimal, JSON-LD native |
-| [NSS](https://github.com/nodeSolidServer/node-solid-server) | 777 KB | 58 | Original Solid server |
-| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
-| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
-
-## Philosophy: JSON-LD First
-
-This is a **JSON-LD native implementation**. Unlike traditional Solid servers that treat Turtle as the primary format and convert to/from it, this server:
-
-- **Stores everything as JSON-LD** - No RDF parsing overhead for standard operations
-- **Serves JSON-LD by default** - Modern web applications can consume responses directly
-- **Content negotiation is optional** - Enable Turtle support with `{ conneg: true }` when needed
-- **Fast by design** - Skip the RDF parsing tax when you don't need it
-
-### Why JSON-LD First?
-
-1. **Performance**: JSON parsing is native to JavaScript - no external RDF libraries needed for basic operations
-2. **Simplicity**: JSON-LD is valid JSON - works with any JSON tooling
-3. **Web-native**: Browsers and web apps understand JSON natively
-4. **Semantic web ready**: JSON-LD is a W3C standard RDF serialization
-
-### When to Enable Content Negotiation
-
-Enable `conneg: true` when:
-- Interoperating with Turtle-based Solid apps
-- Serving data to legacy Solid clients
-- Running conformance tests that require Turtle support
-
-```javascript
-import { createServer } from './src/server.js';
-
-// Default: JSON-LD only (fast)
-const server = createServer();
-
-// With Turtle support (for interoperability)
-const serverWithConneg = createServer({ conneg: true });
-```
-
-## Performance
-
-This server is designed for speed. Benchmark results on a typical development machine:
-
-| Operation | Requests/sec | Avg Latency | p99 Latency |
-|-----------|-------------|-------------|-------------|
-| GET resource | 5,400+ | 1.2ms | 3ms |
-| GET container | 4,700+ | 1.6ms | 3ms |
-| PUT (write) | 5,700+ | 1.1ms | 2ms |
-| POST (create) | 5,200+ | 1.3ms | 3ms |
-| OPTIONS | 10,000+ | 0.4ms | 1ms |
-
-Run benchmarks yourself:
-```bash
-npm run benchmark
-```
-
 ## Features
 
 ### Implemented (v0.0.23)
@@ -270,22 +211,103 @@ curl -X PUT http://localhost:3000/alice/public/new-resource.json \
   -d '{"@id": "#new"}'
 ```
 
-## Pod Structure
+## Philosophy: JSON-LD First
 
+This is a **JSON-LD native implementation**. Unlike traditional Solid servers that treat Turtle as the primary format and convert to/from it, this server:
+
+- **Stores everything as JSON-LD** - No RDF parsing overhead for standard operations
+- **Serves JSON-LD by default** - Modern web applications can consume responses directly
+- **Content negotiation is optional** - Enable Turtle support with `{ conneg: true }` when needed
+- **Fast by design** - Skip the RDF parsing tax when you don't need it
+
+### Why JSON-LD First?
+
+1. **Performance**: JSON parsing is native to JavaScript - no external RDF libraries needed for basic operations
+2. **Simplicity**: JSON-LD is valid JSON - works with any JSON tooling
+3. **Web-native**: Browsers and web apps understand JSON natively
+4. **Semantic web ready**: JSON-LD is a W3C standard RDF serialization
+
+### When to Enable Content Negotiation
+
+Enable `conneg: true` when:
+- Interoperating with Turtle-based Solid apps
+- Serving data to legacy Solid clients
+- Running conformance tests that require Turtle support
+
+```javascript
+import { createServer } from './src/server.js';
+
+// Default: JSON-LD only (fast)
+const server = createServer();
+
+// With Turtle support (for interoperability)
+const serverWithConneg = createServer({ conneg: true });
 ```
-/alice/
-├── index.html          # WebID profile (HTML with JSON-LD)
-├── .acl                 # Root ACL (owner + public read)
-├── inbox/              # Notifications (public append)
-│   └── .acl
-├── public/             # Public files
-├── private/            # Private files (owner only)
-│   └── .acl
-└── settings/           # User preferences (owner only)
-    ├── .acl
-    ├── prefs
-    ├── publicTypeIndex
-    └── privateTypeIndex
+
+## Configuration
+
+```javascript
+createServer({
+  logger: true,        // Enable Fastify logging (default: true)
+  conneg: false,       // Enable content negotiation (default: false)
+  notifications: false, // Enable WebSocket notifications (default: false)
+  subdomains: false,   // Enable subdomain-based pods (default: false)
+  baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
+  mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
+  mashlibCdn: false,   // Enable Mashlib data browser - CDN mode (default: false)
+  mashlibVersion: '2.0.0', // Mashlib version for CDN mode
+});
+```
+
+### Mashlib Data Browser
+
+Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources. Two modes are available:
+
+**CDN Mode** (recommended for getting started):
+```bash
+jss start --mashlib-cdn --conneg
+```
+Loads mashlib from unpkg.com CDN. Zero footprint - no local files needed.
+
+**Local Mode** (for production/offline):
+```bash
+jss start --mashlib --conneg
+```
+Serves mashlib from `src/mashlib-local/dist/`. Requires building mashlib locally:
+```bash
+cd src/mashlib-local
+npm install && npm run build
+```
+
+**How it works:**
+1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
+2. Server returns Mashlib HTML wrapper
+3. Mashlib fetches the actual data via content negotiation
+4. Mashlib renders an interactive, editable view
+
+**Note:** Mashlib works best with `--conneg` enabled for Turtle support. Pod profiles (`/alice/`) continue to serve our JSON-LD-in-HTML format.
+
+### WebSocket Notifications
+
+Enable real-time notifications for resource changes:
+
+```javascript
+const server = createServer({ notifications: true });
+```
+
+Clients discover the WebSocket URL via the `Updates-Via` header:
+
+```bash
+curl -I http://localhost:3000/alice/public/
+# Updates-Via: ws://localhost:3000/.notifications
+```
+
+Protocol (solid-0.1, compatible with SolidOS):
+```
+Server: protocol solid-0.1
+Client: sub http://localhost:3000/alice/public/data.json
+Server: ack http://localhost:3000/alice/public/data.json
+Server: pub http://localhost:3000/alice/public/data.json  (on change)
 ```
 
 ## Authentication
@@ -359,6 +381,24 @@ curl -H "Authorization: DPoP ACCESS_TOKEN" \
      http://localhost:3000/alice/private/
 ```
 
+## Pod Structure
+
+```
+/alice/
+├── index.html          # WebID profile (HTML with JSON-LD)
+├── .acl                 # Root ACL (owner + public read)
+├── inbox/              # Notifications (public append)
+│   └── .acl
+├── public/             # Public files
+├── private/            # Private files (owner only)
+│   └── .acl
+└── settings/           # User preferences (owner only)
+    ├── .acl
+    ├── prefs
+    ├── publicTypeIndex
+    └── privateTypeIndex
+```
+
 ## Subdomain Mode (XSS Protection)
 
 By default, JSS uses **path-based pods** (`/alice/`, `/bob/`). This is simple but has a security limitation: all pods share the same origin, making cross-site scripting (XSS) attacks possible between pods.
@@ -410,70 +450,30 @@ curl -X POST https://example.com/.pods \
   -d '{"name": "alice"}'
 ```
 
-## Configuration
+## Comparison
 
-```javascript
-createServer({
-  logger: true,        // Enable Fastify logging (default: true)
-  conneg: false,       // Enable content negotiation (default: false)
-  notifications: false, // Enable WebSocket notifications (default: false)
-  subdomains: false,   // Enable subdomain-based pods (default: false)
-  baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
-  mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
-  mashlibCdn: false,   // Enable Mashlib data browser - CDN mode (default: false)
-  mashlibVersion: '2.0.0', // Mashlib version for CDN mode
-});
-```
+| Server | Size | Deps | Notes |
+|--------|------|------|-------|
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | 432 KB | 10 | Minimal, JSON-LD native |
+| [NSS](https://github.com/nodeSolidServer/node-solid-server) | 777 KB | 58 | Original Solid server |
+| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
+| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
 
-### Mashlib Data Browser
+## Performance
 
-Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources. Two modes are available:
+This server is designed for speed. Benchmark results on a typical development machine:
 
-**CDN Mode** (recommended for getting started):
+| Operation | Requests/sec | Avg Latency | p99 Latency |
+|-----------|-------------|-------------|-------------|
+| GET resource | 5,400+ | 1.2ms | 3ms |
+| GET container | 4,700+ | 1.6ms | 3ms |
+| PUT (write) | 5,700+ | 1.1ms | 2ms |
+| POST (create) | 5,200+ | 1.3ms | 3ms |
+| OPTIONS | 10,000+ | 0.4ms | 1ms |
+
+Run benchmarks yourself:
 ```bash
-jss start --mashlib-cdn --conneg
-```
-Loads mashlib from unpkg.com CDN. Zero footprint - no local files needed.
-
-**Local Mode** (for production/offline):
-```bash
-jss start --mashlib --conneg
-```
-Serves mashlib from `src/mashlib-local/dist/`. Requires building mashlib locally:
-```bash
-cd src/mashlib-local
-npm install && npm run build
-```
-
-**How it works:**
-1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
-2. Server returns Mashlib HTML wrapper
-3. Mashlib fetches the actual data via content negotiation
-4. Mashlib renders an interactive, editable view
-
-**Note:** Mashlib works best with `--conneg` enabled for Turtle support. Pod profiles (`/alice/`) continue to serve our JSON-LD-in-HTML format.
-
-### WebSocket Notifications
-
-Enable real-time notifications for resource changes:
-
-```javascript
-const server = createServer({ notifications: true });
-```
-
-Clients discover the WebSocket URL via the `Updates-Via` header:
-
-```bash
-curl -I http://localhost:3000/alice/public/
-# Updates-Via: ws://localhost:3000/.notifications
-```
-
-Protocol (solid-0.1, compatible with SolidOS):
-```
-Server: protocol solid-0.1
-Client: sub http://localhost:3000/alice/public/data.json
-Server: ack http://localhost:3000/alice/public/data.json
-Server: pub http://localhost:3000/alice/public/data.json  (on change)
+npm run benchmark
 ```
 
 ## Running Tests
