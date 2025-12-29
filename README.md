@@ -139,8 +139,9 @@ jss --help             # Show help
 | `--idp-issuer <url>` | IdP issuer URL | (auto) |
 | `--subdomains` | Enable subdomain-based pods | false |
 | `--base-domain <domain>` | Base domain for subdomains | - |
-| `--mashlib` | Enable Mashlib data browser | false |
-| `--mashlib-version <ver>` | Mashlib version | 2.0.0 |
+| `--mashlib` | Enable Mashlib (local mode) | false |
+| `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
+| `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -407,24 +408,35 @@ createServer({
   notifications: false, // Enable WebSocket notifications (default: false)
   subdomains: false,   // Enable subdomain-based pods (default: false)
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
-  mashlib: false,      // Enable Mashlib data browser (default: false)
-  mashlibVersion: '2.0.0', // Mashlib version to use
+  mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
+  mashlibCdn: false,   // Enable Mashlib data browser - CDN mode (default: false)
+  mashlibVersion: '2.0.0', // Mashlib version for CDN mode
 });
 ```
 
 ### Mashlib Data Browser
 
-Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources:
+Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources. Two modes are available:
 
+**CDN Mode** (recommended for getting started):
+```bash
+jss start --mashlib-cdn --conneg
+```
+Loads mashlib from unpkg.com CDN. Zero footprint - no local files needed.
+
+**Local Mode** (for production/offline):
 ```bash
 jss start --mashlib --conneg
 ```
-
-When enabled, requesting an RDF resource with `Accept: text/html` returns an interactive data browser UI instead of raw data. Mashlib is loaded from the unpkg CDN.
+Serves mashlib from `src/mashlib-local/dist/`. Requires building mashlib locally:
+```bash
+cd src/mashlib-local
+npm install && npm run build
+```
 
 **How it works:**
 1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
-2. Server returns Mashlib HTML wrapper (loads JS/CSS from CDN)
+2. Server returns Mashlib HTML wrapper
 3. Mashlib fetches the actual data via content negotiation
 4. Mashlib renders an interactive, editable view
 
