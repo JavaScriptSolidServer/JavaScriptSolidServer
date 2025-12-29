@@ -276,6 +276,17 @@ export async function createProvider(issuer) {
     // Clock tolerance for token validation
     clockTolerance: 60, // 60 seconds
 
+    // Allow CORS for public clients from any origin
+    // This is needed for web apps like Mashlib loaded from CDN
+    clientBasedCORS: (ctx, origin, client) => {
+      // Allow all origins for public clients (no client_secret)
+      if (client.tokenEndpointAuthMethod === 'none') {
+        return true;
+      }
+      // For confidential clients, check registered origins
+      return false;
+    },
+
     // Render errors
     renderError: async (ctx, out, error) => {
       ctx.type = 'html';
