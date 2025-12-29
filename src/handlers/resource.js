@@ -125,6 +125,27 @@ export async function handleGet(request, reply) {
     const entries = await storage.listContainer(storagePath);
     const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
+    // Check if we should serve Mashlib data browser for containers
+    if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+      const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
+      const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
+      const headers = getAllHeaders({
+        isContainer: true,
+        etag: stats.etag,
+        contentType: 'text/html',
+        origin,
+        resourceUrl,
+        connegEnabled
+      });
+      headers['Vary'] = 'Accept';
+      headers['X-Frame-Options'] = 'DENY';
+      headers['Content-Security-Policy'] = "frame-ancestors 'none'";
+      headers['Cache-Control'] = 'no-store';
+
+      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+      return reply.type('text/html').send(html);
+    }
+
     const headers = getAllHeaders({
       isContainer: true,
       etag: stats.etag,
