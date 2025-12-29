@@ -89,16 +89,19 @@ export async function verifySolidOidc(request) {
   } catch (err) {
     // Handle specific JWT errors
     if (err.code === 'ERR_JWT_EXPIRED') {
+      console.error('Solid-OIDC: Access token expired');
       return { webId: null, error: 'Access token expired' };
     }
     if (err.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
+      console.error('Solid-OIDC: Invalid token signature');
       return { webId: null, error: 'Invalid token signature' };
     }
     if (err.code === 'ERR_JWKS_NO_MATCHING_KEY') {
+      console.error('Solid-OIDC: No matching key found in JWKS');
       return { webId: null, error: 'No matching key found in JWKS' };
     }
 
-    console.error('Solid-OIDC verification error:', err.message);
+    console.error('Solid-OIDC verification error:', err.code, err.message);
     return { webId: null, error: 'Token verification failed' };
   }
 }
@@ -177,8 +180,8 @@ async function verifyDpopProof(dpopProof, request, accessToken) {
     return { thumbprint, error: null };
 
   } catch (err) {
-    console.error('DPoP verification error:', err.message);
-    return { thumbprint: null, error: 'Invalid DPoP proof' };
+    console.error('DPoP verification error:', err.code, err.message);
+    return { thumbprint: null, error: 'Invalid DPoP proof: ' + err.message };
   }
 }
 

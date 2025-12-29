@@ -28,6 +28,11 @@ export async function authorize(request, reply) {
   // Get WebID from token (supports both simple and Solid-OIDC tokens)
   const { webId, error: authError } = await getWebIdFromRequestAsync(request);
 
+  // Log auth failures for debugging
+  if (authError) {
+    request.log.warn({ authError, method, urlPath, hasAuth: !!request.headers.authorization }, 'Auth error');
+  }
+
   // Get effective storage path (includes pod name in subdomain mode)
   const storagePath = getEffectiveUrlPath(request);
 

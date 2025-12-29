@@ -34,6 +34,8 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'storage': { '@id': 'pim:storage', '@type': '@id' },
       'oidcIssuer': { '@id': 'solid:oidcIssuer', '@type': '@id' },
       'preferencesFile': { '@id': 'pim:preferencesFile', '@type': '@id' },
+      'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
+      'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' },
       'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' }
     },
     '@id': webId,
@@ -43,7 +45,9 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,
-    'preferencesFile': `${pod}settings/prefs`
+    'preferencesFile': `${pod}Settings/Preferences.ttl`,
+    'publicTypeIndex': `${pod}Settings/publicTypeIndex.ttl`,
+    'privateTypeIndex': `${pod}Settings/privateTypeIndex.ttl`
   };
 }
 
@@ -129,6 +133,7 @@ function escapeHtml(str) {
 
 /**
  * Generate preferences file as JSON-LD
+ * Uses mashlib-compatible paths (Settings/Preferences.ttl)
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.podUri - Pod root URI
@@ -144,9 +149,9 @@ export function generatePreferences({ webId, podUri }) {
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' }
     },
-    '@id': `${pod}settings/prefs`,
-    'publicTypeIndex': `${pod}settings/publicTypeIndex`,
-    'privateTypeIndex': `${pod}settings/privateTypeIndex`
+    '@id': `${pod}Settings/Preferences.ttl`,
+    'publicTypeIndex': `${pod}Settings/publicTypeIndex.ttl`,
+    'privateTypeIndex': `${pod}Settings/privateTypeIndex.ttl`
   };
 }
 

@@ -132,27 +132,28 @@ export async function createPodStructure(name, webId, podUri, issuer) {
   const podPath = `/${name}/`;
 
   // Create pod directory structure
+  // Uses 'Settings' (capital S) for mashlib compatibility
   await storage.createContainer(podPath);
   await storage.createContainer(`${podPath}inbox/`);
   await storage.createContainer(`${podPath}public/`);
   await storage.createContainer(`${podPath}private/`);
-  await storage.createContainer(`${podPath}settings/`);
+  await storage.createContainer(`${podPath}Settings/`);
   await storage.createContainer(`${podPath}profile/`);
 
   // Generate and write WebID profile at /profile/card (standard Solid location)
   const profileHtml = generateProfile({ webId, name, podUri, issuer });
   await storage.write(`${podPath}profile/card`, profileHtml);
 
-  // Generate and write preferences
+  // Generate and write preferences (mashlib-compatible paths)
   const prefs = generatePreferences({ webId, podUri });
-  await storage.write(`${podPath}settings/prefs`, serialize(prefs));
+  await storage.write(`${podPath}Settings/Preferences.ttl`, serialize(prefs));
 
-  // Generate and write type indexes
-  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex`);
-  await storage.write(`${podPath}settings/publicTypeIndex`, serialize(publicTypeIndex));
+  // Generate and write type indexes with .ttl extension for mashlib
+  const publicTypeIndex = generateTypeIndex(`${podUri}Settings/publicTypeIndex.ttl`);
+  await storage.write(`${podPath}Settings/publicTypeIndex.ttl`, serialize(publicTypeIndex));
 
-  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex`);
-  await storage.write(`${podPath}settings/privateTypeIndex`, serialize(privateTypeIndex));
+  const privateTypeIndex = generateTypeIndex(`${podUri}Settings/privateTypeIndex.ttl`);
+  await storage.write(`${podPath}Settings/privateTypeIndex.ttl`, serialize(privateTypeIndex));
 
   // Create default ACL files
   // Pod root: owner full control, public read
@@ -164,8 +165,8 @@ export async function createPodStructure(name, webId, podUri, issuer) {
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
   // Settings folder: owner only
-  const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
-  await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
+  const settingsAcl = generatePrivateAcl(`${podUri}Settings/`, webId);
+  await storage.write(`${podPath}Settings/.acl`, serializeAcl(settingsAcl));
 
   // Inbox: owner full, public append
   const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
