@@ -54,7 +54,7 @@ npm run benchmark
 
 ## Features
 
-### Implemented (v0.0.17)
+### Implemented (v0.0.23)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -66,11 +66,13 @@ npm run benchmark
 - **Container Management** - Create, list, and manage containers
 - **Multi-user Pods** - Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
 - **Subdomain Mode** - XSS protection via origin isolation
-- **Mashlib Data Browser** - Optional SolidOS UI for browsing RDF resources
+- **Mashlib Data Browser** - Optional SolidOS UI (CDN or local hosting)
 - **WebID Profiles** - JSON-LD structured data in HTML at pod root
 - **Web Access Control (WAC)** - `.acl` file-based authorization
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
+- **NSS-style Registration** - Username/password auth compatible with Solid apps
+- **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Optional Turtle <-> JSON-LD conversion
 - **CORS Support** - Full cross-origin resource sharing
@@ -139,8 +141,9 @@ jss --help             # Show help
 | `--idp-issuer <url>` | IdP issuer URL | (auto) |
 | `--subdomains` | Enable subdomain-based pods | false |
 | `--base-domain <domain>` | Base domain for subdomains | - |
-| `--mashlib` | Enable Mashlib data browser | false |
-| `--mashlib-version <ver>` | Mashlib version | 2.0.0 |
+| `--mashlib` | Enable Mashlib (local mode) | false |
+| `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
+| `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -407,24 +410,35 @@ createServer({
   notifications: false, // Enable WebSocket notifications (default: false)
   subdomains: false,   // Enable subdomain-based pods (default: false)
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
-  mashlib: false,      // Enable Mashlib data browser (default: false)
-  mashlibVersion: '2.0.0', // Mashlib version to use
+  mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
+  mashlibCdn: false,   // Enable Mashlib data browser - CDN mode (default: false)
+  mashlibVersion: '2.0.0', // Mashlib version for CDN mode
 });
 ```
 
 ### Mashlib Data Browser
 
-Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources:
+Enable the [SolidOS Mashlib](https://github.com/SolidOS/mashlib) data browser for RDF resources. Two modes are available:
 
+**CDN Mode** (recommended for getting started):
+```bash
+jss start --mashlib-cdn --conneg
+```
+Loads mashlib from unpkg.com CDN. Zero footprint - no local files needed.
+
+**Local Mode** (for production/offline):
 ```bash
 jss start --mashlib --conneg
 ```
-
-When enabled, requesting an RDF resource with `Accept: text/html` returns an interactive data browser UI instead of raw data. Mashlib is loaded from the unpkg CDN.
+Serves mashlib from `src/mashlib-local/dist/`. Requires building mashlib locally:
+```bash
+cd src/mashlib-local
+npm install && npm run build
+```
 
 **How it works:**
 1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
-2. Server returns Mashlib HTML wrapper (loads JS/CSS from CDN)
+2. Server returns Mashlib HTML wrapper
 3. Mashlib fetches the actual data via content negotiation
 4. Mashlib renders an interactive, editable view
 

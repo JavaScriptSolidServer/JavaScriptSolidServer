@@ -39,6 +39,7 @@ export const defaults = {
 
   // Mashlib data browser
   mashlib: false,
+  mashlibCdn: false,
   mashlibVersion: '2.0.0',
 
   // Logging
@@ -68,6 +69,7 @@ const envMap = {
   JSS_SUBDOMAINS: 'subdomains',
   JSS_BASE_DOMAIN: 'baseDomain',
   JSS_MASHLIB: 'mashlib',
+  JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
 };
 
@@ -201,6 +203,6 @@ export function printConfig(config) {
   console.log(`  Notifications: ${config.notifications}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
-  console.log(`  Mashlib:       ${config.mashlib ? `v${config.mashlibVersion}` : 'disabled'}`);
+  console.log(`  Mashlib:       ${config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
   console.log('─'.repeat(40));
 }
