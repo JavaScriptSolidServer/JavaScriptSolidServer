@@ -533,10 +533,86 @@ export async function handlePatch(request, reply) {
         });
       }
     } else {
-      // Parse as plain JSON-LD
+      // Try to parse as JSON-LD first
       try {
         document = JSON.parse(contentStr);
       } catch (e) {
+        // Not JSON - might be Turtle, handle with RDF store for SPARQL Update
+        if (isSparqlUpdate) {
+          // Parse Turtle and apply SPARQL Update directly
+          const { Parser, Writer } = await import('n3');
+          const parser = new Parser({ baseIRI: resourceUrl });
+          let quads;
+          try {
+            quads = parser.parse(contentStr);
+          } catch (parseErr) {
+            return reply.code(409).send({
+              error: 'Conflict',
+              message: 'Resource is not valid Turtle: ' + parseErr.message
+            });
+          }
+
+          // Parse the SPARQL Update
+          const patchContent = Buffer.isBuffer(request.body) ? request.body.toString() : request.body;
+          let update;
+          try {
+            update = parseSparqlUpdate(patchContent, resourceUrl);
+          } catch (parseErr) {
+            return reply.code(400).send({
+              error: 'Bad Request',
+              message: 'Invalid SPARQL Update: ' + parseErr.message
+            });
+          }
+
+          // Apply deletes
+          for (const triple of update.deletes) {
+            quads = quads.filter(q => {
+              const matches = q.subject.value === triple.subject &&
+                             q.predicate.value === triple.predicate &&
+                             (q.object.value === (triple.object['@id'] || triple.object['@value'] || triple.object));
+              return !matches;
+            });
+          }
+
+          // Apply inserts
+          const { DataFactory } = await import('n3');
+          const { namedNode, literal } = DataFactory;
+          for (const triple of update.inserts) {
+            const subj = namedNode(triple.subject);
+            const pred = namedNode(triple.predicate);
+            let obj;
+            if (triple.object['@id']) {
+              obj = namedNode(triple.object['@id']);
+            } else if (typeof triple.object === 'string') {
+              obj = literal(triple.object);
+            } else {
+              obj = literal(triple.object['@value'] || triple.object);
+            }
+            quads.push(DataFactory.quad(subj, pred, obj));
+          }
+
+          // Serialize back to Turtle
+          const writer = new Writer({ prefixes: {} });
+          quads.forEach(q => writer.addQuad(q));
+          let turtleOutput;
+          writer.end((err, result) => { turtleOutput = result; });
+
+          const success = await storage.write(storagePath, Buffer.from(turtleOutput));
+          if (!success) {
+            return reply.code(500).send({ error: 'Write failed' });
+          }
+
+          const origin = request.headers.origin;
+          const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
+          Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+          if (request.notificationsEnabled) {
+            emitChange(resourceUrl);
+          }
+
+          return reply.code(resourceExists ? 204 : 201).send();
+        }
+
         return reply.code(409).send({
           error: 'Conflict',
           message: 'Resource is not valid JSON-LD and cannot be patched'
