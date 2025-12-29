@@ -50,9 +50,10 @@ program
   .option('--subdomains', 'Enable subdomain-based pods (XSS protection)')
   .option('--no-subdomains', 'Disable subdomain-based pods')
   .option('--base-domain <domain>', 'Base domain for subdomain pods (e.g., "example.com")')
-  .option('--mashlib', 'Enable Mashlib data browser for RDF resources')
+  .option('--mashlib', 'Enable Mashlib data browser (local mode, requires mashlib in node_modules)')
+  .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode, no local files needed)')
   .option('--no-mashlib', 'Disable Mashlib data browser')
-  .option('--mashlib-version <version>', 'Mashlib version to use (default: 2.0.0)')
+  .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -91,7 +92,8 @@ program
         root: config.root,
         subdomains: config.subdomains,
         baseDomain: config.baseDomain,
-        mashlib: config.mashlib,
+        mashlib: config.mashlib || config.mashlibCdn,
+        mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
       });
 
@@ -106,7 +108,11 @@ program
         if (config.notifications) console.log('  WebSocket: enabled');
         if (config.idp) console.log(`  IdP: ${idpIssuer}`);
         if (config.subdomains) console.log(`  Subdomains: ${config.baseDomain} (XSS protection enabled)`);
-        if (config.mashlib) console.log(`  Mashlib: v${config.mashlibVersion} (data browser enabled)`);
+        if (config.mashlibCdn) {
+          console.log(`  Mashlib: v${config.mashlibVersion} (CDN mode)`);
+        } else if (config.mashlib) {
+          console.log(`  Mashlib: local (data browser enabled)`);
+        }
         console.log('\n  Press Ctrl+C to stop\n');
       }
 

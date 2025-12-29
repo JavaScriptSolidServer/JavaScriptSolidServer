@@ -145,7 +145,9 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
-    const html = generateDatabrowserHtml(resourceUrl, request.mashlibVersion);
+    // Pass CDN version if using CDN mode, null for local mode
+    const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
+    const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,
@@ -155,6 +157,10 @@ export async function handleGet(request, reply) {
       connegEnabled
     });
     headers['Vary'] = 'Accept';
+    headers['X-Frame-Options'] = 'DENY';
+    headers['Content-Security-Policy'] = "frame-ancestors 'none'";
+    // Don't cache the HTML wrapper - always negotiate fresh
+    headers['Cache-Control'] = 'no-store';
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.type('text/html').send(html);

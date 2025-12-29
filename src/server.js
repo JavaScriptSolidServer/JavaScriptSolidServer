@@ -1,10 +1,15 @@
 import Fastify from 'fastify';
+import { readFile } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
 import { handlePost, handleCreatePod } from './handlers/container.js';
 import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { idpPlugin } from './idp/index.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
  * Create and configure Fastify server
@@ -31,7 +36,9 @@ export function createServer(options = {}) {
   const subdomainsEnabled = options.subdomains ?? false;
   const baseDomain = options.baseDomain || null;
   // Mashlib data browser is OFF by default
+  // mashlibCdn: if true, load from CDN; if false, serve locally
   const mashlibEnabled = options.mashlib ?? false;
+  const mashlibCdn = options.mashlibCdn ?? false;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
 
   // Set data root via environment variable if provided
@@ -70,6 +77,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('baseDomain', null);
   fastify.decorateRequest('podName', null);
   fastify.decorateRequest('mashlibEnabled', null);
+  fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
@@ -78,6 +86,7 @@ export function createServer(options = {}) {
     request.subdomainsEnabled = subdomainsEnabled;
     request.baseDomain = baseDomain;
     request.mashlibEnabled = mashlibEnabled;
+    request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
 
     // Extract pod name from subdomain if enabled
@@ -122,11 +131,13 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, and well-known endpoints
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, and well-known endpoints
+    const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     if (request.url === '/.pods' ||
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
-        request.url.startsWith('/.well-known/')) {
+        request.url.startsWith('/.well-known/') ||
+        mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
 
@@ -143,6 +154,30 @@ export function createServer(options = {}) {
 
   // Pod creation endpoint
   fastify.post('/.pods', handleCreatePod);
+
+  // Mashlib static files (served from root like NSS does)
+  if (mashlibEnabled) {
+    const mashlibDir = join(__dirname, 'mashlib-local', 'dist');
+    const mashlibFiles = {
+      '/mashlib.min.js': { file: 'mashlib.min.js', type: 'application/javascript' },
+      '/mashlib.min.js.map': { file: 'mashlib.min.js.map', type: 'application/json' },
+      '/mash.css': { file: 'mash.css', type: 'text/css' },
+      '/mash.css.map': { file: 'mash.css.map', type: 'application/json' },
+      '/841.mashlib.min.js': { file: '841.mashlib.min.js', type: 'application/javascript' },
+      '/841.mashlib.min.js.map': { file: '841.mashlib.min.js.map', type: 'application/json' }
+    };
+
+    for (const [path, config] of Object.entries(mashlibFiles)) {
+      fastify.get(path, async (request, reply) => {
+        try {
+          const content = await readFile(join(mashlibDir, config.file));
+          return reply.type(config.type).send(content);
+        } catch {
+          return reply.code(404).send({ error: 'Not Found' });
+        }
+      });
+    }
+  }
 
   // LDP routes - using wildcard routing
   fastify.get('/*', handleGet);

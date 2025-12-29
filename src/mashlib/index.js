@@ -6,51 +6,38 @@
  * we return this wrapper which then fetches and renders the data.
  */
 
-const CDN_BASE = 'https://unpkg.com/mashlib';
-
 /**
  * Generate Mashlib databrowser HTML
- * @param {string} resourceUrl - The URL of the resource being viewed
- * @param {string} version - Mashlib version (default: '2.0.0')
+ *
+ * @param {string} resourceUrl - The URL of the resource being viewed (unused, kept for API compatibility)
+ * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
  * @returns {string} HTML content
  */
-export function generateDatabrowserHtml(resourceUrl, version = '2.0.0') {
-  const cdnUrl = `${CDN_BASE}@${version}/dist`;
+export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
+  if (cdnVersion) {
+    // CDN mode - use script.onload to ensure mashlib is fully loaded before init
+    // This avoids race conditions with defer + DOMContentLoaded
+    const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
+    return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
+<link href="${cdnBase}/mash.css" rel="stylesheet"></head>
+<body id="PageBody"><header id="PageHeader"></header>
+<div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
+<footer id="PageFooter"></footer>
+<script>
+(function() {
+  var s = document.createElement('script');
+  s.src = '${cdnBase}/mashlib.min.js';
+  s.onload = function() { panes.runDataBrowser(); };
+  s.onerror = function() { document.body.innerHTML = '<p>Failed to load Mashlib from CDN</p>'; };
+  document.head.appendChild(s);
+})();
+</script></body></html>`;
+  }
 
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SolidOS - ${escapeHtml(resourceUrl)}</title>
-  <script defer src="${cdnUrl}/mashlib.min.js"></script>
-  <link href="${cdnUrl}/mash.css" rel="stylesheet">
-  <script>
-    document.addEventListener('DOMContentLoaded', function() {
-      // runDataBrowser uses window.location to determine what to fetch
-      panes.runDataBrowser();
-    });
-  </script>
-  <style>
-    /* Loading indicator */
-    body:not(.loaded) #PageBody::before {
-      content: 'Loading SolidOS...';
-      display: block;
-      padding: 2em;
-      text-align: center;
-      color: #666;
-    }
-  </style>
-</head>
-<body id="PageBody">
-  <header id="PageHeader"></header>
-  <div class="TabulatorOutline" id="DummyUUID" role="main">
-    <table id="outline"></table>
-    <div id="GlobalDashboard"></div>
-  </div>
-  <footer id="PageFooter"></footer>
-</body>
-</html>`;
+  // Local mode - use defer (reliable when served locally)
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
+        panes.runDataBrowser()
+      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody"><header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
@@ -61,11 +48,17 @@ export function generateDatabrowserHtml(resourceUrl, version = '2.0.0') {
  * @returns {boolean}
  */
 export function shouldServeMashlib(request, mashlibEnabled, contentType) {
+  const accept = request.headers.accept || '';
+  const secFetchDest = request.headers['sec-fetch-dest'] || '';
+
   if (!mashlibEnabled) {
     return false;
   }
 
-  const accept = request.headers.accept || '';
+  // Don't serve mashlib for iframe/embed requests (prevents recursive loop)
+  if (secFetchDest === 'iframe' || secFetchDest === 'embed' || secFetchDest === 'object') {
+    return false;
+  }
 
   // Must explicitly accept HTML
   if (!accept.includes('text/html')) {
