@@ -1,7 +1,19 @@
 import path from 'path';
 
 // Base directory for storing all pods
-export const DATA_ROOT = process.env.DATA_ROOT || './data';
+// Use a getter function to read env var at runtime (not import time)
+// This is necessary because ES modules are loaded before the CLI sets the env var
+export function getDataRoot() {
+  return process.env.DATA_ROOT || './data';
+}
+
+// Legacy export - kept for compatibility, but callers should use getDataRoot()
+export let DATA_ROOT = './data';
+
+// Update DATA_ROOT when env var is set (called from storage init)
+export function updateDataRoot() {
+  DATA_ROOT = getDataRoot();
+}
 
 /**
  * Convert URL path to filesystem path
@@ -16,7 +28,7 @@ export function urlToPath(urlPath) {
   // Security: prevent path traversal
   normalized = normalized.replace(/\.\./g, '');
 
-  return path.join(DATA_ROOT, normalized);
+  return path.join(getDataRoot(), normalized);
 }
 
 /**
@@ -35,7 +47,7 @@ export function urlToPathWithPod(urlPath, podName) {
   normalized = normalized.replace(/\.\./g, '');
 
   // Prepend pod name to path
-  return path.join(DATA_ROOT, podName, normalized);
+  return path.join(getDataRoot(), podName, normalized);
 }
 
 /**

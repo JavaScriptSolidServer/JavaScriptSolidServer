@@ -33,19 +33,20 @@ export async function checkAccess({
     return { allowed: true, wacAllow: 'user="read write append control", public="read write append"' };
   }
 
-  const { authorizations, isDefault, targetUrl } = aclResult;
+  const { authorizations, isDefault, targetUrl: aclContainerUrl } = aclResult;
 
   // Check authorizations
+  // Note: For default ACLs, we check if the ACL's default rules apply to the actual resource URL
   const allowed = checkAuthorizations(
     authorizations,
-    targetUrl,
+    resourceUrl,  // Use actual resource URL, not the ACL container URL
     agentWebId,
     requiredMode,
     isDefault
   );
 
   // Calculate WAC-Allow header
-  const wacAllow = calculateWacAllow(authorizations, targetUrl, agentWebId, isDefault);
+  const wacAllow = calculateWacAllow(authorizations, resourceUrl, agentWebId, isDefault);
 
   return { allowed, wacAllow };
 }
@@ -117,13 +118,17 @@ function getParentPath(path) {
  */
 function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode, isDefault) {
   for (const auth of authorizations) {
-    // Check if this authorization applies to the resource
-    const appliesToResource = isDefault
-      ? auth.default.some(d => urlMatches(d, targetUrl))
-      : auth.accessTo.some(a => urlMatches(a, targetUrl));
-
-    if (!appliesToResource && !isDefault) continue;
-    if (isDefault && auth.default.length === 0) continue;
+    // For default ACLs, check if auth has default rules and matches target
+    // For direct ACLs, check if accessTo matches target
+    if (isDefault) {
+      // Skip if no default rules defined
+      if (auth.default.length === 0) continue;
+      // Skip if target URL doesn't match any default URL prefix
+      if (!auth.default.some(d => urlMatches(d, targetUrl, true))) continue;
+    } else {
+      // Skip if accessTo doesn't match target
+      if (!auth.accessTo.some(a => urlMatches(a, targetUrl))) continue;
+    }
 
     // Check if agent is authorized
     const agentAuthorized = isAgentAuthorized(auth, agentWebId);
@@ -172,10 +177,20 @@ function isAgentAuthorized(auth, agentWebId) {
 
 /**
  * Check if URLs match (handles trailing slashes)
+ * @param {string} pattern - The ACL URL pattern
+ * @param {string} url - The target URL to check
+ * @param {boolean} prefixMatch - If true, check if url starts with pattern (for acl:default)
  */
-function urlMatches(pattern, url) {
+function urlMatches(pattern, url, prefixMatch = false) {
   const normalizedPattern = pattern.replace(/\/$/, '');
   const normalizedUrl = url.replace(/\/$/, '');
+
+  if (prefixMatch) {
+    // For default ACLs: target must be same as or under the pattern
+    return normalizedUrl === normalizedPattern ||
+           normalizedUrl.startsWith(normalizedPattern + '/');
+  }
+
   return normalizedPattern === normalizedUrl;
 }
 
@@ -187,12 +202,13 @@ function calculateWacAllow(authorizations, targetUrl, agentWebId, isDefault) {
   const publicModes = new Set();
 
   for (const auth of authorizations) {
-    // Check if applies to resource
-    const applies = isDefault
-      ? auth.default.length > 0
-      : auth.accessTo.some(a => urlMatches(a, targetUrl));
-
-    if (!applies && !isDefault) continue;
+    // Check if applies to resource - use same logic as checkAuthorizations
+    if (isDefault) {
+      if (auth.default.length === 0) continue;
+      if (!auth.default.some(d => urlMatches(d, targetUrl, true))) continue;
+    } else {
+      if (!auth.accessTo.some(a => urlMatches(a, targetUrl))) continue;
+    }
 
     // Check what modes this grants
     const modes = auth.modes.map(m => {

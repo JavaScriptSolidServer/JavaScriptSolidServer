@@ -9,6 +9,7 @@ import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
+import { AccessMode } from './wac/parser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -162,15 +163,22 @@ export function createServer(options = {}) {
         return;
       }
 
-      // Run WAC authorization - checkAccess already verifies the required mode
-      const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
+      // Determine required mode: Write for push, Read for clone/fetch
+      const needsWrite = isGitWriteOperation(request.url);
+      const requiredMode = needsWrite ? AccessMode.WRITE : AccessMode.READ;
+
+      // Run WAC authorization with the correct mode for git operations
+      const { authorized, webId, wacAllow, authError } = await authorize(request, reply, { requiredMode });
       request.webId = webId;
       request.wacAllow = wacAllow;
 
       if (!authorized) {
-        const needsWrite = isGitWriteOperation(request.url);
         const message = needsWrite ? 'Write access required for push' : 'Read access required for clone';
         reply.header('WAC-Allow', wacAllow);
+        if (!webId) {
+          // No authentication - request Basic auth for git clients
+          reply.header('WWW-Authenticate', 'Basic realm="Solid"');
+        }
         return reply.code(webId ? 403 : 401).send({ error: message });
       }
 

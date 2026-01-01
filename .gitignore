@@ -147,3 +147,6 @@ test-data-idp-accounts/
 
 # Local mashlib build (for development)
 src/mashlib-local/
+
+# Server data directory
+data/

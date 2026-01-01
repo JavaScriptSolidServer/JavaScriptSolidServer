@@ -13,9 +13,11 @@ import { getEffectiveUrlPath } from '../utils/url.js';
  * Check if request is authorized
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
+ * @param {object} options - Optional settings
+ * @param {string} options.requiredMode - Override the required access mode (e.g., 'Write' for git push)
  * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string, authError: string|null}>}
  */
-export async function authorize(request, reply) {
+export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];
   const method = request.method;
 
@@ -44,8 +46,8 @@ export async function authorize(request, reply) {
   // Build resource URL (uses actual request hostname which may be subdomain)
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
 
-  // Get required access mode for this method
-  const requiredMode = getRequiredMode(method);
+  // Get required access mode - use override if provided, otherwise derive from method
+  const requiredMode = options.requiredMode || getRequiredMode(method);
 
   // For write operations on non-existent resources, check parent container
   let checkPath = storagePath;

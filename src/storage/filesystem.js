@@ -1,10 +1,9 @@
 import fs from 'fs-extra';
 import path from 'path';
 import crypto from 'crypto';
-import { DATA_ROOT, urlToPath, isContainer } from '../utils/url.js';
+import { getDataRoot, urlToPath, isContainer } from '../utils/url.js';
 
-// Ensure data directory exists
-fs.ensureDirSync(DATA_ROOT);
+// Note: Data directory is ensured in server.js after DATA_ROOT is set
 
 /**
  * Check if resource exists
