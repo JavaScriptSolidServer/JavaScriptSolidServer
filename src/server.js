@@ -208,6 +208,9 @@ export function createServer(options = {}) {
     request.webId = webId;
     request.wacAllow = wacAllow;
 
+    // Set WAC-Allow header for all responses (handlers may override)
+    reply.header('WAC-Allow', wacAllow);
+
     if (!authorized) {
       return handleUnauthorized(reply, webId !== null, wacAllow, authError);
     }
