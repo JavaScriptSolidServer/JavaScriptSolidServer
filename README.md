@@ -2,6 +2,8 @@
 
 A minimal, fast, JSON-LD native Solid server.
 
+**[Documentation](https://javascriptsolidserver.github.io/docs/)** | **[GitHub](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)**
+
 ## Features
 
 ### Implemented (v0.0.42)
