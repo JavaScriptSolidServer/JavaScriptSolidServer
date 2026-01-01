@@ -201,6 +201,18 @@ export async function handleGit(request, reply) {
       if (code !== 0 && !headersSent) {
         reply.code(500).send({ error: 'Git operation failed' });
       }
+
+      // Auto-checkout working directory after successful push to non-bare repo
+      if (code === 0 && isGitWriteOperation(urlPath) && gitInfo.isRegular) {
+        const checkout = spawn('git', ['checkout', '-f'], {
+          cwd: repoAbs,
+          env: { ...process.env, GIT_DIR: gitInfo.gitDir }
+        });
+        checkout.on('error', (err) => {
+          console.error('Auto-checkout failed:', err.message);
+        });
+      }
+
       resolve();
     });
   });
