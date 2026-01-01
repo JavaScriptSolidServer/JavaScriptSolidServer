@@ -81,7 +81,8 @@ async function findApplicableAcl(resourceUrl, resourcePath, isContainer) {
       const content = await storage.read(parentAclPath);
       if (content) {
         const parentUrl = resourceUrl.substring(0, resourceUrl.lastIndexOf(currentPath)) + parentPath;
-        const authorizations = await parseAcl(content.toString(), parentAclPath);
+        const parentAclUrl = getAclUrl(parentUrl, true); // Container ACL URL
+        const authorizations = await parseAcl(content.toString(), parentAclUrl);
         return { authorizations, isDefault: true, targetUrl: parentUrl };
       }
     }
@@ -94,7 +95,8 @@ async function findApplicableAcl(resourceUrl, resourcePath, isContainer) {
     const content = await storage.read('/.acl');
     if (content) {
       const rootUrl = resourceUrl.substring(0, resourceUrl.indexOf('/', 8) + 1);
-      const authorizations = await parseAcl(content.toString(), '/.acl');
+      const rootAclUrl = getAclUrl(rootUrl, true); // Root container ACL URL
+      const authorizations = await parseAcl(content.toString(), rootAclUrl);
       return { authorizations, isDefault: true, targetUrl: rootUrl };
     }
   }
