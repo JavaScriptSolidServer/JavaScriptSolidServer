@@ -93,6 +93,14 @@ export async function handleGit(request, reply) {
     return reply.code(404).send({ error: 'Not a git repository' });
   }
 
+  // Auto-configure non-bare repos to accept pushes and update working directory
+  if (gitInfo.isRegular && isGitWriteOperation(urlPath)) {
+    spawn('git', ['config', 'receive.denyCurrentBranch', 'updateInstead'], {
+      cwd: repoAbs,
+      env: { ...process.env, GIT_DIR: gitInfo.gitDir }
+    });
+  }
+
   // Build CGI environment
   const env = {
     ...process.env,
@@ -200,21 +208,6 @@ export async function handleGit(request, reply) {
     child.on('close', (code) => {
       if (code !== 0 && !headersSent) {
         reply.code(500).send({ error: 'Git operation failed' });
-      }
-
-      // Auto-checkout working directory after successful push to non-bare repo
-      if (code === 0 && isGitWriteOperation(urlPath) && gitInfo.isRegular) {
-        const checkout = spawn('git', ['checkout', '-f'], {
-          cwd: repoAbs,
-          env: {
-            ...process.env,
-            GIT_DIR: gitInfo.gitDir,
-            GIT_WORK_TREE: repoAbs
-          }
-        });
-        checkout.on('error', (err) => {
-          console.error('Auto-checkout failed:', err.message);
-        });
       }
 
       resolve();
