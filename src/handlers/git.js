@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { existsSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 
 /**
  * Check if a URL path is a Git protocol request
@@ -85,7 +85,7 @@ export async function handleGit(request, reply) {
     dataRoot = join(dataRoot, request.podName);
   }
 
-  const repoAbs = join(dataRoot, repoRelative);
+  const repoAbs = resolve(dataRoot, repoRelative);
 
   // Find git directory
   const gitInfo = findGitDir(repoAbs);
@@ -214,11 +214,6 @@ export async function handleGit(request, reply) {
         });
         checkout.on('error', (err) => {
           console.error('Auto-checkout failed:', err.message);
-        });
-        checkout.on('close', (checkoutCode) => {
-          if (checkoutCode !== 0) {
-            console.error('Auto-checkout exited with code:', checkoutCode);
-          }
         });
       }
 
