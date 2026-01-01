@@ -128,6 +128,23 @@ export function createServer(options = {}) {
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
 
+  // Security: Block access to dotfiles except allowed Solid-specific ones
+  // This prevents exposure of .git/, .env, .htpasswd, etc.
+  // Git protocol access (clone/push) will be handled via separate routes (issue #5)
+  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta'];
+  fastify.addHook('onRequest', async (request, reply) => {
+    const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
+    const hasForbiddenDotfile = segments.some(seg =>
+      seg.startsWith('.') &&
+      seg.length > 1 &&
+      !ALLOWED_DOTFILES.includes(seg)
+    );
+
+    if (hasForbiddenDotfile) {
+      return reply.code(403).send({ error: 'Forbidden', message: 'Dotfile access is not allowed' });
+    }
+  });
+
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
