@@ -75,36 +75,57 @@ export async function handleGet(request, reply) {
         acceptHeader.includes('text/n3') ||
         acceptHeader.includes('application/n-triples')
       );
+      const wantsJsonLd = connegEnabled && (
+        acceptHeader.includes('application/ld+json') ||
+        acceptHeader.includes('application/json')
+      );
 
-      if (wantsTurtle) {
-        // Extract JSON-LD from HTML and convert to Turtle
+      if (wantsTurtle || wantsJsonLd) {
+        // Extract JSON-LD from HTML data island
         try {
           const htmlStr = content.toString();
           const jsonLdMatch = htmlStr.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
           if (jsonLdMatch) {
             const jsonLd = JSON.parse(jsonLdMatch[1]);
-            const { content: turtleContent } = await fromJsonLd(
-              jsonLd,
-              'text/turtle',
-              resourceUrl,
-              true
-            );
 
-            const headers = getAllHeaders({
-              isContainer: true,
-              etag: indexStats?.etag || stats.etag,
-              contentType: 'text/turtle',
-              origin,
-              resourceUrl,
-              connegEnabled
-            });
+            if (wantsTurtle) {
+              // Convert to Turtle
+              const { content: turtleContent } = await fromJsonLd(
+                jsonLd,
+                'text/turtle',
+                resourceUrl,
+                true
+              );
 
-            Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-            return reply.send(turtleContent);
+              const headers = getAllHeaders({
+                isContainer: true,
+                etag: indexStats?.etag || stats.etag,
+                contentType: 'text/turtle',
+                origin,
+                resourceUrl,
+                connegEnabled
+              });
+
+              Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+              return reply.send(turtleContent);
+            } else {
+              // Return JSON-LD directly
+              const headers = getAllHeaders({
+                isContainer: true,
+                etag: indexStats?.etag || stats.etag,
+                contentType: 'application/ld+json',
+                origin,
+                resourceUrl,
+                connegEnabled
+              });
+
+              Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+              return reply.send(JSON.stringify(jsonLd, null, 2));
+            }
           }
         } catch (err) {
           // Fall through to serve HTML if conversion fails
-          console.error('Failed to convert profile to Turtle:', err.message);
+          console.error('Failed to convert profile to RDF:', err.message);
         }
       }
 
@@ -329,14 +350,45 @@ export async function handleHead(request, reply) {
   }
 
   const origin = request.headers.origin;
-  const contentType = stats.isDirectory ? 'application/ld+json' : getContentType(storagePath);
+  const connegEnabled = request.connegEnabled || false;
+  let contentType;
+
+  if (stats.isDirectory) {
+    // For directories with index.html, determine content type based on Accept header
+    const indexPath = storagePath.endsWith('/') ? `${storagePath}index.html` : `${storagePath}/index.html`;
+    const indexExists = await storage.exists(indexPath);
+
+    if (indexExists && connegEnabled) {
+      const acceptHeader = request.headers.accept || '';
+      const wantsTurtle = acceptHeader.includes('text/turtle') ||
+                          acceptHeader.includes('text/n3') ||
+                          acceptHeader.includes('application/n-triples');
+      const wantsJsonLd = acceptHeader.includes('application/ld+json') ||
+                          acceptHeader.includes('application/json');
+
+      if (wantsTurtle) {
+        contentType = 'text/turtle';
+      } else if (wantsJsonLd) {
+        contentType = 'application/ld+json';
+      } else {
+        contentType = 'text/html';
+      }
+    } else if (indexExists) {
+      contentType = 'text/html';
+    } else {
+      contentType = 'application/ld+json';
+    }
+  } else {
+    contentType = getContentType(storagePath);
+  }
 
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
     etag: stats.etag,
     contentType,
     origin,
-    resourceUrl
+    resourceUrl,
+    connegEnabled
   });
 
   if (!stats.isDirectory) {
