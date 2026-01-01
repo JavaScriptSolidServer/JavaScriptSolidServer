@@ -320,10 +320,19 @@ export async function handleGet(request, reply) {
   }
 
   // Serve content as-is (no conneg or non-RDF resource)
+  // For extensionless files (like profile/card), detect HTML by content
+  let actualContentType = storedContentType;
+  if (storedContentType === 'application/octet-stream') {
+    const contentStr = content.toString().trimStart();
+    if (contentStr.startsWith('<!DOCTYPE') || contentStr.startsWith('<html')) {
+      actualContentType = 'text/html';
+    }
+  }
+
   const headers = getAllHeaders({
     isContainer: false,
     etag: stats.etag,
-    contentType: storedContentType,
+    contentType: actualContentType,
     origin,
     resourceUrl,
     connegEnabled

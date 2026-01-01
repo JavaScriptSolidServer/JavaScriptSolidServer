@@ -4,7 +4,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.37)
+### Implemented (v0.0.39)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -356,46 +356,24 @@ Git operations respect WAC permissions - clone requires Read access, push requir
 
 ### Git Push with Nostr Authentication
 
-Git push supports NIP-98 authentication via Basic Auth. Create a credential helper:
-
-```javascript
-// git-credential-nostr.js
-import { getPublicKey, finalizeEvent } from 'nostr-tools/pure';
-import { hexToBytes } from '@noble/hashes/utils';
-import fs from 'fs';
-import readline from 'readline';
-
-const sk = hexToBytes(fs.readFileSync('.nostr-key', 'utf8').trim());
-const rl = readline.createInterface({ input: process.stdin });
-const params = {};
-for await (const line of rl) {
-  if (!line) break;
-  const [key, ...vals] = line.split('=');
-  params[key] = vals.join('=');
-}
-
-if (params.protocol && params.host) {
-  let path = params.path || '/';
-  path = path.replace(/\/info\/refs$/, '').replace(/\/git-.*$/, '');
-  const baseUrl = `${params.protocol}://${params.host}${path}`;
-
-  const event = finalizeEvent({
-    kind: 27235,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [['u', baseUrl], ['method', '*']],
-    content: ''
-  }, sk);
-
-  console.log('username=nostr');
-  console.log('password=' + Buffer.from(JSON.stringify(event)).toString('base64'));
-}
-```
-
-Configure git to use it:
+Git push supports NIP-98 authentication via Basic Auth. Install the credential helper:
 
 ```bash
-git config credential.helper 'node /path/to/git-credential-nostr.js'
+npm install -g git-credential-nostr
+git config --global credential.helper nostr
 ```
+
+Generate or configure your Nostr key:
+
+```bash
+# Generate a new keypair
+git-credential-nostr generate
+
+# Or use an existing private key
+git config --global nostr.privkey YOUR_64_CHAR_HEX_PRIVKEY
+```
+
+See [git-credential-nostr](https://github.com/JavaScriptSolidServer/git-credential-nostr) for more details.
 
 Add the Nostr identity to your ACL:
 
@@ -580,7 +558,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **182 tests** (including 27 conformance tests)
+Currently passing: **187 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
@@ -628,7 +606,8 @@ src/
 ├── auth/
 │   ├── middleware.js     # Auth hook
 │   ├── token.js          # Simple token auth
-│   └── solid-oidc.js     # DPoP verification
+│   ├── solid-oidc.js     # DPoP verification
+│   └── nostr.js          # NIP-98 Nostr authentication
 ├── wac/
 │   ├── parser.js         # ACL parsing
 │   └── checker.js        # Permission checking
