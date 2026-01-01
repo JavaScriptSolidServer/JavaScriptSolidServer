@@ -314,7 +314,7 @@ export async function createProvider(issuer) {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none', // Public clients by default
-      id_token_signed_response_alg: 'ES256', // ES256 is what we support
+      id_token_signed_response_alg: 'RS256', // RS256 for NSS compatibility
     },
 
     // Response modes
