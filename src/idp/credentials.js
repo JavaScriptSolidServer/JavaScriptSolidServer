@@ -106,7 +106,8 @@ export async function handleCredentials(request, reply, issuer) {
   // Always generate a proper JWT - CTH requires JWT format
   const jwks = await getJwks();
   const signingKey = jwks.keys[0];
-  const privateKey = await jose.importJWK(signingKey, 'ES256');
+  const signingAlg = signingKey.alg || 'ES256'; // Use key's algorithm
+  const privateKey = await jose.importJWK(signingKey, signingAlg);
 
   const now = Math.floor(Date.now() / 1000);
   const tokenPayload = {
@@ -131,7 +132,7 @@ export async function handleCredentials(request, reply, issuer) {
   }
 
   const accessToken = await new jose.SignJWT(tokenPayload)
-    .setProtectedHeader({ alg: 'ES256', kid: signingKey.kid })
+    .setProtectedHeader({ alg: signingAlg, kid: signingKey.kid })
     .sign(privateKey);
 
   // Response
