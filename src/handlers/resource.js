@@ -80,7 +80,7 @@ export async function handleGet(request, reply) {
         // Extract JSON-LD from HTML and convert to Turtle
         try {
           const htmlStr = content.toString();
-          const jsonLdMatch = htmlStr.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+          const jsonLdMatch = htmlStr.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
           if (jsonLdMatch) {
             const jsonLd = JSON.parse(jsonLdMatch[1]);
             const { content: turtleContent } = await fromJsonLd(
