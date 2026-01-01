@@ -179,7 +179,7 @@ export async function idpPlugin(fastify, options) {
       response_modes_supported: ['query', 'fragment', 'form_post'],
       grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
       subject_types_supported: ['public'],
-      id_token_signing_alg_values_supported: ['ES256'],
+      id_token_signing_alg_values_supported: ['RS256', 'ES256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_basic', 'client_secret_post'],
       claims_supported: ['sub', 'webid', 'name', 'email', 'email_verified'],
       code_challenge_methods_supported: ['S256'],
