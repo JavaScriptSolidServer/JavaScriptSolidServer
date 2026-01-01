@@ -71,23 +71,30 @@ async function findApplicableAcl(resourceUrl, resourcePath, isContainer) {
   }
 
   // Walk up the hierarchy looking for default ACLs
-  let currentPath = resourcePath;
-  while (currentPath && currentPath !== '/') {
+  // Track both storage path (for file lookup) and URL path (for URL construction)
+  let currentStoragePath = resourcePath;
+  let currentUrlPath = new URL(resourceUrl).pathname;
+
+  while (currentStoragePath && currentStoragePath !== '/') {
     // Get parent container
-    const parentPath = getParentPath(currentPath);
-    const parentAclPath = parentPath + '.acl';
+    const parentStoragePath = getParentPath(currentStoragePath);
+    const parentAclPath = parentStoragePath + '.acl';
 
     if (await storage.exists(parentAclPath)) {
       const content = await storage.read(parentAclPath);
       if (content) {
-        const parentUrl = resourceUrl.substring(0, resourceUrl.lastIndexOf(currentPath)) + parentPath;
+        // Get parent URL path and construct full URL
+        const parentUrlPath = getParentPath(currentUrlPath);
+        const origin = resourceUrl.substring(0, resourceUrl.indexOf('/', 8));
+        const parentUrl = origin + parentUrlPath;
         const parentAclUrl = getAclUrl(parentUrl, true); // Container ACL URL
         const authorizations = await parseAcl(content.toString(), parentAclUrl);
         return { authorizations, isDefault: true, targetUrl: parentUrl };
       }
     }
 
-    currentPath = parentPath;
+    currentStoragePath = parentStoragePath;
+    currentUrlPath = getParentPath(currentUrlPath);
   }
 
   // Check root ACL
