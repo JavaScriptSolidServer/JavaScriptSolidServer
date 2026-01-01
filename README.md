@@ -4,7 +4,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.31)
+### Implemented (v0.0.37)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -19,13 +19,15 @@ A minimal, fast, JSON-LD native Solid server.
 - **Mashlib Data Browser** - Optional SolidOS UI (CDN or local hosting)
 - **WebID Profiles** - HTML with JSON-LD data islands, rendered with mashlib-jss + solidos-lite
 - **Web Access Control (WAC)** - `.acl` file-based authorization
-- **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, dynamic registration
+- **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, RS256/ES256, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **NSS-style Registration** - Username/password auth compatible with Solid apps
 - **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
+- **Git HTTP Backend** - Clone and push to containers via `git` protocol
+- **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
 
 ### HTTP Methods
 
@@ -94,6 +96,7 @@ jss --help             # Show help
 | `--mashlib` | Enable Mashlib (local mode) | false |
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
+| `--git` | Enable Git HTTP backend | false |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -318,6 +321,39 @@ Server: ack http://localhost:3000/alice/public/data.json
 Server: pub http://localhost:3000/alice/public/data.json  (on change)
 ```
 
+## Git Support
+
+Enable Git HTTP backend to clone and push to pod containers:
+
+```bash
+jss start --git
+```
+
+### Initialize a Repository
+
+```bash
+# Create a git repo in a pod container
+cd data/alice/myrepo
+git init
+echo "# My Project" > README.md
+git add . && git commit -m "Initial commit"
+```
+
+### Clone and Push
+
+```bash
+# Clone (public read access)
+git clone http://localhost:3000/alice/myrepo
+
+# Push (requires write access via WAC)
+cd myrepo
+echo "New content" >> README.md
+git add . && git commit -m "Update"
+git push
+```
+
+Git operations respect WAC permissions - clone requires Read access, push requires Write access.
+
 ## Authentication
 
 ### Simple Tokens (Development)
@@ -531,7 +567,8 @@ src/
 ├── server.js             # Fastify setup
 ├── handlers/
 │   ├── resource.js       # GET, PUT, DELETE, HEAD, PATCH
-│   └── container.js      # POST, pod creation
+│   ├── container.js      # POST, pod creation
+│   └── git.js            # Git HTTP backend
 ├── storage/
 │   └── filesystem.js     # File operations
 ├── auth/
