@@ -330,9 +330,12 @@ export async function createProvider(issuer) {
       methods: ['S256'],
     },
 
-    // Enable RS256 for DPoP (CTH uses RS256)
+    // Enable RS256 for DPoP and ID tokens (NSS requires RS256)
     enabledJWA: {
       dPoPSigningAlgValues: ['ES256', 'RS256', 'Ed25519', 'EdDSA'],
+      idTokenSigningAlgValues: ['RS256', 'ES256'],
+      userinfoSigningAlgValues: ['RS256', 'ES256'],
+      introspectionSigningAlgValues: ['RS256', 'ES256'],
     },
 
     // Enable request parameter
