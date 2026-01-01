@@ -4,7 +4,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.39)
+### Implemented (v0.0.41)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -18,7 +18,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Subdomain Mode** - XSS protection via origin isolation
 - **Mashlib Data Browser** - Optional SolidOS UI (CDN or local hosting)
 - **WebID Profiles** - HTML with JSON-LD data islands, rendered with mashlib-jss + solidos-lite
-- **Web Access Control (WAC)** - `.acl` file-based authorization
+- **Web Access Control (WAC)** - `.acl` file-based authorization with relative URL support
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, RS256/ES256, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **NSS-style Registration** - Username/password auth compatible with Solid apps
@@ -558,7 +558,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **187 tests** (including 27 conformance tests)
+Currently passing: **191 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
