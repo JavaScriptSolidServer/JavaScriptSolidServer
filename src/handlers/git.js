@@ -1,6 +1,6 @@
-import { spawn } from 'child_process';
-import { existsSync, statSync } from 'fs';
-import { join, resolve } from 'path';
+import { spawn, execSync } from 'child_process';
+import { existsSync, statSync, mkdirSync, writeFileSync } from 'fs';
+import { join, resolve, dirname } from 'path';
 
 /**
  * Check if a URL path is a Git protocol request
@@ -93,12 +93,24 @@ export async function handleGit(request, reply) {
     return reply.code(404).send({ error: 'Not a git repository' });
   }
 
-  // Auto-configure non-bare repos to accept pushes and update working directory
-  if (gitInfo.isRegular && isGitWriteOperation(urlPath)) {
-    spawn('git', ['config', 'receive.denyCurrentBranch', 'updateInstead'], {
-      cwd: repoAbs,
-      env: { ...process.env, GIT_DIR: gitInfo.gitDir }
-    });
+  // Auto-configure repos to accept pushes (check full URL for query string)
+  if (isGitWriteOperation(request.url)) {
+    try {
+      // Enable receive-pack for HTTP push
+      execSync('git config http.receivepack true', {
+        cwd: repoAbs,
+        env: { ...process.env, GIT_DIR: gitInfo.gitDir }
+      });
+      // For non-bare repos, auto-update working directory after push
+      if (gitInfo.isRegular) {
+        execSync('git config receive.denyCurrentBranch updateInstead', {
+          cwd: repoAbs,
+          env: { ...process.env, GIT_DIR: gitInfo.gitDir }
+        });
+      }
+    } catch (e) {
+      // Ignore config errors - repo may still work
+    }
   }
 
   // Build CGI environment
