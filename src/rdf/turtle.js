@@ -66,9 +66,11 @@ export async function jsonLdToTurtle(jsonLd, baseUri) {
     try {
       const quads = jsonLdToQuads(jsonLd, baseUri);
 
+      // Don't use baseIRI in writer - output absolute URIs for compatibility
+      // Some Solid servers (like NSS) may not properly resolve relative URIs
+      // when verifying oidcIssuer claims
       const writer = new Writer({
-        prefixes: COMMON_PREFIXES,
-        baseIRI: baseUri
+        prefixes: COMMON_PREFIXES
       });
 
       for (const q of quads) {
