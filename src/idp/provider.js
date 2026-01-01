@@ -8,6 +8,68 @@ import { createAdapter } from './adapter.js';
 import { getJwks, getCookieKeys } from './keys.js';
 import { getAccountForProvider } from './accounts.js';
 
+// Cache for fetched client documents
+const clientDocumentCache = new Map();
+const CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Fetch and validate a Solid-OIDC Client Identifier Document
+ * @param {string} clientId - URL to the client document
+ * @returns {Promise<object|null>} - Client metadata or null
+ */
+async function fetchClientDocument(clientId) {
+  try {
+    // Check cache
+    const cached = clientDocumentCache.get(clientId);
+    if (cached && Date.now() - cached.timestamp < CLIENT_CACHE_TTL) {
+      return cached.data;
+    }
+
+    const response = await fetch(clientId, {
+      headers: { 'Accept': 'application/json, application/ld+json' },
+    });
+
+    if (!response.ok) {
+      console.error(`Failed to fetch client document from ${clientId}: ${response.status}`);
+      return null;
+    }
+
+    const doc = await response.json();
+
+    // Validate required fields for Solid-OIDC client
+    // The client_id in the document must match the URL we fetched
+    if (doc.client_id && doc.client_id !== clientId) {
+      console.error(`Client ID mismatch: document says ${doc.client_id}, URL is ${clientId}`);
+      return null;
+    }
+
+    // Build client metadata compatible with oidc-provider
+    const clientMeta = {
+      client_id: clientId,
+      client_name: doc.client_name || doc.name || 'Unknown Client',
+      redirect_uris: doc.redirect_uris || [],
+      response_types: ['code'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      token_endpoint_auth_method: 'none', // Public client
+      application_type: 'web',
+      // Copy other useful metadata
+      logo_uri: doc.logo_uri,
+      client_uri: doc.client_uri,
+      policy_uri: doc.policy_uri,
+      tos_uri: doc.tos_uri,
+      scope: doc.scope || 'openid webid',
+    };
+
+    // Cache the result
+    clientDocumentCache.set(clientId, { data: clientMeta, timestamp: Date.now() });
+
+    return clientMeta;
+  } catch (err) {
+    console.error(`Error fetching client document from ${clientId}:`, err.message);
+    return null;
+  }
+}
+
 /**
  * Create and configure the OIDC provider
  * @param {string} issuer - The issuer URL (e.g., 'https://example.com')
@@ -242,6 +304,11 @@ export async function createProvider(issuer) {
       return true;
     },
 
+    // Extra client metadata fields to allow
+    extraClientMetadata: {
+      properties: ['client_name', 'logo_uri', 'client_uri', 'policy_uri', 'tos_uri'],
+    },
+
     // Client defaults
     clientDefaults: {
       grant_types: ['authorization_code', 'refresh_token'],
@@ -336,6 +403,34 @@ export async function createProvider(issuer) {
 
   // Allow localhost for development
   provider.proxy = true;
+
+  // Override Client.find to support Solid-OIDC Client Identifier Documents
+  // When client_id is a URL, fetch the document and create a client from it
+  const originalClientFind = provider.Client.find.bind(provider.Client);
+  provider.Client.find = async function(id, ...args) {
+    // First try the normal lookup (registered clients)
+    let client = await originalClientFind(id, ...args);
+    if (client) {
+      return client;
+    }
+
+    // If client_id looks like a URL, try to fetch the client document
+    if (id && (id.startsWith('http://') || id.startsWith('https://'))) {
+      const clientMeta = await fetchClientDocument(id);
+      if (clientMeta) {
+        // Create a temporary client object from the fetched metadata
+        // Use the Client constructor with the metadata
+        try {
+          client = new provider.Client(clientMeta, undefined);
+          return client;
+        } catch (err) {
+          console.error('Failed to create client from document:', err.message);
+        }
+      }
+    }
+
+    return undefined;
+  };
 
   return provider;
 }
