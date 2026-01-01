@@ -206,10 +206,19 @@ export async function handleGit(request, reply) {
       if (code === 0 && isGitWriteOperation(urlPath) && gitInfo.isRegular) {
         const checkout = spawn('git', ['checkout', '-f'], {
           cwd: repoAbs,
-          env: { ...process.env, GIT_DIR: gitInfo.gitDir }
+          env: {
+            ...process.env,
+            GIT_DIR: gitInfo.gitDir,
+            GIT_WORK_TREE: repoAbs
+          }
         });
         checkout.on('error', (err) => {
           console.error('Auto-checkout failed:', err.message);
+        });
+        checkout.on('close', (checkoutCode) => {
+          if (checkoutCode !== 0) {
+            console.error('Auto-checkout exited with code:', checkoutCode);
+          }
         });
       }
 
