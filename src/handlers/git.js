@@ -19,7 +19,7 @@ export function isGitRequest(urlPath) {
  * @returns {boolean}
  */
 export function isGitWriteOperation(urlPath) {
-  return urlPath.includes('/git-receive-pack');
+  return urlPath.includes('/git-receive-pack') || urlPath.includes('service=git-receive-pack');
 }
 
 /**
