@@ -55,11 +55,15 @@ export function getResponseHeaders({ isContainer = false, etag = null, contentTy
 
   const headers = {
     'Link': getLinkHeader(isContainer, aclUrl),
-    'WAC-Allow': wacAllow || 'user="read write append control", public="read write append"',
     'Accept-Patch': 'text/n3, application/sparql-update',
     'Allow': 'GET, HEAD, PUT, DELETE, PATCH, OPTIONS' + (isContainer ? ', POST' : ''),
     'Vary': connegEnabled ? 'Accept, Authorization, Origin' : 'Authorization, Origin'
   };
+
+  // Only set WAC-Allow if explicitly provided (otherwise the auth hook sets it)
+  if (wacAllow) {
+    headers['WAC-Allow'] = wacAllow;
+  }
 
   // Add Accept-* headers (conneg-aware)
   const acceptHeaders = getAcceptHeaders(connegEnabled, isContainer);
