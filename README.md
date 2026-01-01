@@ -4,7 +4,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.41)
+### Implemented (v0.0.42)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -354,37 +354,28 @@ git push
 
 Git operations respect WAC permissions - clone requires Read access, push requires Write access.
 
+**Auto-checkout:** After a successful push to a non-bare repository, JSS automatically updates the working directory - no post-receive hooks needed.
+
 ### Git Push with Nostr Authentication
 
 Git push supports NIP-98 authentication via Basic Auth. Install the credential helper:
 
 ```bash
 npm install -g git-credential-nostr
+git-credential-nostr generate
 git config --global credential.helper nostr
+git config --global nostr.privkey <key-from-generate>
 ```
 
-Generate or configure your Nostr key:
+Create an ACL for your repo (includes public read for clone + owner write for push):
 
 ```bash
-# Generate a new keypair
-git-credential-nostr generate
-
-# Or use an existing private key
-git config --global nostr.privkey YOUR_64_CHAR_HEX_PRIVKEY
+cd myrepo
+git-credential-nostr acl > .acl
+git add .acl && git commit -m "Add ACL"
 ```
 
 See [git-credential-nostr](https://github.com/JavaScriptSolidServer/git-credential-nostr) for more details.
-
-Add the Nostr identity to your ACL:
-
-```turtle
-<#nostr-writer>
-    a acl:Authorization;
-    acl:agent <did:nostr:YOUR_64_CHAR_HEX_PUBKEY>;
-    acl:accessTo <./>;
-    acl:default <./>;
-    acl:mode acl:Read, acl:Write.
-```
 
 ## Authentication
 
