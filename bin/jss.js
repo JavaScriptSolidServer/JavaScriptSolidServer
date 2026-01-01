@@ -54,6 +54,8 @@ program
   .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode, no local files needed)')
   .option('--no-mashlib', 'Disable Mashlib data browser')
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
+  .option('--git', 'Enable Git HTTP backend (clone/push support)')
+  .option('--no-git', 'Disable Git HTTP backend')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -95,6 +97,7 @@ program
         mashlib: config.mashlib || config.mashlibCdn,
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
+        git: config.git,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -113,6 +116,7 @@ program
         } else if (config.mashlib) {
           console.log(`  Mashlib: local (data browser enabled)`);
         }
+        if (config.git) console.log('  Git: enabled (clone/push support)');
         console.log('\n  Press Ctrl+C to stop\n');
       }
 

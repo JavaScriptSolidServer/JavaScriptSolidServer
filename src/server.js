@@ -8,6 +8,7 @@ import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { idpPlugin } from './idp/index.js';
+import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +24,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {string} options.root - Data directory path (default from env or ./data)
  * @param {boolean} options.subdomains - Enable subdomain-based pods for XSS protection (default false)
  * @param {string} options.baseDomain - Base domain for subdomain pods (e.g., "example.com")
+ * @param {boolean} options.git - Enable Git HTTP backend for clone/push (default false)
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -40,6 +42,8 @@ export function createServer(options = {}) {
   const mashlibEnabled = options.mashlib ?? false;
   const mashlibCdn = options.mashlibCdn ?? false;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
+  // Git HTTP backend is OFF by default - enables clone/push via git protocol
+  const gitEnabled = options.git ?? false;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -130,9 +134,14 @@ export function createServer(options = {}) {
 
   // Security: Block access to dotfiles except allowed Solid-specific ones
   // This prevents exposure of .git/, .env, .htpasswd, etc.
-  // Git protocol access (clone/push) will be handled via separate routes (issue #5)
+  // Git protocol requests bypass this check when git is enabled
   const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta'];
   fastify.addHook('onRequest', async (request, reply) => {
+    // Allow git protocol requests through when git is enabled
+    if (gitEnabled && isGitRequest(request.url)) {
+      return;
+    }
+
     const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
@@ -145,16 +154,42 @@ export function createServer(options = {}) {
     }
   });
 
+  // Git HTTP backend handler - uses git http-backend CGI
+  // Authorization: Read for clone/fetch, Write for push
+  if (gitEnabled) {
+    fastify.addHook('preHandler', async (request, reply) => {
+      if (!isGitRequest(request.url)) {
+        return;
+      }
+
+      // Run WAC authorization - checkAccess already verifies the required mode
+      const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
+      request.webId = webId;
+      request.wacAllow = wacAllow;
+
+      if (!authorized) {
+        const needsWrite = isGitWriteOperation(request.url);
+        const message = needsWrite ? 'Write access required for push' : 'Read access required for clone';
+        reply.header('WAC-Allow', wacAllow);
+        return reply.code(webId ? 403 : 401).send({ error: message });
+      }
+
+      // Handle the git request directly
+      return handleGit(request, reply);
+    });
+  }
+
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, and notifications
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, and git
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     if (request.url === '/.pods' ||
         request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
         request.url.startsWith('/.well-known/') ||
+        (gitEnabled && isGitRequest(request.url)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
