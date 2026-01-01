@@ -84,9 +84,47 @@ function isAuthorization(node) {
 }
 
 /**
+ * Get base URL from ACL URL (the container the ACL applies to)
+ * e.g., https://example.com/foo/.acl -> https://example.com/foo/
+ *       https://example.com/foo/bar.acl -> https://example.com/foo/
+ */
+function getBaseUrl(aclUrl) {
+  if (!aclUrl) return null;
+  // Remove .acl suffix and get the directory
+  const withoutAcl = aclUrl.replace(/\.acl$/, '');
+  // If it was a container ACL (ended with /.acl), withoutAcl ends with /
+  // If it was a resource ACL (foo.acl), we need the parent directory
+  if (withoutAcl.endsWith('/')) {
+    return withoutAcl;
+  }
+  // Get parent directory
+  const lastSlash = withoutAcl.lastIndexOf('/');
+  return lastSlash > 0 ? withoutAcl.substring(0, lastSlash + 1) : withoutAcl;
+}
+
+/**
+ * Resolve a URI against a base URL
+ */
+function resolveUri(uri, baseUrl) {
+  if (!uri || !baseUrl) return uri;
+  // Already absolute
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+  // Fragment-only (like #owner) - not a resource URL
+  if (uri.startsWith('#')) return uri;
+  // Resolve relative URL
+  try {
+    return new URL(uri, baseUrl).href;
+  } catch {
+    return uri;
+  }
+}
+
+/**
  * Parse a single Authorization node
  */
 function parseAuthorization(node, aclUrl) {
+  const baseUrl = getBaseUrl(aclUrl);
+
   const auth = {
     id: node['@id'],
     accessTo: [],      // Resources this applies to
@@ -97,13 +135,15 @@ function parseAuthorization(node, aclUrl) {
     modes: []          // Access modes
   };
 
-  // Parse accessTo
-  auth.accessTo = parseUriArray(node['acl:accessTo'] || node['accessTo']);
+  // Parse accessTo - resolve relative URLs
+  auth.accessTo = parseUriArray(node['acl:accessTo'] || node['accessTo'])
+    .map(uri => resolveUri(uri, baseUrl));
 
-  // Parse default (for containers)
-  auth.default = parseUriArray(node['acl:default'] || node['default']);
+  // Parse default (for containers) - resolve relative URLs
+  auth.default = parseUriArray(node['acl:default'] || node['default'])
+    .map(uri => resolveUri(uri, baseUrl));
 
-  // Parse agents
+  // Parse agents (WebIDs can be relative too)
   auth.agents = parseUriArray(node['acl:agent'] || node['agent']);
 
   // Parse agentClass
