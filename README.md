@@ -354,6 +354,60 @@ git push
 
 Git operations respect WAC permissions - clone requires Read access, push requires Write access.
 
+### Git Push with Nostr Authentication
+
+Git push supports NIP-98 authentication via Basic Auth. Create a credential helper:
+
+```javascript
+// git-credential-nostr.js
+import { getPublicKey, finalizeEvent } from 'nostr-tools/pure';
+import { hexToBytes } from '@noble/hashes/utils';
+import fs from 'fs';
+import readline from 'readline';
+
+const sk = hexToBytes(fs.readFileSync('.nostr-key', 'utf8').trim());
+const rl = readline.createInterface({ input: process.stdin });
+const params = {};
+for await (const line of rl) {
+  if (!line) break;
+  const [key, ...vals] = line.split('=');
+  params[key] = vals.join('=');
+}
+
+if (params.protocol && params.host) {
+  let path = params.path || '/';
+  path = path.replace(/\/info\/refs$/, '').replace(/\/git-.*$/, '');
+  const baseUrl = `${params.protocol}://${params.host}${path}`;
+
+  const event = finalizeEvent({
+    kind: 27235,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['u', baseUrl], ['method', '*']],
+    content: ''
+  }, sk);
+
+  console.log('username=nostr');
+  console.log('password=' + Buffer.from(JSON.stringify(event)).toString('base64'));
+}
+```
+
+Configure git to use it:
+
+```bash
+git config credential.helper 'node /path/to/git-credential-nostr.js'
+```
+
+Add the Nostr identity to your ACL:
+
+```turtle
+<#nostr-writer>
+    a acl:Authorization;
+    acl:agent <did:nostr:YOUR_64_CHAR_HEX_PUBKEY>;
+    acl:accessTo <./>;
+    acl:default <./>;
+    acl:mode acl:Read, acl:Write.
+```
+
 ## Authentication
 
 ### Simple Tokens (Development)

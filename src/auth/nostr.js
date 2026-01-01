@@ -22,24 +22,58 @@ const TIMESTAMP_TOLERANCE = 60;
 
 /**
  * Check if request has Nostr authentication
+ * Supports both "Nostr <token>" and "Basic <base64(nostr:token)>" formats
+ * The Basic format allows git clients to authenticate via NIP-98
  * @param {object} request - Fastify request object
  * @returns {boolean}
  */
 export function hasNostrAuth(request) {
   const authHeader = request.headers.authorization;
-  return authHeader && authHeader.startsWith('Nostr ');
+  if (!authHeader) return false;
+
+  // Direct Nostr header
+  if (authHeader.startsWith('Nostr ')) return true;
+
+  // Basic auth with username=nostr (for git clients)
+  if (authHeader.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      return decoded.startsWith('nostr:');
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 /**
  * Extract token from Nostr authorization header
+ * Supports both "Nostr <token>" and "Basic <base64(nostr:token)>" formats
  * @param {string} authHeader - Authorization header value
  * @returns {string|null}
  */
 export function extractNostrToken(authHeader) {
-  if (!authHeader || !authHeader.startsWith('Nostr ')) {
-    return null;
+  if (!authHeader) return null;
+
+  // Direct Nostr header
+  if (authHeader.startsWith('Nostr ')) {
+    return authHeader.slice(6).trim();
   }
-  return authHeader.slice(6).trim();
+
+  // Basic auth with username=nostr, password=token
+  if (authHeader.startsWith('Basic ')) {
+    try {
+      const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
+      if (decoded.startsWith('nostr:')) {
+        return decoded.slice(6); // Remove "nostr:" prefix to get token
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -125,16 +159,27 @@ export async function verifyNostrAuth(request) {
   const normalizedRequestUrl = fullUrl.replace(/\/$/, '');
   const normalizedRequestUrlNoQuery = fullUrl.split('?')[0].replace(/\/$/, '');
 
-  if (normalizedEventUrl !== normalizedRequestUrl && normalizedEventUrl !== normalizedRequestUrlNoQuery) {
+  // Check for exact match first
+  let urlMatches = normalizedEventUrl === normalizedRequestUrl ||
+                   normalizedEventUrl === normalizedRequestUrlNoQuery;
+
+  // For git clients: allow prefix matching (event URL is base of request URL)
+  // This enables git credential helpers that sign for the repo base URL
+  if (!urlMatches && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
+    urlMatches = true;
+  }
+
+  if (!urlMatches) {
     return { webId: null, error: `URL mismatch: event URL "${eventUrl}" does not match request URL "${fullUrl}"` };
   }
 
   // Validate method tag matches request method
+  // For git clients: allow '*' as wildcard method
   const eventMethod = getTagValue(event, 'method');
   if (!eventMethod) {
     return { webId: null, error: 'Missing method tag in event' };
   }
-  if (eventMethod.toUpperCase() !== request.method.toUpperCase()) {
+  if (eventMethod !== '*' && eventMethod.toUpperCase() !== request.method.toUpperCase()) {
     return { webId: null, error: `Method mismatch: expected ${request.method}, got ${eventMethod}` };
   }
 
