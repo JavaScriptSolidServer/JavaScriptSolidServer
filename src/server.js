@@ -74,6 +74,14 @@ export function createServer(options = {}) {
     done(null, body);
   });
 
+  // Git content types need explicit handling (binary data)
+  fastify.addContentTypeParser('application/x-git-receive-pack-request', { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
+  });
+  fastify.addContentTypeParser('application/x-git-upload-pack-request', { parseAs: 'buffer' }, (req, body, done) => {
+    done(null, body);
+  });
+
   // Attach server config to requests
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);

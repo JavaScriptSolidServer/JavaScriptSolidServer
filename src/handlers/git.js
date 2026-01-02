@@ -74,7 +74,7 @@ export async function handleGit(request, reply) {
   if (request.method === 'OPTIONS') {
     reply.header('Access-Control-Allow-Origin', '*');
     reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     return reply.code(200).send();
   }
 
@@ -189,7 +189,7 @@ export async function handleGit(request, reply) {
           // Add CORS headers for browser git clients
           reply.raw.setHeader('Access-Control-Allow-Origin', '*');
           reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+          reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
           reply.raw.writeHead(statusCode);
           headersSent = true;
