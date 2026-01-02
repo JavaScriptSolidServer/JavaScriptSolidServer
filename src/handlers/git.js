@@ -70,6 +70,14 @@ function findGitDir(repoPath) {
  * @param {FastifyReply} reply
  */
 export async function handleGit(request, reply) {
+  // Handle CORS preflight
+  if (request.method === 'OPTIONS') {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    reply.header('Access-Control-Allow-Headers', 'Content-Type');
+    return reply.code(200).send();
+  }
+
   const urlPath = decodeURIComponent(request.url.split('?')[0]);
   const queryString = request.url.split('?')[1] || '';
 
