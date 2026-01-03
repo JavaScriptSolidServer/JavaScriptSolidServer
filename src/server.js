@@ -240,12 +240,12 @@ export function createServer(options = {}) {
   });
 
   // Pod creation endpoint with rate limiting
-  // Limit: 5 pods per IP per hour to prevent resource exhaustion and namespace squatting
+  // Limit: 1 pod per IP per day to prevent resource exhaustion and namespace squatting
   fastify.post('/.pods', {
     config: {
       rateLimit: {
-        max: 5,
-        timeWindow: '1 hour',
+        max: 1,
+        timeWindow: '1 day',
         keyGenerator: (request) => request.ip
       }
     }
