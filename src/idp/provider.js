@@ -7,6 +7,7 @@ import Provider from 'oidc-provider';
 import { createAdapter } from './adapter.js';
 import { getJwks, getCookieKeys } from './keys.js';
 import { getAccountForProvider } from './accounts.js';
+import { validateExternalUrl } from '../utils/ssrf.js';
 
 // Cache for fetched client documents
 const clientDocumentCache = new Map();
@@ -14,6 +15,7 @@ const CLIENT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Fetch and validate a Solid-OIDC Client Identifier Document
+ * SECURITY: Validates client_id URL to prevent SSRF attacks
  * @param {string} clientId - URL to the client document
  * @returns {Promise<object|null>} - Client metadata or null
  */
@@ -23,6 +25,18 @@ async function fetchClientDocument(clientId) {
     const cached = clientDocumentCache.get(clientId);
     if (cached && Date.now() - cached.timestamp < CLIENT_CACHE_TTL) {
       return cached.data;
+    }
+
+    // SSRF Protection: Validate client_id URL before fetching
+    const validation = await validateExternalUrl(clientId, {
+      requireHttps: true,
+      blockPrivateIPs: true,
+      resolveDNS: true
+    });
+
+    if (!validation.valid) {
+      console.error(`SSRF protection blocked client_id ${clientId}: ${validation.error}`);
+      return null;
     }
 
     const response = await fetch(clientId, {

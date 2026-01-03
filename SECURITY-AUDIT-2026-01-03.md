@@ -191,6 +191,8 @@ const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
 |-------|----------|--------|----------|
 | ACL bypass | Critical | 🟢 Fixed | v0.0.49 |
 | JWT signature bypass | Critical | 🟢 Fixed | v0.0.49 |
+| SSRF in OIDC discovery | Critical | 🟢 Fixed | v0.0.50 |
+| SSRF in client document fetch | Critical | 🟢 Fixed | v0.0.50 |
 | Unauthenticated pod creation | High | 🔴 Open | - |
 | Default token secret | High | 🔴 Open | - |
 | No rate limiting | Medium | 🔴 Open | - |
@@ -199,6 +201,11 @@ const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
 ---
 
 ## Changelog
+
+### v0.0.50 (2026-01-03)
+- **Fixed SSRF in OIDC discovery**: Issuer URLs are now validated before fetching (HTTPS required, private IPs blocked)
+- **Fixed SSRF in client document fetch**: Client ID URLs are now validated before fetching
+- Added `src/utils/ssrf.js` - URL validation utility with DNS rebinding protection
 
 ### v0.0.49 (2026-01-03)
 - **Fixed ACL bypass**: ACL files now require `acl:Control` permission on the protected resource

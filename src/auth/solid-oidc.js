@@ -11,6 +11,7 @@
  */
 
 import * as jose from 'jose';
+import { validateExternalUrl } from '../utils/ssrf.js';
 
 // Cache for OIDC configurations and JWKS
 const oidcConfigCache = new Map();
@@ -197,11 +198,23 @@ async function calculateAth(accessToken) {
 
 /**
  * Fetch and cache OIDC configuration
+ * SECURITY: Validates issuer URL to prevent SSRF attacks
  */
 async function getOidcConfig(issuer) {
   const cached = oidcConfigCache.get(issuer);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.config;
+  }
+
+  // SSRF Protection: Validate issuer URL before fetching
+  const validation = await validateExternalUrl(issuer, {
+    requireHttps: true,
+    blockPrivateIPs: true,
+    resolveDNS: true
+  });
+
+  if (!validation.valid) {
+    throw new Error(`Invalid OIDC issuer: ${validation.error}`);
   }
 
   const configUrl = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
