@@ -13,6 +13,7 @@
 
 import { verifyEvent } from 'nostr-tools';
 import crypto from 'crypto';
+import { resolveDidNostrToWebId } from './did-nostr.js';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -223,7 +224,15 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Invalid Schnorr signature' };
   }
 
-  // Return did:nostr as the agent identifier
+  // Try to resolve did:nostr to a linked WebID
+  // This checks if the pubkey has an alsoKnownAs pointing to a WebID
+  // and verifies the WebID links back to did:nostr (bidirectional)
+  const resolvedWebId = await resolveDidNostrToWebId(event.pubkey);
+  if (resolvedWebId) {
+    return { webId: resolvedWebId, error: null };
+  }
+
+  // Fall back to did:nostr as the agent identifier
   const didNostr = pubkeyToDidNostr(event.pubkey);
 
   return { webId: didNostr, error: null };
