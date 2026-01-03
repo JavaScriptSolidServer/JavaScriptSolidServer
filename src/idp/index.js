@@ -18,6 +18,7 @@ import {
   handleCredentials,
   handleCredentialsInfo,
 } from './credentials.js';
+import { addTrustedIssuer } from '../auth/solid-oidc.js';
 
 /**
  * IdP Fastify Plugin
@@ -31,6 +32,9 @@ export async function idpPlugin(fastify, options) {
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
   }
+
+  // Register our own issuer as trusted (bypasses SSRF check for self-validation)
+  addTrustedIssuer(issuer);
 
   // Initialize signing keys
   await initializeKeys();

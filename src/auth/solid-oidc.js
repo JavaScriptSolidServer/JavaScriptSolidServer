@@ -20,6 +20,19 @@ const jwksCache = new Map();
 // Cache TTL (15 minutes)
 const CACHE_TTL = 15 * 60 * 1000;
 
+// Trusted issuers (skip SSRF check) - populated by server config
+const trustedIssuers = new Set();
+
+/**
+ * Add a trusted issuer (e.g., the server's own issuer)
+ * Trusted issuers bypass SSRF validation since they're configured by admin
+ */
+export function addTrustedIssuer(issuer) {
+  const normalized = issuer.replace(/\/$/, '');
+  trustedIssuers.add(normalized);
+  trustedIssuers.add(normalized + '/');
+}
+
 // DPoP proof max age (5 minutes)
 const DPOP_MAX_AGE = 5 * 60;
 
@@ -206,15 +219,21 @@ async function getOidcConfig(issuer) {
     return cached.config;
   }
 
-  // SSRF Protection: Validate issuer URL before fetching
-  const validation = await validateExternalUrl(issuer, {
-    requireHttps: true,
-    blockPrivateIPs: true,
-    resolveDNS: true
-  });
+  // Check if this is a trusted issuer (e.g., our own server)
+  const normalizedIssuer = issuer.replace(/\/$/, '');
+  const isTrusted = trustedIssuers.has(normalizedIssuer) || trustedIssuers.has(normalizedIssuer + '/');
 
-  if (!validation.valid) {
-    throw new Error(`Invalid OIDC issuer: ${validation.error}`);
+  // SSRF Protection: Validate issuer URL before fetching (skip for trusted issuers)
+  if (!isTrusted) {
+    const validation = await validateExternalUrl(issuer, {
+      requireHttps: true,
+      blockPrivateIPs: true,
+      resolveDNS: true
+    });
+
+    if (!validation.valid) {
+      throw new Error(`Invalid OIDC issuer: ${validation.error}`);
+    }
   }
 
   const configUrl = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
