@@ -42,6 +42,12 @@ export const defaults = {
   mashlibCdn: false,
   mashlibVersion: '2.0.0',
 
+  // Git HTTP backend
+  git: false,
+
+  // Invite-only registration
+  inviteOnly: false,
+
   // Logging
   logger: true,
   quiet: false,
@@ -71,6 +77,8 @@ const envMap = {
   JSS_MASHLIB: 'mashlib',
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
+  JSS_GIT: 'git',
+  JSS_INVITE_ONLY: 'inviteOnly',
 };
 
 /**

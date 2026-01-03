@@ -27,7 +27,7 @@ import { addTrustedIssuer } from '../auth/solid-oidc.js';
  * @param {string} options.issuer - The issuer URL
  */
 export async function idpPlugin(fastify, options) {
-  const { issuer } = options;
+  const { issuer, inviteOnly = false } = options;
 
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
@@ -274,7 +274,7 @@ export async function idpPlugin(fastify, options) {
 
   // Registration routes
   fastify.get('/idp/register', async (request, reply) => {
-    return handleRegisterGet(request, reply);
+    return handleRegisterGet(request, reply, inviteOnly);
   });
 
   // Registration - rate limited to prevent spam accounts
@@ -287,7 +287,7 @@ export async function idpPlugin(fastify, options) {
       }
     }
   }, async (request, reply) => {
-    return handleRegisterPost(request, reply, issuer);
+    return handleRegisterPost(request, reply, issuer, inviteOnly);
   });
 
   fastify.log.info(`IdP initialized with issuer: ${issuer}`);

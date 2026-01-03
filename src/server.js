@@ -46,6 +46,8 @@ export function createServer(options = {}) {
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
+  // Invite-only registration is OFF by default - open registration
+  const inviteOnly = options.inviteOnly ?? false;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -125,7 +127,7 @@ export function createServer(options = {}) {
 
   // Register Identity Provider plugin if enabled
   if (idpEnabled) {
-    fastify.register(idpPlugin, { issuer: idpIssuer });
+    fastify.register(idpPlugin, { issuer: idpIssuer, inviteOnly });
   }
 
   // Register rate limiting plugin

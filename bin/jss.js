@@ -11,6 +11,7 @@
 import { Command } from 'commander';
 import { createServer } from '../src/server.js';
 import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js';
+import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -56,6 +57,8 @@ program
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
+  .option('--invite-only', 'Require invite code for registration')
+  .option('--no-invite-only', 'Allow open registration')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -98,6 +101,7 @@ program
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
         git: config.git,
+        inviteOnly: config.inviteOnly,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -117,6 +121,7 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.git) console.log('  Git: enabled (clone/push support)');
+        if (config.inviteOnly) console.log('  Registration: invite-only');
         console.log('\n  Press Ctrl+C to stop\n');
       }
 
@@ -202,6 +207,104 @@ program
     console.log(`Data directory created: ${dataDir}`);
 
     console.log('\nRun `jss start` to start the server.\n');
+  });
+
+/**
+ * Invite command - manage invite codes
+ */
+const inviteCmd = program
+  .command('invite')
+  .description('Manage invite codes for registration');
+
+inviteCmd
+  .command('create')
+  .description('Create a new invite code')
+  .option('-u, --uses <number>', 'Maximum uses (default: 1)', parseInt, 1)
+  .option('-n, --note <text>', 'Optional note/description')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (options) => {
+    try {
+      // Set DATA_ROOT if provided
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const { code, invite } = await createInvite({
+        maxUses: options.uses,
+        note: options.note || ''
+      });
+
+      console.log(`\nCreated invite code: ${code}`);
+      if (invite.maxUses > 1) {
+        console.log(`Uses: 0/${invite.maxUses}`);
+      }
+      if (invite.note) {
+        console.log(`Note: ${invite.note}`);
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+inviteCmd
+  .command('list')
+  .description('List all invite codes')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (options) => {
+    try {
+      // Set DATA_ROOT if provided
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const invites = await listInvites();
+
+      if (invites.length === 0) {
+        console.log('\nNo invite codes found.\n');
+        return;
+      }
+
+      console.log('\n  CODE        USES     CREATED      NOTE');
+      console.log('  ' + '-'.repeat(55));
+
+      for (const invite of invites) {
+        const uses = `${invite.uses}/${invite.maxUses}`.padEnd(8);
+        const created = invite.created.split('T')[0];
+        const note = invite.note || '';
+        console.log(`  ${invite.code}    ${uses} ${created}   ${note}`);
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+inviteCmd
+  .command('revoke <code>')
+  .description('Revoke an invite code')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (code, options) => {
+    try {
+      // Set DATA_ROOT if provided
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const success = await revokeInvite(code);
+
+      if (success) {
+        console.log(`\nRevoked invite code: ${code.toUpperCase()}\n`);
+      } else {
+        console.log(`\nInvite code not found: ${code.toUpperCase()}\n`);
+        process.exit(1);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
   });
 
 /**

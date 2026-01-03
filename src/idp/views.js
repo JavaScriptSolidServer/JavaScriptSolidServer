@@ -296,7 +296,13 @@ export function errorPage(title, message) {
 /**
  * Registration page HTML
  */
-export function registerPage(uid = null, error = null, success = null) {
+export function registerPage(uid = null, error = null, success = null, inviteOnly = false) {
+  const inviteField = inviteOnly ? `
+      <label for="invite">Invite Code</label>
+      <input type="text" id="invite" name="invite" required
+             placeholder="Enter your invite code" style="text-transform: uppercase;">
+  ` : '';
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -310,14 +316,16 @@ export function registerPage(uid = null, error = null, success = null) {
   <div class="container">
     <div class="logo">${solidLogo}</div>
     <h1>Create Account</h1>
-    <p class="subtitle">Register for a new Solid Pod</p>
+    <p class="subtitle">Register for a new Solid Pod${inviteOnly ? ' (invite required)' : ''}</p>
 
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     ${success ? `<div class="error" style="background: #efe; border-color: #cfc; color: #060;">${escapeHtml(success)}</div>` : ''}
 
     <form method="POST" action="/idp/register${uid ? `?uid=${uid}` : ''}">
+      ${inviteField}
+
       <label for="username">Username</label>
-      <input type="text" id="username" name="username" required autofocus
+      <input type="text" id="username" name="username" required ${!inviteOnly ? 'autofocus' : ''}
              placeholder="Choose a username" pattern="[a-z0-9]+"
              title="Lowercase letters and numbers only">
 

@@ -7,6 +7,7 @@ import { authenticate, findById, createAccount } from './accounts.js';
 import { loginPage, consentPage, errorPage, registerPage } from './views.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
+import { validateInvite } from './invites.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
@@ -309,16 +310,16 @@ export async function handleAbort(request, reply, provider) {
  * Handle GET /idp/register
  * Shows registration page
  */
-export async function handleRegisterGet(request, reply) {
+export async function handleRegisterGet(request, reply, inviteOnly = false) {
   const uid = request.query.uid || null;
-  return reply.type('text/html').send(registerPage(uid));
+  return reply.type('text/html').send(registerPage(uid, null, null, inviteOnly));
 }
 
 /**
  * Handle POST /idp/register
  * Creates account and pod
  */
-export async function handleRegisterPost(request, reply, issuer) {
+export async function handleRegisterPost(request, reply, issuer, inviteOnly = false) {
   const uid = request.query.uid || null;
 
   // Parse body
@@ -328,7 +329,7 @@ export async function handleRegisterPost(request, reply, issuer) {
   if (Buffer.isBuffer(parsedBody)) {
     // Security: check body size
     if (parsedBody.length > MAX_BODY_SIZE) {
-      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.'));
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly));
     }
     const bodyStr = parsedBody.toString();
     if (contentType.includes('application/json')) {
@@ -344,32 +345,39 @@ export async function handleRegisterPost(request, reply, issuer) {
   } else if (typeof parsedBody === 'string') {
     // Security: check body size
     if (parsedBody.length > MAX_BODY_SIZE) {
-      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.'));
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly));
     }
     const params = new URLSearchParams(parsedBody);
     parsedBody = Object.fromEntries(params.entries());
   }
 
-  const { username, password, confirmPassword } = parsedBody;
+  const { username, password, confirmPassword, invite } = parsedBody;
+
+  // Validate invite code if invite-only mode is enabled
+  if (inviteOnly) {
+    const inviteResult = await validateInvite(invite);
+    if (!inviteResult.valid) {
+      return reply.code(403).type('text/html').send(registerPage(uid, inviteResult.error, null, inviteOnly));
+    }
+  }
 
   // Validate input
   if (!username || !password) {
-    return reply.type('text/html').send(registerPage(uid, 'Username and password are required'));
+    return reply.type('text/html').send(registerPage(uid, 'Username and password are required', null, inviteOnly));
   }
 
   // Validate username format
   const usernameRegex = /^[a-z0-9]+$/;
   if (!usernameRegex.test(username)) {
-    return reply.type('text/html').send(registerPage(uid, 'Username must contain only lowercase letters and numbers'));
+    return reply.type('text/html').send(registerPage(uid, 'Username must contain only lowercase letters and numbers', null, inviteOnly));
   }
 
   if (username.length < 3) {
-    return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters'));
+    return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters', null, inviteOnly));
   }
 
-
   if (password !== confirmPassword) {
-    return reply.type('text/html').send(registerPage(uid, 'Passwords do not match'));
+    return reply.type('text/html').send(registerPage(uid, 'Passwords do not match', null, inviteOnly));
   }
 
   try {
@@ -393,7 +401,7 @@ export async function handleRegisterPost(request, reply, issuer) {
     const podPath = `${username}/`;
     const podExists = await storage.exists(podPath);
     if (podExists) {
-      return reply.type('text/html').send(registerPage(uid, 'Username is already taken'));
+      return reply.type('text/html').send(registerPage(uid, 'Username is already taken', null, inviteOnly));
     }
 
     // Create pod structure
@@ -413,10 +421,10 @@ export async function handleRegisterPost(request, reply, issuer) {
     if (uid) {
       return reply.redirect(`/idp/interaction/${uid}`);
     } else {
-      return reply.type('text/html').send(registerPage(null, null, `Account created! You can now sign in as "${username}".`));
+      return reply.type('text/html').send(registerPage(null, null, `Account created! You can now sign in as "${username}".`, inviteOnly));
     }
   } catch (err) {
     request.log.error(err, 'Registration error');
-    return reply.type('text/html').send(registerPage(uid, err.message));
+    return reply.type('text/html').send(registerPage(uid, err.message, null, inviteOnly));
   }
 }
