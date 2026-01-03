@@ -12,6 +12,8 @@ import { Command } from 'commander';
 import { createServer } from '../src/server.js';
 import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js';
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
+import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
+import { parseSize } from '../src/config.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -300,6 +302,92 @@ inviteCmd
       } else {
         console.log(`\nInvite code not found: ${code.toUpperCase()}\n`);
         process.exit(1);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Quota command - manage storage quotas
+ */
+const quotaCmd = program
+  .command('quota')
+  .description('Manage storage quotas for pods');
+
+quotaCmd
+  .command('set <username> <size>')
+  .description('Set quota limit for a user (e.g., 50MB, 1GB)')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (username, size, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const bytes = parseSize(size);
+      if (bytes === 0) {
+        console.error('Invalid size format. Use e.g., 50MB, 1GB');
+        process.exit(1);
+      }
+
+      const quota = await setQuotaLimit(username, bytes);
+      console.log(`\nQuota set for ${username}: ${formatBytes(quota.limit)}`);
+      console.log(`Current usage: ${formatBytes(quota.used)} (${Math.round(quota.used / quota.limit * 100)}%)\n`);
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+quotaCmd
+  .command('show <username>')
+  .description('Show quota info for a user')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const quota = await getQuotaInfo(username);
+
+      if (quota.limit === 0) {
+        console.log(`\n${username}: No quota set (unlimited)\n`);
+      } else {
+        console.log(`\n${username}:`);
+        console.log(`  Used:  ${formatBytes(quota.used)}`);
+        console.log(`  Limit: ${formatBytes(quota.limit)}`);
+        console.log(`  Free:  ${formatBytes(quota.limit - quota.used)}`);
+        console.log(`  Usage: ${quota.percent}%\n`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+quotaCmd
+  .command('reconcile <username>')
+  .description('Recalculate quota usage from actual disk usage')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      console.log(`Calculating actual disk usage for ${username}...`);
+      const quota = await reconcileQuota(username);
+
+      if (quota.limit === 0) {
+        console.log(`\n${username}: No quota configured\n`);
+      } else {
+        console.log(`\nReconciled ${username}:`);
+        console.log(`  Used:  ${formatBytes(quota.used)}`);
+        console.log(`  Limit: ${formatBytes(quota.limit)}`);
+        console.log(`  Usage: ${Math.round(quota.used / quota.limit * 100)}%\n`);
       }
     } catch (err) {
       console.error(`Error: ${err.message}`);

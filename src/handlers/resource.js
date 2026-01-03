@@ -1,7 +1,8 @@
 import * as storage from '../storage/filesystem.js';
+import { checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
-import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse } from '../utils/url.js';
+import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse, getPodName } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
 import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
 import {
@@ -504,9 +505,26 @@ export async function handlePut(request, reply) {
     }
   }
 
+  // Check storage quota before writing
+  const podName = getPodName(request);
+  const oldSize = stats?.size || 0;
+  const sizeDelta = content.length - oldSize;
+
+  if (podName && sizeDelta > 0) {
+    const { allowed, error } = await checkQuota(podName, sizeDelta, request.defaultQuota || 0);
+    if (!allowed) {
+      return reply.code(507).send({ error: 'Insufficient Storage', message: error });
+    }
+  }
+
   const success = await storage.write(storagePath, content);
   if (!success) {
     return reply.code(500).send({ error: 'Write failed' });
+  }
+
+  // Update quota usage after successful write
+  if (podName && sizeDelta !== 0) {
+    await updateQuotaUsage(podName, sizeDelta);
   }
 
   const origin = request.headers.origin;
@@ -549,9 +567,18 @@ export async function handleDelete(request, reply) {
     }
   }
 
+  // Get file size before deletion for quota update
+  const fileSize = stats.size || 0;
+
   const success = await storage.remove(storagePath);
   if (!success) {
     return reply.code(500).send({ error: 'Delete failed' });
+  }
+
+  // Update quota usage (subtract deleted file size)
+  const podName = getPodName(request);
+  if (podName && fileSize > 0) {
+    await updateQuotaUsage(podName, -fileSize);
   }
 
   const origin = request.headers.origin;

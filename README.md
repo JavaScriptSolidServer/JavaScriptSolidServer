@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.56)
+### Implemented (v0.0.57)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -30,6 +30,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **CORS Support** - Full cross-origin resource sharing
 - **Git HTTP Backend** - Clone and push to containers via `git` protocol
 - **Invite-Only Registration** - CLI-managed invite codes for controlled signups
+- **Storage Quotas** - Per-user storage limits with CLI management
 - **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
 
 ### HTTP Methods
@@ -78,6 +79,7 @@ jss start --port 8443 --ssl-key ./key.pem --ssl-cert ./cert.pem
 jss start [options]    # Start the server
 jss init [options]     # Initialize configuration
 jss invite <cmd>       # Manage invite codes (create, list, revoke)
+jss quota <cmd>        # Manage storage quotas (set, show, reconcile)
 jss --help             # Show help
 ```
 
@@ -102,6 +104,7 @@ jss --help             # Show help
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `--git` | Enable Git HTTP backend | false |
 | `--invite-only` | Require invite code for registration | false |
+| `--default-quota <size>` | Default storage quota per pod (e.g., 50MB) | 50MB |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -117,6 +120,7 @@ export JSS_SUBDOMAINS=true
 export JSS_BASE_DOMAIN=example.com
 export JSS_MASHLIB=true
 export JSS_INVITE_ONLY=true
+export JSS_DEFAULT_QUOTA=100MB
 jss start
 ```
 
@@ -427,6 +431,43 @@ When `--invite-only` is enabled:
 
 Invite codes are stored in `.server/invites.json` in your data directory.
 
+## Storage Quotas
+
+Limit storage per pod to prevent abuse and manage resources:
+
+```bash
+jss start --default-quota 50MB
+```
+
+### Managing Quotas
+
+```bash
+# Set quota for a user (overrides default)
+jss quota set alice 100MB
+
+# Show quota info
+jss quota show alice
+#   alice:
+#     Used:  12.5 MB
+#     Limit: 100 MB
+#     Free:  87.5 MB
+#     Usage: 12%
+
+# Recalculate from actual disk usage
+jss quota reconcile alice
+```
+
+### How It Works
+
+- Quotas are tracked incrementally on PUT, POST, and DELETE operations
+- When quota is exceeded, the server returns HTTP 507 Insufficient Storage
+- Each pod stores its quota in `/{pod}/.quota.json`
+- Use `reconcile` to fix quota drift from manual file changes
+
+### Size Formats
+
+Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
+
 ## Authentication
 
 ### Simple Tokens (Development)
@@ -688,7 +729,8 @@ src/
 │   ├── container.js      # POST, pod creation
 │   └── git.js            # Git HTTP backend
 ├── storage/
-│   └── filesystem.js     # File operations
+│   ├── filesystem.js     # File operations
+│   └── quota.js          # Storage quota management
 ├── auth/
 │   ├── middleware.js     # Auth hook
 │   ├── token.js          # Simple token auth

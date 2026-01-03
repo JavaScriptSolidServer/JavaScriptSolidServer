@@ -48,6 +48,8 @@ export function createServer(options = {}) {
   const gitEnabled = options.git ?? false;
   // Invite-only registration is OFF by default - open registration
   const inviteOnly = options.inviteOnly ?? false;
+  // Default storage quota per pod (50MB default, 0 = unlimited)
+  const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -95,6 +97,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibEnabled', null);
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
+  fastify.decorateRequest('defaultQuota', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
@@ -104,6 +107,7 @@ export function createServer(options = {}) {
     request.mashlibEnabled = mashlibEnabled;
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
+    request.defaultQuota = defaultQuota;
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {

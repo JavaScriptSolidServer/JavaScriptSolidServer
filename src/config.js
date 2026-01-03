@@ -48,6 +48,9 @@ export const defaults = {
   // Invite-only registration
   inviteOnly: false,
 
+  // Storage quota (bytes) - 50MB default
+  defaultQuota: 50 * 1024 * 1024,
+
   // Logging
   logger: true,
   quiet: false,
@@ -79,7 +82,21 @@ const envMap = {
   JSS_MASHLIB_VERSION: 'mashlibVersion',
   JSS_GIT: 'git',
   JSS_INVITE_ONLY: 'inviteOnly',
+  JSS_DEFAULT_QUOTA: 'defaultQuota',
 };
+
+/**
+ * Parse a size string like "50MB" or "1GB" to bytes
+ */
+export function parseSize(str) {
+  const match = str.match(/^(\d+(?:\.\d+)?)\s*(B|KB|MB|GB|TB)?$/i);
+  if (!match) return parseInt(str, 10) || 0;
+
+  const num = parseFloat(match[1]);
+  const unit = (match[2] || 'B').toUpperCase();
+  const multipliers = { B: 1, KB: 1024, MB: 1024**2, GB: 1024**3, TB: 1024**4 };
+  return Math.floor(num * (multipliers[unit] || 1));
+}
 
 /**
  * Parse a value from environment variable string
@@ -94,6 +111,11 @@ function parseEnvValue(value, key) {
   // Numeric values for known numeric keys
   if (key === 'port' && !isNaN(value)) {
     return parseInt(value, 10);
+  }
+
+  // Size values (quota)
+  if (key === 'defaultQuota') {
+    return parseSize(value);
   }
 
   return value;

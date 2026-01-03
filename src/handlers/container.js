@@ -1,6 +1,7 @@
 import * as storage from '../storage/filesystem.js';
+import { initializeQuota, checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders } from '../ldp/headers.js';
-import { isContainer, getEffectiveUrlPath } from '../utils/url.js';
+import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
@@ -106,7 +107,21 @@ export async function handlePost(request, reply) {
       }
     }
 
+    // Check storage quota before writing
+    const podName = getPodName(request);
+    if (podName) {
+      const { allowed, error } = await checkQuota(podName, content.length, request.defaultQuota || 0);
+      if (!allowed) {
+        return reply.code(507).send({ error: 'Insufficient Storage', message: error });
+      }
+    }
+
     success = await storage.write(newStoragePath, content);
+
+    // Update quota usage after successful write
+    if (success && podName) {
+      await updateQuotaUsage(podName, content.length);
+    }
   }
 
   if (!success) {
@@ -139,8 +154,9 @@ export async function handlePost(request, reply) {
  * @param {string} webId - User's WebID URI
  * @param {string} podUri - Pod root URI (e.g., https://alice.example.com/ or https://example.com/alice/)
  * @param {string} issuer - OIDC issuer URI
+ * @param {number} defaultQuota - Default storage quota in bytes (optional)
  */
-export async function createPodStructure(name, webId, podUri, issuer) {
+export async function createPodStructure(name, webId, podUri, issuer, defaultQuota = 0) {
   const podPath = `/${name}/`;
 
   // Create pod directory structure
@@ -192,6 +208,11 @@ export async function createPodStructure(name, webId, podUri, issuer) {
   // Profile documents must be publicly readable for WebID verification
   const profileAcl = generatePublicFolderAcl(`${podUri}profile/`, webId);
   await storage.write(`${podPath}profile/.acl`, serializeAcl(profileAcl));
+
+  // Initialize storage quota if configured
+  if (defaultQuota > 0) {
+    await initializeQuota(name, defaultQuota);
+  }
 
   return { podPath, podUri };
 }

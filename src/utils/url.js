@@ -144,6 +144,43 @@ export function getResourceName(urlPath) {
 }
 
 /**
+ * Extract pod name from URL path or request
+ * @param {string|object} pathOrRequest - URL path string or Fastify request object
+ * @returns {string|null} - Pod name or null if not found
+ */
+export function getPodName(pathOrRequest) {
+  // If it's a request object
+  if (typeof pathOrRequest === 'object') {
+    // Subdomain mode: pod name from hostname
+    if (pathOrRequest.subdomainsEnabled && pathOrRequest.podName) {
+      return pathOrRequest.podName;
+    }
+    // Path mode: extract from URL
+    const urlPath = pathOrRequest.url?.split('?')[0] || '';
+    return getPodNameFromPath(urlPath);
+  }
+
+  // If it's a string path
+  return getPodNameFromPath(pathOrRequest);
+}
+
+/**
+ * Extract pod name from URL path
+ * @param {string} urlPath - URL path (e.g., /alice/public/file.txt)
+ * @returns {string|null} - Pod name or null
+ */
+function getPodNameFromPath(urlPath) {
+  const parts = urlPath.split('/').filter(Boolean);
+  if (parts.length === 0) return null;
+
+  // First segment is the pod name (skip system paths)
+  const firstPart = parts[0];
+  if (firstPart.startsWith('.')) return null; // .well-known, .acl, etc.
+
+  return firstPart;
+}
+
+/**
  * Determine content type from file extension
  * @param {string} filePath
  * @returns {string}
