@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.42)
+### Implemented (v0.0.56)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -29,6 +29,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
 - **Git HTTP Backend** - Clone and push to containers via `git` protocol
+- **Invite-Only Registration** - CLI-managed invite codes for controlled signups
 - **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
 
 ### HTTP Methods
@@ -76,6 +77,7 @@ jss start --port 8443 --ssl-key ./key.pem --ssl-cert ./cert.pem
 ```bash
 jss start [options]    # Start the server
 jss init [options]     # Initialize configuration
+jss invite <cmd>       # Manage invite codes (create, list, revoke)
 jss --help             # Show help
 ```
 
@@ -99,6 +101,7 @@ jss --help             # Show help
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `--git` | Enable Git HTTP backend | false |
+| `--invite-only` | Require invite code for registration | false |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -113,6 +116,7 @@ export JSS_CONNEG=true
 export JSS_SUBDOMAINS=true
 export JSS_BASE_DOMAIN=example.com
 export JSS_MASHLIB=true
+export JSS_INVITE_ONLY=true
 jss start
 ```
 
@@ -378,6 +382,50 @@ git add .acl && git commit -m "Add ACL"
 ```
 
 See [git-credential-nostr](https://github.com/JavaScriptSolidServer/git-credential-nostr) for more details.
+
+## Invite-Only Registration
+
+Control who can create accounts by requiring invite codes:
+
+```bash
+jss start --idp --invite-only
+```
+
+### Managing Invite Codes
+
+```bash
+# Create a single-use invite
+jss invite create
+# Created invite code: ABCD1234
+
+# Create multi-use invite with note
+jss invite create -u 5 -n "For team members"
+
+# List all active invites
+jss invite list
+#   CODE        USES     CREATED      NOTE
+#   -------------------------------------------------------
+#   ABCD1234    0/1      2026-01-03
+#   EFGH5678    2/5      2026-01-03   For team members
+
+# Revoke an invite
+jss invite revoke ABCD1234
+```
+
+### How It Works
+
+| Mode | Registration | Pod Creation |
+|------|--------------|--------------|
+| Open (default) | Anyone can register | Anyone can create pods |
+| Invite-only | Requires valid invite code | Via registration only |
+
+When `--invite-only` is enabled:
+- The registration page shows an "Invite Code" field
+- Invalid or expired codes are rejected with an error
+- Each use decrements the invite's remaining uses
+- Depleted invites are automatically removed
+
+Invite codes are stored in `.server/invites.json` in your data directory.
 
 ## Authentication
 
@@ -668,7 +716,8 @@ src/
 │   ├── accounts.js       # User account management
 │   ├── keys.js           # JWKS key management
 │   ├── interactions.js   # Login/consent handlers
-│   └── views.js          # HTML templates
+│   ├── views.js          # HTML templates
+│   └── invites.js        # Invite code management
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
