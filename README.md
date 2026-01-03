@@ -528,6 +528,51 @@ curl -X POST https://example.com/.pods \
 | [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
 | [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
 
+## Security
+
+### Root ACL Required
+
+JSS uses **restrictive mode** by default: if no ACL file exists for a resource, access is denied. This prevents unauthorized writes to unprotected containers.
+
+**You must create a root `.acl` file** in your data directory. Example (JSON-LD format):
+
+```json
+{
+  "@context": {
+    "acl": "http://www.w3.org/ns/auth/acl#",
+    "foaf": "http://xmlns.com/foaf/0.1/"
+  },
+  "@graph": [
+    {
+      "@id": "#owner",
+      "@type": "acl:Authorization",
+      "acl:agent": { "@id": "https://your-domain.com/profile/card#me" },
+      "acl:accessTo": { "@id": "https://your-domain.com/" },
+      "acl:default": { "@id": "https://your-domain.com/" },
+      "acl:mode": [
+        { "@id": "acl:Read" },
+        { "@id": "acl:Write" },
+        { "@id": "acl:Control" }
+      ]
+    },
+    {
+      "@id": "#public",
+      "@type": "acl:Authorization",
+      "acl:agentClass": { "@id": "foaf:Agent" },
+      "acl:accessTo": { "@id": "https://your-domain.com/" },
+      "acl:default": { "@id": "https://your-domain.com/" },
+      "acl:mode": [
+        { "@id": "acl:Read" }
+      ]
+    }
+  ]
+}
+```
+
+Save this as `data/.acl` (replacing `your-domain.com` with your actual domain).
+
+See [Issue #32](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/32) for background.
+
 ## Performance
 
 This server is designed for speed. Benchmark results on a typical development machine:
