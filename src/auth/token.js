@@ -37,7 +37,11 @@ export function createToken(webId, expiresIn = 3600) {
 }
 
 /**
- * Verify and decode a token (simple 2-part or JWT 3-part)
+ * Verify and decode a simple token (2-part HMAC-signed)
+ *
+ * SECURITY: Only accepts 2-part simple tokens signed with HMAC.
+ * JWT tokens (3-part) require async verification via verifyTokenAsync().
+ *
  * @param {string} token - The token to verify
  * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
  */
@@ -48,9 +52,9 @@ export function verifyToken(token) {
 
   const parts = token.split('.');
 
-  // Handle JWT tokens (3 parts) from credentials endpoint
+  // JWT tokens (3 parts) require async verification - reject in sync function
   if (parts.length === 3) {
-    return verifyJwtToken(token);
+    return null;
   }
 
   if (parts.length !== 2) {
@@ -59,13 +63,19 @@ export function verifyToken(token) {
 
   const [data, signature] = parts;
 
-  // Verify signature
+  // Verify HMAC signature
   const expectedSig = crypto
     .createHmac('sha256', SECRET)
     .update(data)
     .digest('base64url');
 
-  if (signature !== expectedSig) {
+  // Constant-time comparison to prevent timing attacks
+  try {
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
+      return null;
+    }
+  } catch {
+    // If lengths don't match, timingSafeEqual throws
     return null;
   }
 
@@ -85,38 +95,45 @@ export function verifyToken(token) {
 }
 
 /**
- * Verify a JWT token from credentials endpoint
- * JWT tokens are self-contained and signed with the IdP's private key
+ * Verify a JWT token from the credentials endpoint
+ * Properly verifies signature against IdP's JWKS
+ *
  * @param {string} token - JWT token
- * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
+ * @returns {Promise<{webId: string, iat: number, exp: number} | null>}
  */
-function verifyJwtToken(token) {
+async function verifyJwtFromIdp(token) {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
+    // Dynamically import to avoid circular dependencies
+    const { getPublicJwks } = await import('../idp/keys.js');
+    const jose = await import('jose');
+
+    const jwks = await getPublicJwks();
+    if (!jwks || !jwks.keys || jwks.keys.length === 0) {
       return null;
     }
 
-    // Decode the payload (middle part)
-    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+    // Create JWKS for verification
+    const keySet = jose.createLocalJWKSet(jwks);
 
-    // Check expiration
-    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
+    // Verify the token
+    const { payload } = await jose.jwtVerify(token, keySet, {
+      // Allow some clock skew
+      clockTolerance: 60,
+    });
+
+    // Extract webid claim
+    const webId = payload.webid || payload.webId || payload.sub;
+    if (!webId) {
       return null;
     }
 
-    // JWT from credentials endpoint uses 'webid' claim (lowercase)
-    if (payload.webid) {
-      return { webId: payload.webid, iat: payload.iat, exp: payload.exp };
-    }
-
-    // Also check uppercase WebId for compatibility
-    if (payload.webId) {
-      return payload;
-    }
-
-    return null;
-  } catch {
+    return {
+      webId,
+      iat: payload.iat,
+      exp: payload.exp
+    };
+  } catch (err) {
+    // Verification failed - invalid signature, expired, etc.
     return null;
   }
 }
@@ -190,15 +207,26 @@ export async function getWebIdFromRequestAsync(request) {
     return verifyNostrAuth(request);
   }
 
-  // Fall back to simple Bearer tokens
+  // Fall back to Bearer tokens
   const token = extractToken(authHeader);
   if (!token) {
     return { webId: null, error: null };
   }
 
+  // Try simple 2-part token first
   const payload = verifyToken(token);
   if (payload?.webId) {
     return { webId: payload.webId, error: null };
+  }
+
+  // If 3-part JWT, verify against IdP's JWKS
+  const parts = token.split('.');
+  if (parts.length === 3) {
+    const jwtPayload = await verifyJwtFromIdp(token);
+    if (jwtPayload?.webId) {
+      return { webId: jwtPayload.webId, error: null };
+    }
+    return { webId: null, error: 'Invalid or unverifiable JWT token' };
   }
 
   return { webId: null, error: 'Invalid token' };

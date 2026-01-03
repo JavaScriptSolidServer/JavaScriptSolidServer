@@ -226,15 +226,22 @@ describe('WAC Integration', () => {
 
   describe('ACL Files', () => {
     it('should create root .acl on pod creation', async () => {
-      const res = await request('/wactest/.acl');
+      // ACL files require Control permission - must be authenticated as pod owner
+      const res = await request('/wactest/.acl', { auth: 'wactest' });
 
       assertStatus(res, 200);
       const content = await res.json();
       assert.ok(content['@graph'], 'Should be JSON-LD');
     });
 
+    it('should deny unauthenticated access to .acl files', async () => {
+      // Security: ACL files must require authentication
+      const res = await request('/wactest/.acl');
+      assertStatus(res, 401);
+    });
+
     it('should create private folder .acl', async () => {
-      const res = await request('/wactest/private/.acl');
+      const res = await request('/wactest/private/.acl', { auth: 'wactest' });
 
       assertStatus(res, 200);
       const content = await res.json();
@@ -248,7 +255,7 @@ describe('WAC Integration', () => {
     });
 
     it('should create inbox .acl with public append', async () => {
-      const res = await request('/wactest/inbox/.acl');
+      const res = await request('/wactest/inbox/.acl', { auth: 'wactest' });
 
       assertStatus(res, 200);
       const content = await res.json();

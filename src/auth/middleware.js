@@ -6,6 +6,7 @@
 
 import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
+import { AccessMode } from '../wac/parser.js';
 import * as storage from '../storage/filesystem.js';
 import { getEffectiveUrlPath } from '../utils/url.js';
 
@@ -21,14 +22,18 @@ export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];
   const method = request.method;
 
-  // Skip auth for .acl files (they need special handling)
-  // and for OPTIONS (CORS preflight)
-  if (urlPath.endsWith('.acl') || method === 'OPTIONS') {
+  // OPTIONS is always allowed (CORS preflight)
+  if (method === 'OPTIONS') {
     return { authorized: true, webId: null, wacAllow: 'user="read write append control", public="read write append"', authError: null };
   }
 
   // Get WebID from token (supports both simple and Solid-OIDC tokens)
   const { webId, error: authError } = await getWebIdFromRequestAsync(request);
+
+  // ACL files require special handling - check Control permission on protected resource
+  if (urlPath.endsWith('.acl')) {
+    return authorizeAclAccess(request, urlPath, method, webId, authError);
+  }
 
   // Log auth failures for debugging
   if (authError) {
@@ -113,4 +118,40 @@ export function handleUnauthorized(reply, isAuthenticated, wacAllow, authError =
       message: 'Access denied'
     });
   }
+}
+
+/**
+ * Authorize access to ACL files
+ * ACL files require acl:Control permission on the resource they protect
+ *
+ * @param {object} request - Fastify request
+ * @param {string} urlPath - URL path to the ACL file
+ * @param {string} method - HTTP method
+ * @param {string|null} webId - Authenticated user's WebID
+ * @param {string|null} authError - Authentication error if any
+ * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string, authError: string|null}>}
+ */
+async function authorizeAclAccess(request, urlPath, method, webId, authError) {
+  // Determine the protected resource URL
+  // /foo/.acl protects /foo/ (container)
+  // /foo/bar.acl protects /foo/bar (resource)
+  const protectedPath = urlPath.replace(/\.acl$/, '');
+  const isProtectedContainer = protectedPath.endsWith('/');
+  const protectedUrl = `${request.protocol}://${request.hostname}${protectedPath}`;
+
+  // Get storage path for the protected resource
+  const storagePath = getEffectiveUrlPath(request).replace(/\.acl$/, '');
+
+  // All ACL operations require Control permission on the protected resource
+  // This is stricter than the Solid spec (which allows Read for reading ACLs)
+  // but simpler and more secure
+  const { allowed, wacAllow } = await checkAccess({
+    resourceUrl: protectedUrl,
+    resourcePath: storagePath,
+    isContainer: isProtectedContainer,
+    agentWebId: webId,
+    requiredMode: AccessMode.CONTROL
+  });
+
+  return { authorized: allowed, webId, wacAllow, authError };
 }
