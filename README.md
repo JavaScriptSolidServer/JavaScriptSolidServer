@@ -24,7 +24,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Solid-OIDC Identity Provider** - Built-in IdP with DPoP, RS256/ES256, dynamic registration
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **NSS-style Registration** - Username/password auth compatible with Solid apps
-- **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures
+- **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures, did:nostr → WebID resolution
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
@@ -387,6 +387,35 @@ git add .acl && git commit -m "Add ACL"
 
 See [git-credential-nostr](https://github.com/JavaScriptSolidServer/git-credential-nostr) for more details.
 
+### Linking Nostr to WebID (did:nostr)
+
+Bridge your Nostr identity to a Solid WebID for seamless authentication:
+
+**Step 1:** Add your WebID to your Nostr profile (kind 0 event):
+```json
+{
+  "name": "alice",
+  "alsoKnownAs": ["https://solid.social/alice/profile/card#me"]
+}
+```
+
+**Step 2:** Add the did:nostr link to your WebID profile:
+```json
+{
+  "@id": "#me",
+  "owl:sameAs": "did:nostr:<your-64-char-hex-pubkey>"
+}
+```
+
+**How it works:**
+1. NIP-98 signature is verified (existing flow)
+2. DID document is fetched from `nostr.social/.well-known/did/nostr/<pubkey>.json`
+3. `alsoKnownAs` is checked for a WebID URL
+4. WebID profile is fetched and `owl:sameAs` verified
+5. If bidirectional link exists → authenticated as WebID
+
+This enables Nostr users to access their Solid pods using existing NIP-07 browser extensions.
+
 ## Invite-Only Registration
 
 Control who can create accounts by requiring invite codes:
@@ -735,7 +764,8 @@ src/
 │   ├── middleware.js     # Auth hook
 │   ├── token.js          # Simple token auth
 │   ├── solid-oidc.js     # DPoP verification
-│   └── nostr.js          # NIP-98 Nostr authentication
+│   ├── nostr.js          # NIP-98 Nostr authentication
+│   └── did-nostr.js      # did:nostr → WebID resolution
 ├── wac/
 │   ├── parser.js         # ACL parsing
 │   └── checker.js        # Permission checking
