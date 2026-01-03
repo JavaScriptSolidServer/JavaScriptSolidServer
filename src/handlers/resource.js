@@ -1,7 +1,7 @@
 import * as storage from '../storage/filesystem.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
-import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath } from '../utils/url.js';
+import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
 import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
 import {
@@ -86,7 +86,7 @@ export async function handleGet(request, reply) {
           const htmlStr = content.toString();
           const jsonLdMatch = htmlStr.match(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/);
           if (jsonLdMatch) {
-            const jsonLd = JSON.parse(jsonLdMatch[1]);
+            const jsonLd = safeJsonParse(jsonLdMatch[1]);
 
             if (wantsTurtle) {
               // Convert to Turtle
@@ -268,7 +268,7 @@ export async function handleGet(request, reply) {
       try {
         const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
         if (jsonLdMatch) {
-          const jsonLd = JSON.parse(jsonLdMatch[1]);
+          const jsonLd = safeJsonParse(jsonLdMatch[1]);
           const { content: turtleContent } = await fromJsonLd(jsonLd, 'text/turtle', resourceUrl, true);
 
           const headers = getAllHeaders({
@@ -291,7 +291,7 @@ export async function handleGet(request, reply) {
     } else if (isRdfContentType(storedContentType)) {
       // Plain JSON-LD file
       try {
-        const jsonLd = JSON.parse(contentStr);
+        const jsonLd = safeJsonParse(contentStr);
         // Use Turtle if URL ends with .ttl, otherwise use Accept header preference
         const targetType = wantsTurtle ? 'text/turtle' : selectContentType(acceptHeader, connegEnabled);
         const { content: outputContent, contentType: outputType } = await fromJsonLd(
@@ -650,7 +650,7 @@ export async function handlePatch(request, reply) {
       }
 
       try {
-        document = JSON.parse(jsonLdMatch[1]);
+        document = safeJsonParse(jsonLdMatch[1]);
         // Save the HTML parts for re-embedding after patch
         const jsonLdStart = contentStr.indexOf(jsonLdMatch[0]) + jsonLdMatch[0].indexOf('>') + 1;
         const jsonLdEnd = jsonLdStart + jsonLdMatch[1].length;
@@ -667,7 +667,7 @@ export async function handlePatch(request, reply) {
     } else {
       // Try to parse as JSON-LD first
       try {
-        document = JSON.parse(contentStr);
+        document = safeJsonParse(contentStr);
       } catch (e) {
         // Not JSON - might be Turtle, handle with RDF store for SPARQL Update
         if (isSparqlUpdate) {

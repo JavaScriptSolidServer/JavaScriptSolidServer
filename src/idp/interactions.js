@@ -8,6 +8,9 @@ import { loginPage, consentPage, errorPage, registerPage } from './views.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 
+// Security: Maximum body size for IdP form submissions (1MB)
+const MAX_BODY_SIZE = 1024 * 1024;
+
 /**
  * Handle GET /idp/interaction/:uid
  * Shows login or consent page based on interaction state
@@ -56,6 +59,10 @@ export async function handleLogin(request, reply, provider) {
   const contentType = request.headers['content-type'] || '';
 
   if (Buffer.isBuffer(parsedBody)) {
+    // Security: check body size
+    if (parsedBody.length > MAX_BODY_SIZE) {
+      return reply.code(413).type('text/html').send(errorPage('Request Too Large', 'Request body exceeds maximum size.'));
+    }
     const bodyStr = parsedBody.toString();
     if (contentType.includes('application/json')) {
       try {
@@ -69,6 +76,10 @@ export async function handleLogin(request, reply, provider) {
       parsedBody = Object.fromEntries(params.entries());
     }
   } else if (typeof parsedBody === 'string') {
+    // Security: check body size
+    if (parsedBody.length > MAX_BODY_SIZE) {
+      return reply.code(413).type('text/html').send(errorPage('Request Too Large', 'Request body exceeds maximum size.'));
+    }
     // Body might be a string for form-urlencoded
     if (contentType.includes('application/json')) {
       try {
@@ -315,6 +326,10 @@ export async function handleRegisterPost(request, reply, issuer) {
   const contentType = request.headers['content-type'] || '';
 
   if (Buffer.isBuffer(parsedBody)) {
+    // Security: check body size
+    if (parsedBody.length > MAX_BODY_SIZE) {
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.'));
+    }
     const bodyStr = parsedBody.toString();
     if (contentType.includes('application/json')) {
       try {
@@ -327,6 +342,10 @@ export async function handleRegisterPost(request, reply, issuer) {
       parsedBody = Object.fromEntries(params.entries());
     }
   } else if (typeof parsedBody === 'string') {
+    // Security: check body size
+    if (parsedBody.length > MAX_BODY_SIZE) {
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.'));
+    }
     const params = new URLSearchParams(parsedBody);
     parsedBody = Object.fromEntries(params.entries());
   }

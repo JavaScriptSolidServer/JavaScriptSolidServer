@@ -55,6 +55,18 @@ export async function handlePost(request, reply) {
   const slug = request.headers.slug;
   const linkHeader = request.headers.link || '';
 
+  // Security: validate Slug header
+  if (slug) {
+    // Maximum length check
+    if (slug.length > 255) {
+      return reply.code(400).send({ error: 'Slug header too long (max 255 characters)' });
+    }
+    // Character validation - allow alphanumeric, dots, dashes, underscores
+    if (!/^[a-zA-Z0-9._-]+$/.test(slug)) {
+      return reply.code(400).send({ error: 'Invalid Slug format. Use only alphanumeric characters, dots, dashes, and underscores.' });
+    }
+  }
+
   // Check if creating a container (Link header contains ldp:Container or ldp:BasicContainer)
   const isCreatingContainer = linkHeader.includes('Container') || linkHeader.includes('BasicContainer');
 

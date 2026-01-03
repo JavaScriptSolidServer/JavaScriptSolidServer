@@ -7,6 +7,7 @@
  */
 
 import { turtleToJsonLd, jsonLdToTurtle } from './turtle.js';
+import { safeJsonParse } from '../utils/url.js';
 
 // RDF content types we support
 export const RDF_TYPES = {
@@ -137,7 +138,7 @@ export async function toJsonLd(content, contentType, baseUri, connegEnabled = fa
 
   // JSON-LD or JSON
   if (type === RDF_TYPES.JSON_LD || type === 'application/json' || !type) {
-    return JSON.parse(text);
+    return safeJsonParse(text);
   }
 
   // Turtle/N3 - only if conneg enabled

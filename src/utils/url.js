@@ -19,16 +19,30 @@ export function updateDataRoot() {
  * Convert URL path to filesystem path
  * @param {string} urlPath - The URL path (e.g., /alice/profile/)
  * @returns {string} - Filesystem path
+ * @throws {Error} - If path traversal is detected
  */
 export function urlToPath(urlPath) {
   // Normalize: remove leading slash, decode URI
   let normalized = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
   normalized = decodeURIComponent(normalized);
 
-  // Security: prevent path traversal
-  normalized = normalized.replace(/\.\./g, '');
+  // Security: remove path traversal attempts (multiple passes for ....// bypass)
+  let previous;
+  do {
+    previous = normalized;
+    normalized = normalized.replace(/\.\./g, '');
+  } while (normalized !== previous);
 
-  return path.join(getDataRoot(), normalized);
+  // Resolve to absolute path and verify it's within DATA_ROOT
+  const dataRoot = path.resolve(getDataRoot());
+  const resolved = path.resolve(dataRoot, normalized);
+
+  // Ensure resolved path is within dataRoot (prevent traversal via path.resolve tricks)
+  if (!resolved.startsWith(dataRoot + path.sep) && resolved !== dataRoot) {
+    throw new Error('Path traversal detected');
+  }
+
+  return resolved;
 }
 
 /**
@@ -37,17 +51,33 @@ export function urlToPath(urlPath) {
  * @param {string} urlPath - The URL path (e.g., /public/file.txt)
  * @param {string} podName - The pod name from subdomain (e.g., "alice")
  * @returns {string} - Filesystem path (e.g., DATA_ROOT/alice/public/file.txt)
+ * @throws {Error} - If path traversal is detected
  */
 export function urlToPathWithPod(urlPath, podName) {
   // Normalize: remove leading slash, decode URI
   let normalized = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
   normalized = decodeURIComponent(normalized);
 
-  // Security: prevent path traversal
-  normalized = normalized.replace(/\.\./g, '');
+  // Security: remove path traversal attempts (multiple passes for ....// bypass)
+  let previous;
+  do {
+    previous = normalized;
+    normalized = normalized.replace(/\.\./g, '');
+  } while (normalized !== previous);
 
-  // Prepend pod name to path
-  return path.join(getDataRoot(), podName, normalized);
+  // Also sanitize podName
+  let safePodName = podName.replace(/\.\./g, '');
+
+  // Resolve to absolute path and verify it's within DATA_ROOT
+  const dataRoot = path.resolve(getDataRoot());
+  const resolved = path.resolve(dataRoot, safePodName, normalized);
+
+  // Ensure resolved path is within dataRoot (prevent traversal via path.resolve tricks)
+  if (!resolved.startsWith(dataRoot + path.sep) && resolved !== dataRoot) {
+    throw new Error('Path traversal detected');
+  }
+
+  return resolved;
 }
 
 /**
@@ -160,4 +190,21 @@ export function isRdfContentType(contentType) {
     'application/trig'
   ];
   return rdfTypes.includes(contentType);
+}
+
+// Security: Maximum JSON size for parsing (10MB)
+const MAX_JSON_SIZE = 10 * 1024 * 1024;
+
+/**
+ * Safely parse JSON with size limit to prevent DoS
+ * @param {string} jsonString - The JSON string to parse
+ * @param {number} maxSize - Maximum allowed size (default 10MB)
+ * @returns {object} - Parsed JSON object
+ * @throws {Error} - If JSON is too large or invalid
+ */
+export function safeJsonParse(jsonString, maxSize = MAX_JSON_SIZE) {
+  if (jsonString.length > maxSize) {
+    throw new Error(`JSON exceeds maximum size of ${maxSize} bytes`);
+  }
+  return JSON.parse(jsonString);
 }

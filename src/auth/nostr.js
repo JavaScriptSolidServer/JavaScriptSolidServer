@@ -76,6 +76,9 @@ export function extractNostrToken(authHeader) {
   return null;
 }
 
+// Maximum size for Nostr event (64KB should be plenty for auth events)
+const MAX_NOSTR_EVENT_SIZE = 64 * 1024;
+
 /**
  * Decode NIP-98 event from base64 token
  * @param {string} token - Base64 encoded event
@@ -83,7 +86,15 @@ export function extractNostrToken(authHeader) {
  */
 function decodeEvent(token) {
   try {
+    // Security: limit token size before decoding
+    if (token.length > MAX_NOSTR_EVENT_SIZE) {
+      return null;
+    }
     const decoded = Buffer.from(token, 'base64').toString('utf8');
+    // Security: limit decoded size before parsing
+    if (decoded.length > MAX_NOSTR_EVENT_SIZE) {
+      return null;
+    }
     return JSON.parse(decoded);
   } catch {
     return null;

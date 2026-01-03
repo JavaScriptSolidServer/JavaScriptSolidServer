@@ -12,6 +12,10 @@
 
 import { resourceEvents } from './events.js';
 
+// Security limits
+const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
+const MAX_URL_LENGTH = 2048;
+
 // Track subscriptions: WebSocket -> Set<url>
 const subscriptions = new Map();
 
@@ -38,6 +42,19 @@ export function handleWebSocket(socket, request) {
     if (msg.startsWith('sub ')) {
       const url = msg.slice(4).trim();
       if (url) {
+        // Security: validate URL length
+        if (url.length > MAX_URL_LENGTH) {
+          socket.send('error: URL too long');
+          return;
+        }
+
+        // Security: check subscription limit
+        const socketSubs = subscriptions.get(socket);
+        if (socketSubs && socketSubs.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION) {
+          socket.send('error: Subscription limit exceeded');
+          return;
+        }
+
         subscribe(socket, url);
         socket.send(`ack ${url}`);
       }

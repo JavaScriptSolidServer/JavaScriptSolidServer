@@ -290,20 +290,35 @@ export function createServer(options = {}) {
     }
   }
 
+  // Rate limit configuration for write operations
+  // Protects against resource exhaustion and abuse
+  const writeRateLimit = {
+    config: {
+      rateLimit: {
+        max: 60,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.webId || request.ip
+      }
+    }
+  };
+
   // LDP routes - using wildcard routing
+  // Read operations - no rate limit (handled by bodyLimit)
   fastify.get('/*', handleGet);
   fastify.head('/*', handleHead);
-  fastify.put('/*', handlePut);
-  fastify.delete('/*', handleDelete);
-  fastify.post('/*', handlePost);
-  fastify.patch('/*', handlePatch);
   fastify.options('/*', handleOptions);
+
+  // Write operations - rate limited
+  fastify.put('/*', writeRateLimit, handlePut);
+  fastify.delete('/*', writeRateLimit, handleDelete);
+  fastify.post('/*', writeRateLimit, handlePost);
+  fastify.patch('/*', writeRateLimit, handlePatch);
 
   // Root route
   fastify.get('/', handleGet);
   fastify.head('/', handleHead);
   fastify.options('/', handleOptions);
-  fastify.post('/', handlePost);
+  fastify.post('/', writeRateLimit, handlePost);
 
   return fastify;
 }

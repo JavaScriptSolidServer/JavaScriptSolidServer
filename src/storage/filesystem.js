@@ -133,8 +133,14 @@ export async function generateUniqueFilename(containerPath, slug, isDir = false)
   const basePath = urlToPath(containerPath);
   let name = slug || crypto.randomUUID();
 
-  // Remove any path traversal attempts
+  // Security: Remove any path traversal attempts and problematic characters
   name = name.replace(/[/\\]/g, '-');
+  name = name.replace(/\.\./g, ''); // Remove .. sequences
+
+  // Security: Limit filename length
+  if (name.length > 255) {
+    name = name.substring(0, 255);
+  }
 
   let candidate = path.join(basePath, name);
   let counter = 1;
