@@ -109,12 +109,14 @@ export async function createProvider(issuer) {
         maxAge: 14 * 24 * 60 * 60 * 1000, // 14 days
         httpOnly: true,
         sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production' || issuer.startsWith('https://'),
         path: '/',
       },
       short: {
         signed: true,
         httpOnly: true,
         sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production' || issuer.startsWith('https://'),
         path: '/',
       },
     },
