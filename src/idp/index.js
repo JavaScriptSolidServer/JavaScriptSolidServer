@@ -209,8 +209,16 @@ export async function idpPlugin(fastify, options) {
     return handleCredentialsInfo(request, reply, issuer);
   });
 
-  // POST credentials - obtain tokens
-  fastify.post('/idp/credentials', async (request, reply) => {
+  // POST credentials - obtain tokens (with rate limiting for brute force protection)
+  fastify.post('/idp/credentials', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return handleCredentials(request, reply, issuer);
   });
 
@@ -224,12 +232,29 @@ export async function idpPlugin(fastify, options) {
 
   // POST interaction - direct form submission (CTH compatibility)
   // This handles form submissions directly to /idp/interaction/:uid
-  fastify.post('/idp/interaction/:uid', async (request, reply) => {
+  // Rate limited to prevent brute force attacks
+  fastify.post('/idp/interaction/:uid', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return handleLogin(request, reply, provider);
   });
 
-  // POST login (explicit path)
-  fastify.post('/idp/interaction/:uid/login', async (request, reply) => {
+  // POST login (explicit path) - rate limited
+  fastify.post('/idp/interaction/:uid/login', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return handleLogin(request, reply, provider);
   });
 
@@ -248,7 +273,16 @@ export async function idpPlugin(fastify, options) {
     return handleRegisterGet(request, reply);
   });
 
-  fastify.post('/idp/register', async (request, reply) => {
+  // Registration - rate limited to prevent spam accounts
+  fastify.post('/idp/register', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 hour',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return handleRegisterPost(request, reply, issuer);
   });
 

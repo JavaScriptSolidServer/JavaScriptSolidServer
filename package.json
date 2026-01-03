@@ -1,6 +1,6 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.50",
+  "version": "0.0.51",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@fastify/middie": "^8.3.3",
+    "@fastify/rate-limit": "^9.1.0",
     "@fastify/websocket": "^8.3.1",
     "bcrypt": "^6.0.0",
     "commander": "^14.0.2",

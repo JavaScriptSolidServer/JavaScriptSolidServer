@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import rateLimit from '@fastify/rate-limit';
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -127,6 +128,20 @@ export function createServer(options = {}) {
     fastify.register(idpPlugin, { issuer: idpIssuer });
   }
 
+  // Register rate limiting plugin
+  // Protects against brute force attacks and resource exhaustion
+  fastify.register(rateLimit, {
+    global: false, // Don't apply globally, only to specific routes
+    max: 100, // Default max requests per window
+    timeWindow: '1 minute',
+    // Custom error response
+    errorResponseBuilder: (request, context) => ({
+      error: 'Too Many Requests',
+      message: `Rate limit exceeded. Try again in ${Math.ceil(context.after / 1000)} seconds.`,
+      retryAfter: Math.ceil(context.after / 1000)
+    })
+  });
+
   // Global CORS preflight
   fastify.addHook('onRequest', async (request, reply) => {
     // Add CORS headers to all responses
@@ -224,8 +239,17 @@ export function createServer(options = {}) {
     }
   });
 
-  // Pod creation endpoint
-  fastify.post('/.pods', handleCreatePod);
+  // Pod creation endpoint with rate limiting
+  // Limit: 5 pods per IP per hour to prevent resource exhaustion and namespace squatting
+  fastify.post('/.pods', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 hour',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, handleCreatePod);
 
   // Mashlib static files (served from root like NSS does)
   if (mashlibEnabled) {

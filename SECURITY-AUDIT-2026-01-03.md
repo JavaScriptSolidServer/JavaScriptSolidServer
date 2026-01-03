@@ -193,14 +193,19 @@ const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
 | JWT signature bypass | Critical | 🟢 Fixed | v0.0.49 |
 | SSRF in OIDC discovery | Critical | 🟢 Fixed | v0.0.50 |
 | SSRF in client document fetch | Critical | 🟢 Fixed | v0.0.50 |
-| Unauthenticated pod creation | High | 🔴 Open | - |
-| Default token secret | High | 🔴 Open | - |
-| No rate limiting | Medium | 🔴 Open | - |
+| Unauthenticated pod creation | High | 🟢 Fixed | v0.0.51 |
+| Default token secret | High | 🟢 Fixed | v0.0.51 |
+| No rate limiting | Medium | 🟢 Fixed | v0.0.51 |
 | Information disclosure | Medium | 🔴 Open | - |
 
 ---
 
 ## Changelog
+
+### v0.0.51 (2026-01-03)
+- **Fixed pod creation abuse**: Rate limited to 5 pods per IP per hour
+- **Fixed default token secret**: Production (NODE_ENV=production) now requires TOKEN_SECRET env var
+- **Added rate limiting**: Login endpoints limited to 10 attempts/min, registration to 5/hour
 
 ### v0.0.50 (2026-01-03)
 - **Fixed SSRF in OIDC discovery**: Issuer URLs are now validated before fetching (HTTPS required, private IPs blocked)

@@ -11,8 +11,29 @@ import crypto from 'crypto';
 import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
 import { verifyNostrAuth, hasNostrAuth } from './nostr.js';
 
-// Secret for signing tokens (in production, use env var)
-const SECRET = process.env.TOKEN_SECRET || 'dev-secret-change-in-production';
+// Secret for signing tokens
+// SECURITY: In production, TOKEN_SECRET must be set via environment variable
+const getSecret = () => {
+  if (process.env.TOKEN_SECRET) {
+    return process.env.TOKEN_SECRET;
+  }
+
+  // In production (NODE_ENV=production), require explicit secret
+  if (process.env.NODE_ENV === 'production') {
+    console.error('SECURITY ERROR: TOKEN_SECRET environment variable must be set in production');
+    console.error('Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    process.exit(1);
+  }
+
+  // In development, generate a random secret per process (tokens won't survive restarts)
+  const devSecret = crypto.randomBytes(32).toString('hex');
+  console.warn('WARNING: No TOKEN_SECRET set. Using random secret (tokens will not survive restarts).');
+  console.warn('Set TOKEN_SECRET environment variable for persistent tokens.');
+  return devSecret;
+};
+
+// Initialize secret once at module load
+const SECRET = getSecret();
 
 /**
  * Create a simple token for a WebID
