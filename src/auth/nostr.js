@@ -187,11 +187,9 @@ export async function verifyNostrAuth(request) {
 
   // Validate method tag matches request method
   // For git clients: allow '*' as wildcard method
+  // If method tag is missing, infer from HTTP request (lenient mode)
   const eventMethod = getTagValue(event, 'method');
-  if (!eventMethod) {
-    return { webId: null, error: 'Missing method tag in event' };
-  }
-  if (eventMethod !== '*' && eventMethod.toUpperCase() !== request.method.toUpperCase()) {
+  if (eventMethod && eventMethod !== '*' && eventMethod.toUpperCase() !== request.method.toUpperCase()) {
     return { webId: null, error: `Method mismatch: expected ${request.method}, got ${eventMethod}` };
   }
 
@@ -216,6 +214,19 @@ export async function verifyNostrAuth(request) {
   // Validate pubkey exists
   if (!event.pubkey || typeof event.pubkey !== 'string' || event.pubkey.length !== 64) {
     return { webId: null, error: 'Invalid or missing pubkey' };
+  }
+
+  // Compute event id if missing (lenient mode for nosdav compatibility)
+  if (!event.id) {
+    const serialized = JSON.stringify([
+      0,
+      event.pubkey,
+      event.created_at,
+      event.kind,
+      event.tags,
+      event.content
+    ]);
+    event.id = crypto.createHash('sha256').update(serialized).digest('hex');
   }
 
   // Verify Schnorr signature
