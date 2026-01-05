@@ -11,7 +11,19 @@
  */
 export function createActorHandler(config, keypair) {
   return (request) => {
-    const protocol = request.headers['x-forwarded-proto'] || request.protocol
+    // Check various proxy headers for protocol detection
+    let protocol = request.headers['x-forwarded-proto']
+    if (!protocol) {
+      // Cloudflare uses cf-visitor: {"scheme":"https"}
+      const cfVisitor = request.headers['cf-visitor']
+      if (cfVisitor) {
+        try {
+          const parsed = JSON.parse(cfVisitor)
+          protocol = parsed.scheme
+        } catch { /* ignore */ }
+      }
+    }
+    protocol = protocol || request.protocol
     const host = request.headers['x-forwarded-host'] || request.hostname
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`

@@ -41,16 +41,32 @@ export async function activityPubPlugin(fastify, options = {}) {
   // Decorate fastify with AP config
   fastify.decorate('apConfig', config)
 
+  // Helper to detect protocol from proxy headers
+  const getProtocol = (request) => {
+    let protocol = request.headers['x-forwarded-proto']
+    if (!protocol) {
+      // Cloudflare uses cf-visitor: {"scheme":"https"}
+      const cfVisitor = request.headers['cf-visitor']
+      if (cfVisitor) {
+        try {
+          const parsed = JSON.parse(cfVisitor)
+          protocol = parsed.scheme
+        } catch { /* ignore */ }
+      }
+    }
+    return protocol || request.protocol
+  }
+
   // Helper to build actor ID from request
   const getActorId = (request) => {
-    const protocol = request.headers['x-forwarded-proto'] || request.protocol
+    const protocol = getProtocol(request)
     const host = request.headers['x-forwarded-host'] || request.hostname
     return `${protocol}://${host}/profile/card#me`
   }
 
   // Helper to get base URL
   const getBaseUrl = (request) => {
-    const protocol = request.headers['x-forwarded-proto'] || request.protocol
+    const protocol = getProtocol(request)
     const host = request.headers['x-forwarded-host'] || request.hostname
     return `${protocol}://${host}`
   }
