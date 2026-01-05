@@ -217,7 +217,7 @@ export function createServer(options = {}) {
     if (wantsAP && actorHandler) {
       const actor = actorHandler(request);
       return reply
-        .header('Content-Type', 'application/activity+json')
+        .type('application/activity+json')
         .send(actor);
     }
   });
