@@ -315,12 +315,12 @@ function getErrorPage(statusCode, isAuthenticated, request) {
       <p class="subtitle">${subtitle}</p>
 
       <div class="actions">
-        ${is401 ? `<a href="${baseUrl}/.account/login/password" class="btn btn-primary">
-          Sign In
-        </a>` : ''}
-        <a href="${baseUrl}/" class="btn btn-secondary">
+        <a href="${baseUrl}/" class="btn btn-primary">
           Go to Homepage
         </a>
+        ${is401 ? `<a href="${baseUrl}/idp/register" class="btn btn-secondary">
+          Create Account
+        </a>` : ''}
       </div>
 
       <div class="divider"><span>What is this?</span></div>
@@ -330,7 +330,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
         <p>
           This is a <strong>Solid Pod</strong> — a personal data store where you control your own data.
           Resources can be private, shared with specific people, or public.
-          ${is401 ? 'Sign in with your WebID to access protected content.' : 'Ask the owner to grant you access.'}
+          ${is401 ? "To access protected content, you'll need to sign in using a Solid app (like a data browser) with your WebID." : 'Ask the owner to grant you access.'}
         </p>
       </div>
 
