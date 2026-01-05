@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.57)
+### Implemented (v0.0.59)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -29,6 +29,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
 - **Git HTTP Backend** - Clone and push to containers via `git` protocol
+- **Nostr Relay** - Integrated NIP-01 relay on the same port (`wss://your.pod/relay`)
 - **Invite-Only Registration** - CLI-managed invite codes for controlled signups
 - **Storage Quotas** - Per-user storage limits with CLI management
 - **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
@@ -103,6 +104,9 @@ jss --help             # Show help
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `--git` | Enable Git HTTP backend | false |
+| `--nostr` | Enable Nostr relay | false |
+| `--nostr-path <path>` | Nostr relay WebSocket path | /relay |
+| `--nostr-max-events <n>` | Max events in relay memory | 1000 |
 | `--invite-only` | Require invite code for registration | false |
 | `--default-quota <size>` | Default storage quota per pod (e.g., 50MB) | 50MB |
 | `-q, --quiet` | Suppress logs | false |
@@ -119,6 +123,7 @@ export JSS_CONNEG=true
 export JSS_SUBDOMAINS=true
 export JSS_BASE_DOMAIN=example.com
 export JSS_MASHLIB=true
+export JSS_NOSTR=true
 export JSS_INVITE_ONLY=true
 export JSS_DEFAULT_QUOTA=100MB
 jss start
