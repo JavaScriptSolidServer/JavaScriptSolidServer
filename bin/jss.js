@@ -59,6 +59,10 @@ program
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
+  .option('--nostr', 'Enable Nostr relay')
+  .option('--no-nostr', 'Disable Nostr relay')
+  .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
+  .option('--nostr-max-events <n>', 'Max events in relay memory (default: 1000)', parseInt)
   .option('--invite-only', 'Require invite code for registration')
   .option('--no-invite-only', 'Allow open registration')
   .option('-q, --quiet', 'Suppress log output')
@@ -103,6 +107,9 @@ program
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
         git: config.git,
+        nostr: config.nostr,
+        nostrPath: config.nostrPath,
+        nostrMaxEvents: config.nostrMaxEvents,
         inviteOnly: config.inviteOnly,
       });
 
@@ -123,6 +130,7 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.git) console.log('  Git: enabled (clone/push support)');
+        if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.inviteOnly) console.log('  Registration: invite-only');
         console.log('\n  Press Ctrl+C to stop\n');
       }

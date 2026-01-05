@@ -45,6 +45,11 @@ export const defaults = {
   // Git HTTP backend
   git: false,
 
+  // Nostr relay
+  nostr: false,
+  nostrPath: '/relay',
+  nostrMaxEvents: 1000,
+
   // Invite-only registration
   inviteOnly: false,
 
@@ -81,6 +86,9 @@ const envMap = {
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
   JSS_GIT: 'git',
+  JSS_NOSTR: 'nostr',
+  JSS_NOSTR_PATH: 'nostrPath',
+  JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
   JSS_INVITE_ONLY: 'inviteOnly',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
 };
@@ -109,7 +117,7 @@ function parseEnvValue(value, key) {
   if (value.toLowerCase() === 'false') return false;
 
   // Numeric values for known numeric keys
-  if (key === 'port' && !isNaN(value)) {
+  if ((key === 'port' || key === 'nostrMaxEvents') && !isNaN(value)) {
     return parseInt(value, 10);
   }
 

@@ -11,6 +11,7 @@ import { notificationsPlugin } from './notifications/index.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { AccessMode } from './wac/parser.js';
+import { registerNostrRelay } from './nostr/relay.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +28,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {boolean} options.subdomains - Enable subdomain-based pods for XSS protection (default false)
  * @param {string} options.baseDomain - Base domain for subdomain pods (e.g., "example.com")
  * @param {boolean} options.git - Enable Git HTTP backend for clone/push (default false)
+ * @param {boolean} options.nostr - Enable Nostr relay (default false)
+ * @param {string} options.nostrPath - Nostr relay WebSocket path (default '/relay')
+ * @param {number} options.nostrMaxEvents - Max events in relay memory (default 1000)
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -46,6 +50,10 @@ export function createServer(options = {}) {
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
+  // Nostr relay is OFF by default
+  const nostrEnabled = options.nostr ?? false;
+  const nostrPath = options.nostrPath ?? '/relay';
+  const nostrMaxEvents = options.nostrMaxEvents ?? 1000;
   // Invite-only registration is OFF by default - open registration
   const inviteOnly = options.inviteOnly ?? false;
   // Default storage quota per pod (50MB default, 0 = unlimited)
@@ -134,6 +142,16 @@ export function createServer(options = {}) {
     fastify.register(idpPlugin, { issuer: idpIssuer, inviteOnly });
   }
 
+  // Register Nostr relay if enabled
+  if (nostrEnabled) {
+    fastify.register(async (instance) => {
+      await registerNostrRelay(instance, {
+        path: nostrPath,
+        maxEvents: nostrMaxEvents
+      });
+    });
+  }
+
   // Register rate limiting plugin
   // Protects against brute force attacks and resource exhaustion
   fastify.register(rateLimit, {
@@ -219,13 +237,14 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, and git
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, and git
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     if (request.url === '/.pods' ||
         request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
         request.url.startsWith('/.well-known/') ||
+        (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
