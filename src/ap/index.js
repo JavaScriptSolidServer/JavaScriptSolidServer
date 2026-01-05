@@ -43,6 +43,7 @@ export async function activityPubPlugin(fastify, options = {}) {
 
   // Helper to detect protocol from proxy headers
   const getProtocol = (request) => {
+    // Check X-Forwarded-Proto first
     let protocol = request.headers['x-forwarded-proto']
     if (!protocol) {
       // Cloudflare uses cf-visitor: {"scheme":"https"}
@@ -53,6 +54,10 @@ export async function activityPubPlugin(fastify, options = {}) {
           protocol = parsed.scheme
         } catch { /* ignore */ }
       }
+    }
+    // If still no protocol and hostname looks like a public domain, assume https
+    if (!protocol && request.hostname && !request.hostname.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
+      protocol = 'https'
     }
     return protocol || request.protocol
   }

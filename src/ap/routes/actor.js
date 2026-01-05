@@ -23,8 +23,12 @@ export function createActorHandler(config, keypair) {
         } catch { /* ignore */ }
       }
     }
-    protocol = protocol || request.protocol
+    // If still no protocol and hostname looks like a public domain, assume https
     const host = request.headers['x-forwarded-host'] || request.hostname
+    if (!protocol && host && !host.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
+      protocol = 'https'
+    }
+    protocol = protocol || request.protocol
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`
     const actorId = `${profileUrl}#me`
