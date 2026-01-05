@@ -130,33 +130,23 @@ export async function activityPubPlugin(fastify, options = {}) {
   // Actor endpoint - handle AP content negotiation for /profile/card
   const actorHandler = createActorHandler(config, keypair)
 
-  // Decorate request to track AP handling
-  fastify.decorateRequest('apHandled', false)
+  // Use onRequest hook instead of dedicated route to avoid blocking LDP
+  // This intercepts AP requests before the wildcard LDP routes
+  fastify.addHook('onRequest', async (request, reply) => {
+    if (request.method !== 'GET') return
+    if (request.url !== '/profile/card' && !request.url.startsWith('/profile/card?')) return
 
-  // Register dedicated GET route for /profile/card with AP content negotiation
-  // This needs to run BEFORE the wildcard LDP routes
-  fastify.get('/profile/card', {
-    // Run this handler first, before wildcard routes
-    preHandler: async (request, reply) => {
-      const accept = request.headers.accept || ''
-      const wantsAP = accept.includes('activity+json') ||
-                      accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"')
+    const accept = request.headers.accept || ''
+    const wantsAP = accept.includes('activity+json') ||
+                    accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"')
 
-      if (wantsAP) {
-        const actor = actorHandler(request)
-        request.apHandled = true
-        return reply
-          .header('Content-Type', 'application/activity+json')
-          .send(actor)
-      }
-      // If not AP, skip and let the request continue (but this route won't have a main handler)
-      // We return early - the request will 404 on this route but get caught by wildcard
+    if (wantsAP) {
+      const actor = actorHandler(request)
+      return reply
+        .header('Content-Type', 'application/activity+json')
+        .send(actor)
     }
-  }, async (request, reply) => {
-    // This handler won't be reached if AP was handled
-    // For non-AP requests, we need to pass through to LDP
-    // But we can't easily do that here, so we'll handle it differently
-    reply.callNotFound()
+    // Not AP - let LDP handle it
   })
 
   // Inbox endpoint
