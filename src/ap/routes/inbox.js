@@ -17,9 +17,10 @@ import { getKeyId } from '../keys.js'
 /**
  * Fetch remote actor (with caching)
  * @param {string} id - Actor URL
+ * @param {object} log - Logger instance (optional)
  * @returns {Promise<object|null>} Actor object or null
  */
-async function fetchActor(id) {
+async function fetchActor(id, log) {
   // Strip fragment for fetching
   const fetchUrl = id.replace(/#.*$/, '')
   const cached = getCachedActor(id)
@@ -27,14 +28,21 @@ async function fetchActor(id) {
 
   try {
     const response = await fetch(fetchUrl, {
-      headers: { 'Accept': 'application/activity+json' }
+      headers: {
+        'Accept': 'application/activity+json',
+        'User-Agent': 'JSS/1.0 (+https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)'
+      }
     })
-    if (!response.ok) return null
+    if (!response.ok) {
+      if (log) log.warn(`Actor fetch failed: ${response.status} ${response.statusText} for ${fetchUrl}`)
+      return null
+    }
 
     const actor = await response.json()
     cacheActor(actor)
     return actor
-  } catch {
+  } catch (err) {
+    if (log) log.error(`Actor fetch error for ${fetchUrl}: ${err.message}`)
     return null
   }
 }
@@ -66,7 +74,7 @@ async function verifySignature(request, body) {
   const actorUrl = keyId.replace(/#.*$/, '')
 
   // Fetch the actor to get their public key
-  const remoteActor = await fetchActor(actorUrl)
+  const remoteActor = await fetchActor(actorUrl, request.log)
   if (!remoteActor) {
     return { valid: false, reason: `Could not fetch actor: ${actorUrl}` }
   }
@@ -185,7 +193,7 @@ export function createInboxHandler(config, keypair) {
  * Handle Follow activity
  */
 async function handleFollow(activity, actorId, profileUrl, keypair, log) {
-  const followerActor = await fetchActor(activity.actor)
+  const followerActor = await fetchActor(activity.actor, log)
   if (!followerActor) {
     log.warn('Could not fetch follower actor')
     return
