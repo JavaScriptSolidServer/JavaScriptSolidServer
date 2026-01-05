@@ -123,10 +123,15 @@ export async function validateExternalUrl(urlString, options = {}) {
         }
       }
     } catch (err) {
-      // DNS resolution failed - could be a legitimate issue or attacker trying to bypass
-      // For security, we'll allow it through but log a warning
-      // The fetch will fail anyway if the host doesn't resolve
-      console.warn(`DNS resolution failed for ${hostname}: ${err.message}`);
+      // DNS resolution failed - this could be an attacker attempting to bypass SSRF
+      // protection via DNS manipulation or timing attacks.
+      // Security: block the request rather than allowing it through
+      console.warn(`SSRF protection: DNS resolution failed for ${hostname}: ${err.message}`);
+      return {
+        valid: false,
+        error: `DNS resolution failed for hostname: ${hostname}`,
+        url: null
+      };
     }
   }
 
