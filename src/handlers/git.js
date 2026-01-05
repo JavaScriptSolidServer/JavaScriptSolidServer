@@ -34,8 +34,9 @@ function extractRepoPath(urlPath) {
     .replace(/\/git-upload-pack$/, '')
     .replace(/\/git-receive-pack$/, '');
 
-  // Remove leading slash
-  return cleanPath.replace(/^\//, '') || null;
+  // Remove leading slash, use '.' for root
+  const result = cleanPath.replace(/^\//, '');
+  return result === '' ? '.' : result;
 }
 
 /**
