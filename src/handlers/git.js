@@ -1,6 +1,7 @@
 import { spawn, execSync } from 'child_process';
 import { existsSync, statSync, mkdirSync, writeFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
+import { getDataRoot } from '../utils/url.js';
 
 /**
  * Check if a URL path is a Git protocol request
@@ -23,20 +24,41 @@ export function isGitWriteOperation(urlPath) {
 }
 
 /**
- * Extract the repository path from the URL
+ * Extract the repository path from the URL with path traversal protection
  * @param {string} urlPath - The URL path
  * @returns {string|null} The repository relative path or null
  */
 function extractRepoPath(urlPath) {
   // Remove git service suffixes to get the repo path
-  const cleanPath = urlPath
+  let cleanPath = urlPath
     .replace(/\/info\/refs.*$/, '')
     .replace(/\/git-upload-pack$/, '')
     .replace(/\/git-receive-pack$/, '');
 
-  // Remove leading slash, use '.' for root
-  const result = cleanPath.replace(/^\//, '');
-  return result === '' ? '.' : result;
+  // Remove leading slash
+  cleanPath = cleanPath.replace(/^\//, '');
+
+  // Security: remove path traversal attempts (multiple passes for ....// bypass)
+  let previous;
+  do {
+    previous = cleanPath;
+    cleanPath = cleanPath.replace(/\.\./g, '');
+  } while (cleanPath !== previous);
+
+  // Use '.' for root/empty path
+  return cleanPath === '' ? '.' : cleanPath;
+}
+
+/**
+ * Validate that a resolved path is within the data root
+ * @param {string} resolvedPath - Absolute path to validate
+ * @param {string} dataRoot - The data root directory
+ * @returns {boolean} - true if path is safe
+ */
+function isPathWithinDataRoot(resolvedPath, dataRoot) {
+  const normalizedRoot = resolve(dataRoot);
+  const normalizedPath = resolve(resolvedPath);
+  return normalizedPath.startsWith(normalizedRoot + '/') || normalizedPath === normalizedRoot;
 }
 
 /**
@@ -89,12 +111,17 @@ export async function handleGit(request, reply) {
   }
 
   // Handle subdomain mode
-  let dataRoot = process.env.DATA_ROOT || './data';
+  let dataRoot = getDataRoot();
   if (request.podName) {
     dataRoot = join(dataRoot, request.podName);
   }
 
   const repoAbs = resolve(dataRoot, repoRelative);
+
+  // Security: verify resolved path is within data root (path traversal protection)
+  if (!isPathWithinDataRoot(repoAbs, getDataRoot())) {
+    return reply.code(403).send({ error: 'Path traversal detected' });
+  }
 
   // Find git directory
   const gitInfo = findGitDir(repoAbs);

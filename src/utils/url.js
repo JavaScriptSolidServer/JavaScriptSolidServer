@@ -65,8 +65,13 @@ export function urlToPathWithPod(urlPath, podName) {
     normalized = normalized.replace(/\.\./g, '');
   } while (normalized !== previous);
 
-  // Also sanitize podName
-  let safePodName = podName.replace(/\.\./g, '');
+  // Also sanitize podName (multiple passes for ....// bypass)
+  let safePodName = podName;
+  let previousPod;
+  do {
+    previousPod = safePodName;
+    safePodName = safePodName.replace(/\.\./g, '');
+  } while (safePodName !== previousPod);
 
   // Resolve to absolute path and verify it's within DATA_ROOT
   const dataRoot = path.resolve(getDataRoot());

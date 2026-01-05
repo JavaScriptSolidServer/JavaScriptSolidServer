@@ -17,6 +17,11 @@ import { validateExternalUrl } from '../utils/ssrf.js';
 const oidcConfigCache = new Map();
 const jwksCache = new Map();
 
+// Cache for DPoP jti values to prevent replay attacks
+// Stores { jti: timestamp } entries, cleaned periodically
+const dpopJtiCache = new Map();
+const JTI_CACHE_CLEANUP_INTERVAL = 60 * 1000; // Clean every minute
+
 // Cache TTL (15 minutes)
 const CACHE_TTL = 15 * 60 * 1000;
 
@@ -35,6 +40,42 @@ export function addTrustedIssuer(issuer) {
 
 // DPoP proof max age (5 minutes)
 const DPOP_MAX_AGE = 5 * 60;
+
+/**
+ * Clean expired jti entries from cache
+ * Called periodically to prevent memory growth
+ */
+function cleanupJtiCache() {
+  const now = Math.floor(Date.now() / 1000);
+  const expiredBefore = now - DPOP_MAX_AGE;
+
+  for (const [jti, timestamp] of dpopJtiCache.entries()) {
+    if (timestamp < expiredBefore) {
+      dpopJtiCache.delete(jti);
+    }
+  }
+}
+
+// Start periodic cleanup
+setInterval(cleanupJtiCache, JTI_CACHE_CLEANUP_INTERVAL);
+
+/**
+ * Check if a jti has been used (replay attack prevention)
+ * @param {string} jti - The jti claim from DPoP proof
+ * @returns {boolean} - true if jti was already used
+ */
+function isJtiUsed(jti) {
+  return dpopJtiCache.has(jti);
+}
+
+/**
+ * Record a jti as used
+ * @param {string} jti - The jti claim from DPoP proof
+ * @param {number} iat - The issued-at timestamp
+ */
+function recordJti(jti, iat) {
+  dpopJtiCache.set(jti, iat);
+}
 
 /**
  * Verify a Solid-OIDC request and extract WebID
@@ -175,10 +216,18 @@ async function verifyDpopProof(dpopProof, request, accessToken) {
       return { thumbprint: null, error: 'DPoP proof expired or invalid iat' };
     }
 
-    // jti: Unique identifier (we should track these to prevent replay, but skip for now)
+    // jti: Unique identifier - track to prevent replay attacks
     if (!payload.jti) {
       return { thumbprint: null, error: 'DPoP proof missing jti' };
     }
+
+    // Check for replay attack
+    if (isJtiUsed(payload.jti)) {
+      return { thumbprint: null, error: 'DPoP proof jti already used (replay attack prevented)' };
+    }
+
+    // Record jti to prevent future replay
+    recordJti(payload.jti, payload.iat);
 
     // ath: Access token hash (optional but recommended)
     if (payload.ath) {

@@ -376,6 +376,11 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
     return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters', null, inviteOnly));
   }
 
+  // Password strength validation
+  if (password.length < 8) {
+    return reply.type('text/html').send(registerPage(uid, 'Password must be at least 8 characters', null, inviteOnly));
+  }
+
   if (password !== confirmPassword) {
     return reply.type('text/html').send(registerPage(uid, 'Passwords do not match', null, inviteOnly));
   }
