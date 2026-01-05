@@ -12,7 +12,7 @@ import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
-import { activityPubPlugin } from './ap/index.js';
+import { activityPubPlugin, getActorHandler } from './ap/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -200,6 +200,26 @@ export function createServer(options = {}) {
       reply.header('Updates-Via', `${wsProtocol}://${request.hostname}/.notifications`);
     }
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
+  });
+
+  // ActivityPub actor endpoint - intercept /profile/card with AP Accept header
+  // Must run after AP plugin is ready (uses getActorHandler from ap/index.js)
+  fastify.addHook('onRequest', async (request, reply) => {
+    if (!activitypubEnabled) return;
+    if (request.method !== 'GET') return;
+    if (request.url !== '/profile/card' && !request.url.startsWith('/profile/card?')) return;
+
+    const accept = request.headers.accept || '';
+    const wantsAP = accept.includes('activity+json') ||
+                    accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
+
+    const actorHandler = getActorHandler();
+    if (wantsAP && actorHandler) {
+      const actor = actorHandler(request);
+      return reply
+        .header('Content-Type', 'application/activity+json')
+        .send(actor);
+    }
   });
 
   // Security: Block access to dotfiles except allowed Solid-specific ones

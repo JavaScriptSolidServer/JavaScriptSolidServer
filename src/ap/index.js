@@ -11,6 +11,10 @@ import { createOutboxHandler } from './routes/outbox.js'
 import { createCollectionsHandler } from './routes/collections.js'
 import { createActorHandler } from './routes/actor.js'
 
+// Shared state for actor handler (accessed by server.js)
+let sharedActorHandler = null
+export function getActorHandler() { return sharedActorHandler }
+
 /**
  * ActivityPub Fastify plugin
  * @param {FastifyInstance} fastify
@@ -127,27 +131,11 @@ export async function activityPubPlugin(fastify, options = {}) {
       })
   })
 
-  // Actor endpoint - handle AP content negotiation for /profile/card
+  // Actor endpoint - expose handler for profile/card AP requests
   const actorHandler = createActorHandler(config, keypair)
 
-  // Use onRequest hook instead of dedicated route to avoid blocking LDP
-  // This intercepts AP requests before the wildcard LDP routes
-  fastify.addHook('onRequest', async (request, reply) => {
-    if (request.method !== 'GET') return
-    if (request.url !== '/profile/card' && !request.url.startsWith('/profile/card?')) return
-
-    const accept = request.headers.accept || ''
-    const wantsAP = accept.includes('activity+json') ||
-                    accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"')
-
-    if (wantsAP) {
-      const actor = actorHandler(request)
-      return reply
-        .header('Content-Type', 'application/activity+json')
-        .send(actor)
-    }
-    // Not AP - let LDP handle it
-  })
+  // Store actorHandler in shared state for use by server-level hook
+  sharedActorHandler = actorHandler
 
   // Inbox endpoint
   const inboxHandler = createInboxHandler(config, keypair)
