@@ -4,6 +4,7 @@
  */
 
 import { turtleToJsonLd } from '../rdf/turtle.js';
+import { safeJsonParse } from '../utils/url.js';
 
 const ACL = 'http://www.w3.org/ns/auth/acl#';
 const FOAF = 'http://xmlns.com/foaf/0.1/';
@@ -35,9 +36,9 @@ export async function parseAcl(content, aclUrl) {
   if (typeof content === 'object' && content !== null) {
     doc = content;
   } else if (typeof content === 'string') {
-    // Try JSON-LD first
+    // Try JSON-LD first (with size limit for DoS protection)
     try {
-      doc = JSON.parse(content);
+      doc = safeJsonParse(content);
     } catch {
       // Not JSON, try Turtle
       try {
