@@ -202,25 +202,32 @@ export function createServer(options = {}) {
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
 
-  // ActivityPub actor endpoint - intercept /profile/card with AP Accept header
-  // Must run after AP plugin is ready (uses getActorHandler from ap/index.js)
-  fastify.addHook('onRequest', async (request, reply) => {
-    if (!activitypubEnabled) return;
-    if (request.method !== 'GET') return;
-    if (request.url !== '/profile/card' && !request.url.startsWith('/profile/card?')) return;
+  // ActivityPub actor endpoint - dedicated route for /profile/card with AP Accept header
+  // Registered before wildcard routes to take priority
+  if (activitypubEnabled) {
+    fastify.route({
+      method: 'GET',
+      url: '/profile/card',
+      handler: async (request, reply) => {
+        const accept = request.headers.accept || '';
+        const wantsAP = accept.includes('activity+json') ||
+                        accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
 
-    const accept = request.headers.accept || '';
-    const wantsAP = accept.includes('activity+json') ||
-                    accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
+        const actorHandler = getActorHandler();
+        if (wantsAP && actorHandler) {
+          const actor = actorHandler(request);
+          return reply
+            .type('application/activity+json')
+            .send(actor);
+        }
 
-    const actorHandler = getActorHandler();
-    if (wantsAP && actorHandler) {
-      const actor = actorHandler(request);
-      return reply
-        .type('application/activity+json')
-        .send(actor);
-    }
-  });
+        // Not AP request - serve the HTML profile from disk
+        // This is handled by importing the resource handler
+        const { handleGet } = await import('./handlers/resource.js');
+        return handleGet(request, reply);
+      }
+    });
+  }
 
   // Security: Block access to dotfiles except allowed Solid-specific ones
   // This prevents exposure of .git/, .env, .htpasswd, etc.
