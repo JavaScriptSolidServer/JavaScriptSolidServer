@@ -9,6 +9,7 @@ import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
 import * as storage from '../storage/filesystem.js';
 import { getEffectiveUrlPath } from '../utils/url.js';
+import { generateDatabrowserHtml } from '../mashlib/index.js';
 
 /**
  * Check if request is authorized
@@ -113,6 +114,12 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
   // Check if browser wants HTML
   const accept = request.headers.accept || '';
   if (accept.includes('text/html')) {
+    // If mashlib is enabled, serve mashlib instead of static error page
+    // Mashlib has built-in login functionality via panes.runDataBrowser()
+    if (request.mashlibEnabled) {
+      const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
+      return reply.code(statusCode).type('text/html').send(generateDatabrowserHtml(request.url, cdnVersion));
+    }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
   }
 
@@ -315,12 +322,12 @@ function getErrorPage(statusCode, isAuthenticated, request) {
       <p class="subtitle">${subtitle}</p>
 
       <div class="actions">
-        <a href="${baseUrl}/" class="btn btn-primary">
+        ${is401 ? `<a href="https://solidos.solidcommunity.net/?uri=${encodeURIComponent(baseUrl + request.url)}" class="btn btn-primary">
+          Open in Data Browser
+        </a>` : ''}
+        <a href="${baseUrl}/" class="btn btn-secondary">
           Go to Homepage
         </a>
-        ${is401 ? `<a href="${baseUrl}/idp/register" class="btn btn-secondary">
-          Create Account
-        </a>` : ''}
       </div>
 
       <div class="divider"><span>What is this?</span></div>
@@ -330,7 +337,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
         <p>
           This is a <strong>Solid Pod</strong> — a personal data store where you control your own data.
           Resources can be private, shared with specific people, or public.
-          ${is401 ? "To access protected content, you'll need to sign in using a Solid app (like a data browser) with your WebID." : 'Ask the owner to grant you access.'}
+          ${is401 ? "The Data Browser lets you sign in with your WebID to access protected content." : 'Ask the owner to grant you access.'}
         </p>
       </div>
 
