@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.59)
+### Implemented (v0.0.60)
 
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -51,6 +51,23 @@ A minimal, fast, JSON-LD native Solid server.
 ### Prerequisites
 
 - Node.js 18+
+
+### Android/Termux
+
+JSS runs on Android via Termux with automatic `bcryptjs` fallback:
+
+```bash
+pkg install nodejs git
+npm install -g javascript-solid-server
+jss start --port 8080 --nostr --git
+```
+
+Use PM2 for persistence:
+```bash
+npm install -g pm2
+pm2 start jss -- start --port 8080 --nostr --git
+pm2 save
+```
 
 ### Installation
 
