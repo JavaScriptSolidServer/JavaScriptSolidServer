@@ -330,7 +330,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
         <p>
           This is a <strong>Solid Pod</strong> — a personal data store where you control your own data.
           Resources can be private, shared with specific people, or public.
-          ${is401 ? 'To access protected content, use a Solid app (like a data browser) that will authenticate with your WebID.' : 'Ask the owner to grant you access.'}
+          ${is401 ? "To access protected content, you'll need to sign in using a Solid app (like a data browser) with your WebID." : 'Ask the owner to grant you access.'}
         </p>
       </div>
 
