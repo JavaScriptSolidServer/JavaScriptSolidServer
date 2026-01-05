@@ -23,7 +23,7 @@ import { createActorHandler } from './routes/actor.js'
 export async function activityPubPlugin(fastify, options = {}) {
   // Initialize storage and keypair
   const keypair = loadOrCreateKeypair()
-  initStore()
+  await initStore()
 
   // Store config for handlers
   const config = {

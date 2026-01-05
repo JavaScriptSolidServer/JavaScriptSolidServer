@@ -1,6 +1,6 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.62",
+  "version": "0.0.63",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
@@ -36,7 +36,8 @@
     "microfed": "^0.0.14",
     "n3": "^1.26.0",
     "nostr-tools": "^2.19.4",
-    "oidc-provider": "^9.6.0"
+    "oidc-provider": "^9.6.0",
+    "sql.js": "^1.13.0"
   },
   "engines": {
     "node": ">=18.0.0"
