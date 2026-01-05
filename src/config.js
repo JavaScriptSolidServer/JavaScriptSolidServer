@@ -50,6 +50,13 @@ export const defaults = {
   nostrPath: '/relay',
   nostrMaxEvents: 1000,
 
+  // ActivityPub federation
+  activitypub: false,
+  apUsername: 'me',
+  apDisplayName: null,
+  apSummary: null,
+  apNostrPubkey: null,
+
   // Invite-only registration
   inviteOnly: false,
 
@@ -89,6 +96,11 @@ const envMap = {
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
+  JSS_ACTIVITYPUB: 'activitypub',
+  JSS_AP_USERNAME: 'apUsername',
+  JSS_AP_DISPLAY_NAME: 'apDisplayName',
+  JSS_AP_SUMMARY: 'apSummary',
+  JSS_AP_NOSTR_PUBKEY: 'apNostrPubkey',
   JSS_INVITE_ONLY: 'inviteOnly',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
 };

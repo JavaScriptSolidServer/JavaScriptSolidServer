@@ -63,6 +63,12 @@ program
   .option('--no-nostr', 'Disable Nostr relay')
   .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
   .option('--nostr-max-events <n>', 'Max events in relay memory (default: 1000)', parseInt)
+  .option('--activitypub', 'Enable ActivityPub federation')
+  .option('--no-activitypub', 'Disable ActivityPub federation')
+  .option('--ap-username <name>', 'ActivityPub username (default: me)')
+  .option('--ap-display-name <name>', 'ActivityPub display name')
+  .option('--ap-summary <text>', 'ActivityPub bio/summary')
+  .option('--ap-nostr-pubkey <hex>', 'Nostr pubkey for identity linking')
   .option('--invite-only', 'Require invite code for registration')
   .option('--no-invite-only', 'Allow open registration')
   .option('-q, --quiet', 'Suppress log output')
@@ -110,6 +116,11 @@ program
         nostr: config.nostr,
         nostrPath: config.nostrPath,
         nostrMaxEvents: config.nostrMaxEvents,
+        activitypub: config.activitypub,
+        apUsername: config.apUsername,
+        apDisplayName: config.apDisplayName,
+        apSummary: config.apSummary,
+        apNostrPubkey: config.apNostrPubkey,
         inviteOnly: config.inviteOnly,
       });
 
@@ -131,6 +142,7 @@ program
         }
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
+        if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.inviteOnly) console.log('  Registration: invite-only');
         console.log('\n  Press Ctrl+C to stop\n');
       }
