@@ -7,7 +7,7 @@ import { webfinger } from 'microfed'
 import { loadOrCreateKeypair, getKeyId } from './keys.js'
 import { initStore } from './store.js'
 import { createInboxHandler } from './routes/inbox.js'
-import { createOutboxHandler } from './routes/outbox.js'
+import { createOutboxHandler, createOutboxPostHandler } from './routes/outbox.js'
 import { createCollectionsHandler } from './routes/collections.js'
 import { createActorHandler } from './routes/actor.js'
 
@@ -135,7 +135,7 @@ export async function activityPubPlugin(fastify, options = {}) {
         version: '2.1',
         software: {
           name: 'jss',
-          version: '0.0.66',
+          version: '0.0.67',
           repository: 'https://github.com/JavaScriptSolidServer/JavaScriptSolidServer'
         },
         protocols: ['activitypub', 'solid'],
@@ -165,7 +165,9 @@ export async function activityPubPlugin(fastify, options = {}) {
 
   // Outbox endpoint
   const outboxHandler = createOutboxHandler(config, keypair)
+  const outboxPostHandler = createOutboxPostHandler(config, keypair)
   fastify.get('/profile/card/outbox', outboxHandler)
+  fastify.post('/profile/card/outbox', outboxPostHandler)
 
   // Followers/Following collections
   const collectionsHandler = createCollectionsHandler(config)
