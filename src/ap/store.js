@@ -267,7 +267,7 @@ export function getPostCount() {
 
 export function cacheActor(actor) {
   runStmt(
-    'INSERT OR REPLACE INTO actors (id, data, fetched_at) VALUES (?, ?, datetime("now"))',
+    "INSERT OR REPLACE INTO actors (id, data, fetched_at) VALUES (?, ?, datetime('now'))",
     [actor.id, JSON.stringify(actor)]
   )
 }

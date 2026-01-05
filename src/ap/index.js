@@ -135,7 +135,7 @@ export async function activityPubPlugin(fastify, options = {}) {
         version: '2.1',
         software: {
           name: 'jss',
-          version: '0.0.65',
+          version: '0.0.66',
           repository: 'https://github.com/JavaScriptSolidServer/JavaScriptSolidServer'
         },
         protocols: ['activitypub', 'solid'],
