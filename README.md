@@ -6,8 +6,9 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.60)
+### Implemented (v0.0.61)
 
+- **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
 - **SPARQL Update** - Standard SPARQL UPDATE protocol for PATCH
@@ -126,6 +127,11 @@ jss --help             # Show help
 | `--nostr-max-events <n>` | Max events in relay memory | 1000 |
 | `--invite-only` | Require invite code for registration | false |
 | `--default-quota <size>` | Default storage quota per pod (e.g., 50MB) | 50MB |
+| `--activitypub` | Enable ActivityPub federation | false |
+| `--ap-username <name>` | ActivityPub username | me |
+| `--ap-display-name <name>` | ActivityPub display name | (username) |
+| `--ap-summary <text>` | ActivityPub bio/summary | - |
+| `--ap-nostr-pubkey <hex>` | Nostr pubkey for identity linking | - |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -143,6 +149,8 @@ export JSS_MASHLIB=true
 export JSS_NOSTR=true
 export JSS_INVITE_ONLY=true
 export JSS_DEFAULT_QUOTA=100MB
+export JSS_ACTIVITYPUB=true
+export JSS_AP_USERNAME=alice
 jss start
 ```
 
@@ -408,6 +416,72 @@ git add .acl && git commit -m "Add ACL"
 ```
 
 See [git-credential-nostr](https://github.com/JavaScriptSolidServer/git-credential-nostr) for more details.
+
+## ActivityPub Federation
+
+Enable ActivityPub to federate with Mastodon, Pleroma, Misskey, and other Fediverse servers:
+
+```bash
+jss start --activitypub --ap-username alice --ap-display-name "Alice" --ap-summary "Hello from JSS!"
+```
+
+### Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/.well-known/webfinger` | Actor discovery (Mastodon searches here) |
+| `/.well-known/nodeinfo` | NodeInfo discovery |
+| `/profile/card` | Actor (returns JSON-LD when `Accept: application/activity+json`) |
+| `/inbox` | Shared inbox for receiving activities |
+| `/profile/card/inbox` | Personal inbox |
+| `/profile/card/outbox` | User's activities |
+| `/profile/card/followers` | Followers collection |
+| `/profile/card/following` | Following collection |
+
+### How It Works
+
+1. **Discovery**: Mastodon looks up `@alice@your.server` via WebFinger
+2. **Actor**: Returns ActivityPub Actor JSON-LD with public key
+3. **Follow**: Remote servers POST Follow activities to inbox
+4. **Accept**: JSS auto-accepts follows and sends Accept back
+5. **Delivery**: Posts are signed with HTTP Signatures and delivered to follower inboxes
+
+### Identity Linking
+
+Your WebID (`/profile/card#me`) becomes your ActivityPub Actor. Link to Nostr identity:
+
+```bash
+jss start --activitypub --ap-nostr-pubkey <64-char-hex-pubkey>
+```
+
+This adds `alsoKnownAs: ["did:nostr:<pubkey>"]` to your Actor profile, creating a verifiable link between your Solid, ActivityPub, and Nostr identities (the SAND stack).
+
+### Programmatic Usage
+
+```javascript
+import { createServer } from 'javascript-solid-server';
+
+const server = createServer({
+  activitypub: true,
+  apUsername: 'alice',
+  apDisplayName: 'Alice',
+  apSummary: 'Building the decentralized web!',
+  apNostrPubkey: 'abc123...'  // Optional: links to did:nostr
+});
+```
+
+### Testing Federation
+
+```bash
+# Check WebFinger
+curl "http://localhost:3000/.well-known/webfinger?resource=acct:alice@localhost:3000"
+
+# Get Actor (AP format)
+curl -H "Accept: application/activity+json" http://localhost:3000/profile/card
+
+# Check NodeInfo
+curl http://localhost:3000/.well-known/nodeinfo/2.1
+```
 
 ### Linking Nostr to WebID (did:nostr)
 
@@ -812,6 +886,15 @@ src/
 │   ├── interactions.js   # Login/consent handlers
 │   ├── views.js          # HTML templates
 │   └── invites.js        # Invite code management
+├── ap/
+│   ├── index.js          # ActivityPub plugin
+│   ├── keys.js           # RSA keypair management
+│   ├── store.js          # SQLite storage (followers, activities)
+│   └── routes/
+│       ├── actor.js      # Actor JSON-LD
+│       ├── inbox.js      # Receive activities
+│       ├── outbox.js     # User's activities
+│       └── collections.js # Followers/following
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
@@ -831,6 +914,8 @@ Minimal dependencies for a fast, secure server:
 - **n3** - Turtle parsing (only used when conneg enabled)
 - **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
 - **bcrypt** - Password hashing (only when IdP enabled)
+- **microfed** - ActivityPub primitives (only when activitypub enabled)
+- **better-sqlite3** - SQLite storage for federation data
 
 ## License
 
