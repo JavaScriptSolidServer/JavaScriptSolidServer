@@ -93,31 +93,257 @@ function getParentPath(path) {
 
 /**
  * Handle unauthorized request
+ * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
  * @param {boolean} isAuthenticated - Whether user is authenticated
  * @param {string} wacAllow - WAC-Allow header value
  * @param {string|null} authError - Authentication error message (for DPoP failures)
  * @param {string|null} issuer - IdP issuer URL for WWW-Authenticate header
  */
-export function handleUnauthorized(reply, isAuthenticated, wacAllow, authError = null, issuer = null) {
+export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, authError = null, issuer = null) {
   reply.header('WAC-Allow', wacAllow);
 
+  const statusCode = isAuthenticated ? 403 : 401;
+  const realm = issuer || 'Solid';
+
   if (!isAuthenticated) {
-    // Not authenticated - return 401 with WWW-Authenticate header
-    // Solid-OIDC requires DPoP authentication
-    const realm = issuer || 'Solid';
     reply.header('WWW-Authenticate', `DPoP realm="${realm}", Bearer realm="${realm}"`);
+  }
+
+  // Check if browser wants HTML
+  const accept = request.headers.accept || '';
+  if (accept.includes('text/html')) {
+    return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
+  }
+
+  // Return JSON for API clients
+  if (!isAuthenticated) {
     return reply.code(401).send({
       error: 'Unauthorized',
       message: authError || 'Authentication required'
     });
   } else {
-    // Authenticated but not authorized - return 403
     return reply.code(403).send({
       error: 'Forbidden',
       message: 'Access denied'
     });
   }
+}
+
+/**
+ * Generate a beautiful error page for browsers
+ */
+function getErrorPage(statusCode, isAuthenticated, request) {
+  const is401 = statusCode === 401;
+  const title = is401 ? 'Authentication Required' : 'Access Denied';
+  const subtitle = is401
+    ? "This resource is protected. You'll need to sign in to continue."
+    : "You're signed in, but you don't have permission to view this resource.";
+
+  const baseUrl = `${request.protocol}://${request.hostname}`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title} - Solid Server</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+      padding: 2rem;
+      color: #374151;
+    }
+
+    .container {
+      max-width: 540px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 3rem 2.5rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+
+    .icon {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 1.5rem;
+      background: ${is401 ? '#fef3c7' : '#fee2e2'};
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+    }
+
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 0.75rem;
+    }
+
+    .subtitle {
+      color: #6b7280;
+      font-size: 1.05rem;
+      line-height: 1.6;
+      margin-bottom: 2rem;
+    }
+
+    .actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      padding: 0.875rem 1.5rem;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4);
+    }
+
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #374151;
+    }
+
+    .btn-secondary:hover {
+      background: #e5e7eb;
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 2rem 0;
+      color: #9ca3af;
+      font-size: 0.875rem;
+    }
+
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #e5e7eb;
+    }
+
+    .divider span {
+      padding: 0 1rem;
+    }
+
+    .info-box {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-radius: 10px;
+      padding: 1.25rem;
+      text-align: left;
+    }
+
+    .info-box h3 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #166534;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .info-box p {
+      font-size: 0.875rem;
+      color: #15803d;
+      line-height: 1.5;
+    }
+
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: #9ca3af;
+    }
+
+    .footer a {
+      color: #7c3aed;
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+    }
+
+    .status-code {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="icon">${is401 ? '🔐' : '🚫'}</div>
+      <h1>${title}</h1>
+      <p class="subtitle">${subtitle}</p>
+
+      <div class="actions">
+        ${is401 ? `<a href="${baseUrl}/.account/login/password" class="btn btn-primary">
+          Sign In
+        </a>` : ''}
+        <a href="${baseUrl}/" class="btn btn-secondary">
+          Go to Homepage
+        </a>
+      </div>
+
+      <div class="divider"><span>What is this?</span></div>
+
+      <div class="info-box">
+        <h3>🏖️ Welcome to Solid</h3>
+        <p>
+          This is a <strong>Solid Pod</strong> — a personal data store where you control your own data.
+          Resources can be private, shared with specific people, or public.
+          ${is401 ? 'Sign in with your WebID to access protected content.' : 'Ask the owner to grant you access.'}
+        </p>
+      </div>
+
+      <p class="status-code">HTTP ${statusCode} • ${request.url}</p>
+    </div>
+
+    <p class="footer">
+      Powered by <a href="https://sandy-mount.com">Sandymount</a> •
+      <a href="https://solidproject.org">Learn about Solid</a>
+    </p>
+  </div>
+</body>
+</html>`;
 }
 
 /**

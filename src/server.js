@@ -316,7 +316,7 @@ export function createServer(options = {}) {
     reply.header('WAC-Allow', wacAllow);
 
     if (!authorized) {
-      return handleUnauthorized(reply, webId !== null, wacAllow, authError);
+      return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);
     }
   });
 
