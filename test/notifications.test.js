@@ -328,6 +328,96 @@ describe('WebSocket Notifications (notifications enabled)', () => {
   });
 });
 
+describe('WebSocket ACL Enforcement', () => {
+  let wsUrl;
+
+  before(async () => {
+    await startTestServer({ notifications: true });
+    await createTestPod('aclnotify');
+    const res = await request('/aclnotify/', { method: 'OPTIONS' });
+    wsUrl = res.headers.get('Updates-Via');
+  });
+
+  after(async () => {
+    await stopTestServer();
+  });
+
+  it('should allow anonymous subscription to public resources', async () => {
+    const ws = new WebSocket(wsUrl);
+    const baseUrl = getBaseUrl();
+    const resourceUrl = `${baseUrl}/aclnotify/public/anon-allowed.json`;
+
+    const messages = [];
+
+    await new Promise((resolve, reject) => {
+      ws.on('open', () => {
+        ws.send(`sub ${resourceUrl}`);
+      });
+      ws.on('message', (data) => {
+        messages.push(data.toString());
+        if (messages.length >= 2) resolve();
+      });
+      ws.on('error', reject);
+      setTimeout(() => resolve(), 2000);
+    });
+
+    assert.ok(messages.includes('protocol solid-0.1'), 'Should receive protocol greeting');
+    assert.ok(messages.some(m => m === `ack ${resourceUrl}`), 'Should receive ack for public resource');
+    ws.close();
+    await new Promise(r => setTimeout(r, 50)); // Allow WebSocket to fully close
+  });
+
+  it('should deny anonymous subscription to private resources', async () => {
+    const ws = new WebSocket(wsUrl);
+    const baseUrl = getBaseUrl();
+    const resourceUrl = `${baseUrl}/aclnotify/private/secret.json`;
+
+    const messages = [];
+
+    await new Promise((resolve, reject) => {
+      ws.on('open', () => {
+        ws.send(`sub ${resourceUrl}`);
+      });
+      ws.on('message', (data) => {
+        messages.push(data.toString());
+        if (messages.some(m => m.startsWith('err '))) resolve();
+      });
+      ws.on('error', reject);
+      setTimeout(() => resolve(), 2000);
+    });
+
+    assert.ok(messages.includes('protocol solid-0.1'), 'Should receive protocol greeting');
+    assert.ok(messages.some(m => m === `err ${resourceUrl} forbidden`),
+      `Should receive err forbidden for private resource. Got: ${messages.join(', ')}`);
+    ws.close();
+    await new Promise(r => setTimeout(r, 50)); // Allow WebSocket to fully close
+  });
+
+  it('should deny subscription to resources on other servers', async () => {
+    const ws = new WebSocket(wsUrl);
+    const externalUrl = 'https://evil.example.com/steal/data.json';
+
+    const messages = [];
+
+    await new Promise((resolve, reject) => {
+      ws.on('open', () => {
+        ws.send(`sub ${externalUrl}`);
+      });
+      ws.on('message', (data) => {
+        messages.push(data.toString());
+        if (messages.some(m => m.startsWith('err '))) resolve();
+      });
+      ws.on('error', reject);
+      setTimeout(() => resolve(), 2000);
+    });
+
+    assert.ok(messages.some(m => m === `err ${externalUrl} forbidden`),
+      'Should deny subscription to external URLs');
+    ws.close();
+    await new Promise(r => setTimeout(r, 50)); // Allow WebSocket to fully close
+  });
+});
+
 describe('WebSocket Notifications (notifications disabled - default)', () => {
   before(async () => {
     // Start server with notifications DISABLED (default)
