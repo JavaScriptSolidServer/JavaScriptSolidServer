@@ -166,16 +166,31 @@ describe('Authentication', () => {
       });
 
       // Now create a custom ACL for the container with acl:AuthenticatedAgent
+      // Include owner with Control so they can manage the ACL
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
-        '@graph': [{
-          '@id': '#authenticated',
-          '@type': 'acl:Authorization',
-          'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
-          'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
-          'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
-          'acl:mode': [{ '@id': 'acl:Read' }]
-        }]
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/authuser1/profile/card#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:mode': [{ '@id': 'acl:Read' }]
+          }
+        ]
       };
 
       await request('/authuser1/authenticated-only/.acl', {
