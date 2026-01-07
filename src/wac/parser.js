@@ -55,7 +55,7 @@ export async function parseAcl(content, aclUrl) {
   const authorizations = [];
 
   // Handle @graph array or single object
-  const nodes = doc['@graph'] || [doc];
+  const nodes = Array.isArray(doc) ? doc : (doc['@graph'] || [doc]);
 
   for (const node of nodes) {
     if (isAuthorization(node)) {
