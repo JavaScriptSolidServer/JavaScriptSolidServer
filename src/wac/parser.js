@@ -144,8 +144,9 @@ function parseAuthorization(node, aclUrl) {
   auth.default = parseUriArray(node['acl:default'] || node['default'])
     .map(uri => resolveUri(uri, baseUrl));
 
-  // Parse agents (WebIDs can be relative too)
-  auth.agents = parseUriArray(node['acl:agent'] || node['agent']);
+  // Parse agents (WebIDs can be relative too) - resolve against ACL URL
+  auth.agents = parseUriArray(node['acl:agent'] || node['agent'])
+    .map(uri => resolveUri(uri, aclUrl));
 
   // Parse agentClass
   auth.agentClasses = parseUriArray(node['acl:agentClass'] || node['agentClass']);
