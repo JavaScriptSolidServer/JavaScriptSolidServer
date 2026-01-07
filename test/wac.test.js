@@ -38,6 +38,42 @@ describe('WAC Parser', () => {
       assert.ok(auths[0].modes.includes(AccessMode.WRITE));
     });
 
+    it('should parse top-level JSON-LD array format', async () => {
+      // ACL as top-level array (without @graph wrapper)
+      const acl = [
+        {
+          '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+          '@id': '#owner',
+          '@type': 'acl:Authorization',
+          'acl:agent': { '@id': 'https://alice.example/#me' },
+          'acl:accessTo': { '@id': 'https://alice.example/resource' },
+          'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }]
+        },
+        {
+          '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#', 'foaf': 'http://xmlns.com/foaf/0.1/' },
+          '@id': '#public',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'foaf:Agent' },
+          'acl:accessTo': { '@id': 'https://alice.example/resource' },
+          'acl:mode': [{ '@id': 'acl:Read' }]
+        }
+      ];
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+
+      assert.strictEqual(auths.length, 2);
+      // Check owner authorization
+      const ownerAuth = auths.find(a => a.agents.includes('https://alice.example/#me'));
+      assert.ok(ownerAuth, 'Should have owner authorization');
+      assert.ok(ownerAuth.modes.includes(AccessMode.READ));
+      assert.ok(ownerAuth.modes.includes(AccessMode.WRITE));
+      assert.ok(ownerAuth.modes.includes(AccessMode.CONTROL));
+      // Check public authorization
+      const publicAuth = auths.find(a => a.agentClasses.includes('foaf:Agent'));
+      assert.ok(publicAuth, 'Should have public authorization');
+      assert.ok(publicAuth.modes.includes(AccessMode.READ));
+    });
+
     it('should parse public access', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#', 'foaf': 'http://xmlns.com/foaf/0.1/' },
