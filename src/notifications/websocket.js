@@ -6,11 +6,19 @@
  * Protocol:
  * - Server sends: "protocol solid-0.1" on connect
  * - Client sends: "sub <uri>" to subscribe
- * - Server sends: "ack <uri>" to acknowledge
+ * - Server sends: "ack <uri>" to acknowledge (if authorized)
+ * - Server sends: "err <uri> forbidden" if not authorized
  * - Server sends: "pub <uri>" when resource changes
+ *
+ * Security:
+ * - ACL is checked on every subscription request
+ * - Only subscribers with read access receive notifications
  */
 
 import { resourceEvents } from './events.js';
+import { checkAccess } from '../wac/checker.js';
+import { AccessMode } from '../wac/parser.js';
+import * as storage from '../storage/filesystem.js';
 
 // Security limits
 const MAX_SUBSCRIPTIONS_PER_CONNECTION = 100;
@@ -26,8 +34,13 @@ const subscribers = new Map();
  * Handle new WebSocket connection
  * @param {WebSocket} socket - The WebSocket connection
  * @param {Request} request - The HTTP request
+ * @param {string|null} webId - Authenticated WebID (null for anonymous)
  */
-export function handleWebSocket(socket, request) {
+export function handleWebSocket(socket, request, webId = null) {
+  // Store webId and server info on socket for ACL checks
+  socket.webId = webId;
+  socket.serverOrigin = `${request.protocol}://${request.hostname}`;
+
   // Send protocol greeting
   socket.send('protocol solid-0.1');
 
@@ -35,7 +48,7 @@ export function handleWebSocket(socket, request) {
   subscriptions.set(socket, new Set());
 
   // Handle incoming messages
-  socket.on('message', (message) => {
+  socket.on('message', async (message) => {
     const msg = message.toString().trim();
 
     // Handle subscription request
@@ -52,6 +65,13 @@ export function handleWebSocket(socket, request) {
         const socketSubs = subscriptions.get(socket);
         if (socketSubs && socketSubs.size >= MAX_SUBSCRIPTIONS_PER_CONNECTION) {
           socket.send('error: Subscription limit exceeded');
+          return;
+        }
+
+        // Security: check ACL read permission before allowing subscription
+        const canSubscribe = await checkSubscriptionAccess(url, socket);
+        if (!canSubscribe) {
+          socket.send(`err ${url} forbidden`);
           return;
         }
 
@@ -78,6 +98,46 @@ export function handleWebSocket(socket, request) {
   socket.on('error', () => {
     cleanup(socket);
   });
+}
+
+/**
+ * Check if socket has read access to subscribe to a URL
+ * @param {string} url - The URL to subscribe to
+ * @param {WebSocket} socket - The WebSocket connection (with webId attached)
+ * @returns {Promise<boolean>} - true if subscription is allowed
+ */
+async function checkSubscriptionAccess(url, socket) {
+  try {
+    // Parse the subscription URL
+    const parsedUrl = new URL(url);
+
+    // Security: Only allow subscriptions to URLs on this server
+    // This prevents using the server as a proxy to probe other servers
+    if (parsedUrl.origin !== socket.serverOrigin) {
+      return false;
+    }
+
+    const resourcePath = decodeURIComponent(parsedUrl.pathname);
+
+    // Check if resource exists and if it's a container
+    const stats = await storage.stat(resourcePath);
+    const isContainer = stats?.isDirectory || resourcePath.endsWith('/');
+
+    // Check WAC read permission
+    const { allowed } = await checkAccess({
+      resourceUrl: url,
+      resourcePath,
+      isContainer,
+      agentWebId: socket.webId,
+      requiredMode: AccessMode.READ
+    });
+
+    return allowed;
+  } catch (err) {
+    // On any error (invalid URL, storage error, etc.), deny subscription
+    // This prevents information leakage through error messages
+    return false;
+  }
 }
 
 /**

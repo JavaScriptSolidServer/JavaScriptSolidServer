@@ -18,6 +18,7 @@
 
 import websocket from '@fastify/websocket';
 import { handleWebSocket, getConnectionCount, getSubscriptionCount } from './websocket.js';
+import { getWebIdFromRequestAsync } from '../auth/token.js';
 export { emitChange } from './events.js';
 
 /**
@@ -32,8 +33,10 @@ export async function notificationsPlugin(fastify, options) {
   // WebSocket route for notifications (dedicated path to avoid route conflicts)
   // Clients discover this via Updates-Via header
   // In @fastify/websocket v8, handler receives (connection, request) where connection.socket is the raw WebSocket
-  fastify.get('/.notifications', { websocket: true }, (connection, request) => {
-    handleWebSocket(connection.socket, request);
+  fastify.get('/.notifications', { websocket: true }, async (connection, request) => {
+    // Get WebID from auth token (if present) for ACL checking on subscriptions
+    const { webId } = await getWebIdFromRequestAsync(request);
+    handleWebSocket(connection.socket, request, webId);
   });
 
   // Optional: Status endpoint for monitoring
