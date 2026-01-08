@@ -1,4 +1,5 @@
 import * as storage from '../storage/filesystem.js';
+import { createReadStream } from '../storage/filesystem.js';
 import { checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
@@ -28,6 +29,57 @@ function getRequestPaths(request) {
   // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   return { urlPath, storagePath, resourceUrl };
+}
+
+/**
+ * Parse HTTP Range header
+ * @param {string} rangeHeader - The Range header value (e.g., "bytes=0-1023")
+ * @param {number} fileSize - Total file size in bytes
+ * @returns {{ start: number, end: number } | null}
+ */
+function parseRangeHeader(rangeHeader, fileSize) {
+  if (!rangeHeader || !rangeHeader.startsWith('bytes=')) {
+    return null;
+  }
+
+  const range = rangeHeader.slice(6); // Remove 'bytes='
+  const parts = range.split('-');
+
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  let start, end;
+
+  if (parts[0] === '') {
+    // Suffix range: bytes=-500 (last 500 bytes)
+    const suffix = parseInt(parts[1], 10);
+    if (isNaN(suffix) || suffix <= 0) return null;
+    start = Math.max(0, fileSize - suffix);
+    end = fileSize - 1;
+  } else if (parts[1] === '') {
+    // Open-ended range: bytes=1024- (from 1024 to end)
+    start = parseInt(parts[0], 10);
+    if (isNaN(start) || start < 0) return null;
+    end = fileSize - 1;
+  } else {
+    // Normal range: bytes=0-1023
+    start = parseInt(parts[0], 10);
+    end = parseInt(parts[1], 10);
+    if (isNaN(start) || isNaN(end) || start < 0 || end < start) return null;
+  }
+
+  // Clamp end to file size
+  if (end >= fileSize) {
+    end = fileSize - 1;
+  }
+
+  // Check if range is satisfiable
+  if (start > end || start >= fileSize) {
+    return null;
+  }
+
+  return { start, end };
 }
 
 /**
@@ -243,6 +295,42 @@ export async function handleGet(request, reply) {
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.type('text/html').send(html);
+  }
+
+  // Handle Range requests for media files (video, audio, etc.)
+  const rangeHeader = request.headers.range;
+  if (rangeHeader && !isRdfContentType(storedContentType)) {
+    const range = parseRangeHeader(rangeHeader, stats.size);
+
+    if (range) {
+      const { start, end } = range;
+      const chunkSize = end - start + 1;
+
+      const headers = getAllHeaders({
+        isContainer: false,
+        etag: stats.etag,
+        contentType: storedContentType,
+        origin,
+        resourceUrl,
+        connegEnabled
+      });
+      headers['Content-Range'] = `bytes ${start}-${end}/${stats.size}`;
+      headers['Content-Length'] = chunkSize;
+      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+
+      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+      const streamResult = createReadStream(storagePath, { start, end });
+      if (!streamResult) {
+        return reply.code(500).send({ error: 'Stream error' });
+      }
+
+      return reply.code(206).send(streamResult.stream);
+    } else {
+      // Range not satisfiable
+      reply.header('Content-Range', `bytes */${stats.size}`);
+      return reply.code(416).send({ error: 'Range Not Satisfiable' });
+    }
   }
 
   const content = await storage.read(storagePath);
