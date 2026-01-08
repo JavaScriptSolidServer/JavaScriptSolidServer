@@ -71,6 +71,8 @@ program
   .option('--ap-nostr-pubkey <hex>', 'Nostr pubkey for identity linking')
   .option('--invite-only', 'Require invite code for registration')
   .option('--no-invite-only', 'Allow open registration')
+  .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
+  .option('--no-webid-tls', 'Disable WebID-TLS authentication')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -122,6 +124,7 @@ program
         apSummary: config.apSummary,
         apNostrPubkey: config.apNostrPubkey,
         inviteOnly: config.inviteOnly,
+        webidTls: config.webidTls,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -144,6 +147,7 @@ program
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.inviteOnly) console.log('  Registration: invite-only');
+        if (config.webidTls) console.log('  WebID-TLS: enabled (client certificate auth)');
         console.log('\n  Press Ctrl+C to stop\n');
       }
 

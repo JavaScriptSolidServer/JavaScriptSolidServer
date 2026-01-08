@@ -37,6 +37,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {string} options.apDisplayName - ActivityPub display name
  * @param {string} options.apSummary - ActivityPub bio/summary
  * @param {string} options.apNostrPubkey - Nostr pubkey for identity linking
+ * @param {boolean} options.webidTls - Enable WebID-TLS client certificate auth (default false)
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -70,6 +71,8 @@ export function createServer(options = {}) {
   const inviteOnly = options.inviteOnly ?? false;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
+  // WebID-TLS client certificate authentication is OFF by default
+  const webidTlsEnabled = options.webidTls ?? false;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -90,6 +93,13 @@ export function createServer(options = {}) {
       key: options.ssl.key,
       cert: options.ssl.cert,
     };
+
+    // Enable client certificate request for WebID-TLS
+    if (webidTlsEnabled) {
+      fastifyOptions.https.requestCert = true;
+      // Don't reject unauthorized - we verify via WebID profile, not CA chain
+      fastifyOptions.https.rejectUnauthorized = false;
+    }
   }
 
   const fastify = Fastify(fastifyOptions);

@@ -60,6 +60,9 @@ export const defaults = {
   // Invite-only registration
   inviteOnly: false,
 
+  // WebID-TLS client certificate authentication
+  webidTls: false,
+
   // Storage quota (bytes) - 50MB default
   defaultQuota: 50 * 1024 * 1024,
 
@@ -102,6 +105,7 @@ const envMap = {
   JSS_AP_SUMMARY: 'apSummary',
   JSS_AP_NOSTR_PUBKEY: 'apNostrPubkey',
   JSS_INVITE_ONLY: 'inviteOnly',
+  JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
 };
 

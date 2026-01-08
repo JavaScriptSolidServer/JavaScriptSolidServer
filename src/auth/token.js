@@ -10,6 +10,7 @@
 import crypto from 'crypto';
 import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
 import { verifyNostrAuth, hasNostrAuth } from './nostr.js';
+import { webIdTlsAuth, hasClientCertificate } from './webid-tls.js';
 
 // Secret for signing tokens
 // SECURITY: In production, TOKEN_SECRET must be set via environment variable
@@ -214,41 +215,55 @@ export function getWebIdFromRequest(request) {
 export async function getWebIdFromRequestAsync(request) {
   const authHeader = request.headers.authorization;
 
-  if (!authHeader) {
-    return { webId: null, error: null };
-  }
-
-  // Try Solid-OIDC first (DPoP tokens)
-  if (hasSolidOidcAuth(request)) {
-    return verifySolidOidc(request);
-  }
-
-  // Try Nostr NIP-98 (Schnorr signatures)
-  if (hasNostrAuth(request)) {
-    return verifyNostrAuth(request);
-  }
-
-  // Fall back to Bearer tokens
-  const token = extractToken(authHeader);
-  if (!token) {
-    return { webId: null, error: null };
-  }
-
-  // Try simple 2-part token first
-  const payload = verifyToken(token);
-  if (payload?.webId) {
-    return { webId: payload.webId, error: null };
-  }
-
-  // If 3-part JWT, verify against IdP's JWKS
-  const parts = token.split('.');
-  if (parts.length === 3) {
-    const jwtPayload = await verifyJwtFromIdp(token);
-    if (jwtPayload?.webId) {
-      return { webId: jwtPayload.webId, error: null };
+  // Try Authorization header methods first
+  if (authHeader) {
+    // Try Solid-OIDC first (DPoP tokens)
+    if (hasSolidOidcAuth(request)) {
+      return verifySolidOidc(request);
     }
-    return { webId: null, error: 'Invalid or unverifiable JWT token' };
+
+    // Try Nostr NIP-98 (Schnorr signatures)
+    if (hasNostrAuth(request)) {
+      return verifyNostrAuth(request);
+    }
+
+    // Fall back to Bearer tokens
+    const token = extractToken(authHeader);
+    if (token) {
+      // Try simple 2-part token first
+      const payload = verifyToken(token);
+      if (payload?.webId) {
+        return { webId: payload.webId, error: null };
+      }
+
+      // If 3-part JWT, verify against IdP's JWKS
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const jwtPayload = await verifyJwtFromIdp(token);
+        if (jwtPayload?.webId) {
+          return { webId: jwtPayload.webId, error: null };
+        }
+        return { webId: null, error: 'Invalid or unverifiable JWT token' };
+      }
+
+      return { webId: null, error: 'Invalid token' };
+    }
   }
 
-  return { webId: null, error: 'Invalid token' };
+  // Try WebID-TLS (client certificate authentication)
+  // This works even without Authorization header
+  if (hasClientCertificate(request)) {
+    try {
+      const webId = await webIdTlsAuth(request);
+      if (webId) {
+        return { webId, error: null };
+      }
+      // Certificate present but verification failed
+      return { webId: null, error: 'WebID-TLS certificate verification failed' };
+    } catch (err) {
+      return { webId: null, error: `WebID-TLS error: ${err.message}` };
+    }
+  }
+
+  return { webId: null, error: null };
 }

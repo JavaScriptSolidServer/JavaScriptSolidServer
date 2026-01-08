@@ -39,9 +39,11 @@ export async function startTestServer(options = {}) {
  */
 export async function stopTestServer() {
   if (server) {
+    // Force close all connections to avoid hanging
     await server.close();
     server = null;
   }
+  baseUrl = null;
   // Clean up test data
   await fs.emptyDir(TEST_DATA_DIR);
   // Clear tokens

@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.61)
+### Implemented (v0.0.75)
 
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
@@ -26,6 +26,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Solid-OIDC Resource Server** - Accept DPoP-bound access tokens from external IdPs
 - **NSS-style Registration** - Username/password auth compatible with Solid apps
 - **Nostr Authentication** - NIP-98 HTTP Auth with Schnorr signatures, did:nostr → WebID resolution
+- **WebID-TLS** - Client certificate authentication for backend services and CLI tools
 - **Simple Auth Tokens** - Built-in token authentication for development
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
@@ -126,6 +127,7 @@ jss --help             # Show help
 | `--nostr-path <path>` | Nostr relay WebSocket path | /relay |
 | `--nostr-max-events <n>` | Max events in relay memory | 1000 |
 | `--invite-only` | Require invite code for registration | false |
+| `--webid-tls` | Enable WebID-TLS client certificate auth | false |
 | `--default-quota <size>` | Default storage quota per pod (e.g., 50MB) | 50MB |
 | `--activitypub` | Enable ActivityPub federation | false |
 | `--ap-username <name>` | ActivityPub username | me |
@@ -148,6 +150,7 @@ export JSS_BASE_DOMAIN=example.com
 export JSS_MASHLIB=true
 export JSS_NOSTR=true
 export JSS_INVITE_ONLY=true
+export JSS_WEBID_TLS=true
 export JSS_DEFAULT_QUOTA=100MB
 export JSS_ACTIVITYPUB=true
 export JSS_AP_USERNAME=alice
@@ -664,6 +667,49 @@ curl -H "Authorization: DPoP ACCESS_TOKEN" \
      http://localhost:3000/alice/private/
 ```
 
+### WebID-TLS (Client Certificates)
+
+For backend services, CLI tools, and automated agents that need non-interactive authentication:
+
+```bash
+jss start --ssl-key key.pem --ssl-cert cert.pem --webid-tls
+```
+
+**How it works:**
+1. Client presents X.509 certificate during TLS handshake
+2. Certificate's `SubjectAlternativeName` contains a WebID URI
+3. Server fetches the WebID profile
+4. Server verifies the certificate's public key matches one in the profile
+
+**Testing with curl:**
+
+```bash
+# Generate self-signed cert with WebID in SAN
+openssl req -x509 -newkey rsa:2048 -keyout client-key.pem -out client-cert.pem -days 365 \
+  -subj "/CN=Test" -addext "subjectAltName=URI:https://example.com/alice/#me" -nodes
+
+# Make authenticated request
+curl --cert client-cert.pem --key client-key.pem https://localhost:8443/alice/private/
+```
+
+**Profile requirement:** Your WebID profile must contain the certificate's public key:
+
+```turtle
+@prefix cert: <http://www.w3.org/ns/auth/cert#> .
+
+<#me> cert:key [
+    a cert:RSAPublicKey;
+    cert:modulus "abc123..."^^xsd:hexBinary;
+    cert:exponent 65537
+] .
+```
+
+**Use cases:**
+- Enterprise backend services with existing PKI
+- Server-to-server communication
+- CLI tools and scripts
+- IoT devices with embedded certificates
+
 ## Pod Structure
 
 ```
@@ -810,7 +856,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **191 tests** (including 27 conformance tests)
+Currently passing: **213 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
@@ -861,7 +907,8 @@ src/
 │   ├── token.js          # Simple token auth
 │   ├── solid-oidc.js     # DPoP verification
 │   ├── nostr.js          # NIP-98 Nostr authentication
-│   └── did-nostr.js      # did:nostr → WebID resolution
+│   ├── did-nostr.js      # did:nostr → WebID resolution
+│   └── webid-tls.js      # WebID-TLS client certificate auth
 ├── wac/
 │   ├── parser.js         # ACL parsing
 │   └── checker.js        # Permission checking

@@ -56,8 +56,8 @@ function cleanupJtiCache() {
   }
 }
 
-// Start periodic cleanup
-setInterval(cleanupJtiCache, JTI_CACHE_CLEANUP_INTERVAL);
+// Start periodic cleanup (unref so it doesn't keep process alive during tests)
+setInterval(cleanupJtiCache, JTI_CACHE_CLEANUP_INTERVAL).unref();
 
 /**
  * Check if a jti has been used (replay attack prevention)
