@@ -60,6 +60,11 @@ export async function read(urlPath) {
 export function createReadStream(urlPath, options = {}) {
   const filePath = urlToPath(urlPath);
 
+  // Check file exists before creating stream (createReadStream doesn't throw sync)
+  if (!fs.pathExistsSync(filePath)) {
+    return null;
+  }
+
   try {
     const stream = fs.createReadStream(filePath, options);
     return { stream, filePath };

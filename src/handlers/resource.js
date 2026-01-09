@@ -1,5 +1,4 @@
 import * as storage from '../storage/filesystem.js';
-import { createReadStream } from '../storage/filesystem.js';
 import { checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
@@ -43,6 +42,13 @@ function parseRangeHeader(rangeHeader, fileSize) {
   }
 
   const range = rangeHeader.slice(6); // Remove 'bytes='
+
+  // Multi-range requests (e.g., "0-100,200-300") are not supported
+  // Per RFC 7233, ignore Range header and serve full content instead of 416
+  if (range.includes(',')) {
+    return null;
+  }
+
   const parts = range.split('-');
 
   if (parts.length !== 2) {
@@ -316,21 +322,22 @@ export async function handleGet(request, reply) {
       });
       headers['Content-Range'] = `bytes ${start}-${end}/${stats.size}`;
       headers['Content-Length'] = chunkSize;
-      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
       Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
-      const streamResult = createReadStream(storagePath, { start, end });
+      const streamResult = storage.createReadStream(storagePath, { start, end });
       if (!streamResult) {
         return reply.code(500).send({ error: 'Stream error' });
       }
 
+      // Handle stream errors that occur during response
+      streamResult.stream.on('error', (err) => {
+        console.error('Stream error during range response:', err.message);
+      });
+
       return reply.code(206).send(streamResult.stream);
-    } else {
-      // Range not satisfiable
-      reply.header('Content-Range', `bytes */${stats.size}`);
-      return reply.code(416).send({ error: 'Range Not Satisfiable' });
     }
+    // If range is null (unsupported format or multi-range), fall through to serve full content
   }
 
   const content = await storage.read(storagePath);
