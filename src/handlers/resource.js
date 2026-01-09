@@ -15,7 +15,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateSolidosUiHtml, shouldServeMashlib } from '../mashlib/index.js';
 
 /**
  * Get the storage path and resource URL for a request
@@ -28,6 +28,64 @@ function getRequestPaths(request) {
   // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
   const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
   return { urlPath, storagePath, resourceUrl };
+}
+
+/**
+ * Parse HTTP Range header
+ * @param {string} rangeHeader - The Range header value (e.g., "bytes=0-1023")
+ * @param {number} fileSize - Total file size in bytes
+ * @returns {{ start: number, end: number } | null}
+ */
+function parseRangeHeader(rangeHeader, fileSize) {
+  if (!rangeHeader || !rangeHeader.startsWith('bytes=')) {
+    return null;
+  }
+
+  const range = rangeHeader.slice(6); // Remove 'bytes='
+
+  // Multi-range requests (e.g., "0-100,200-300") are not supported
+  // Per RFC 7233, ignore Range header and serve full content instead of 416
+  if (range.includes(',')) {
+    return null;
+  }
+
+  const parts = range.split('-');
+
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  let start, end;
+
+  if (parts[0] === '') {
+    // Suffix range: bytes=-500 (last 500 bytes)
+    const suffix = parseInt(parts[1], 10);
+    if (isNaN(suffix) || suffix <= 0) return null;
+    start = Math.max(0, fileSize - suffix);
+    end = fileSize - 1;
+  } else if (parts[1] === '') {
+    // Open-ended range: bytes=1024- (from 1024 to end)
+    start = parseInt(parts[0], 10);
+    if (isNaN(start) || start < 0) return null;
+    end = fileSize - 1;
+  } else {
+    // Normal range: bytes=0-1023
+    start = parseInt(parts[0], 10);
+    end = parseInt(parts[1], 10);
+    if (isNaN(start) || isNaN(end) || start < 0 || end < start) return null;
+  }
+
+  // Clamp end to file size
+  if (end >= fileSize) {
+    end = fileSize - 1;
+  }
+
+  // Check if range is satisfiable
+  if (start > end || start >= fileSize) {
+    return null;
+  }
+
+  return { start, end };
 }
 
 /**
@@ -149,8 +207,10 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
-      const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
-      const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
+      // Use SolidOS UI if enabled, otherwise fallback to classic mashlib
+      const html = request.solidosUiEnabled
+        ? generateSolidosUiHtml()
+        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -224,9 +284,10 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
-    // Pass CDN version if using CDN mode, null for local mode
-    const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
-    const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
+    // Use SolidOS UI if enabled, otherwise fallback to classic mashlib
+    const html = request.solidosUiEnabled
+      ? generateSolidosUiHtml()
+      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,
@@ -243,6 +304,43 @@ export async function handleGet(request, reply) {
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.type('text/html').send(html);
+  }
+
+  // Handle Range requests for media files (video, audio, etc.)
+  const rangeHeader = request.headers.range;
+  if (rangeHeader && !isRdfContentType(storedContentType)) {
+    const range = parseRangeHeader(rangeHeader, stats.size);
+
+    if (range) {
+      const { start, end } = range;
+      const chunkSize = end - start + 1;
+
+      const headers = getAllHeaders({
+        isContainer: false,
+        etag: stats.etag,
+        contentType: storedContentType,
+        origin,
+        resourceUrl,
+        connegEnabled
+      });
+      headers['Content-Range'] = `bytes ${start}-${end}/${stats.size}`;
+      headers['Content-Length'] = chunkSize;
+
+      Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+      const streamResult = storage.createReadStream(storagePath, { start, end });
+      if (!streamResult) {
+        return reply.code(500).send({ error: 'Stream error' });
+      }
+
+      // Handle stream errors that occur during response
+      streamResult.stream.on('error', (err) => {
+        console.error('Stream error during range response:', err.message);
+      });
+
+      return reply.code(206).send(streamResult.stream);
+    }
+    // If range is null (unsupported format or multi-range), fall through to serve full content
   }
 
   const content = await storage.read(storagePath);

@@ -55,6 +55,8 @@ export function createServer(options = {}) {
   const mashlibEnabled = options.mashlib ?? false;
   const mashlibCdn = options.mashlibCdn ?? false;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
+  // SolidOS UI (modern Nextcloud-style interface) - requires mashlib
+  const solidosUiEnabled = options.solidosUi ?? false;
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
   // Nostr relay is OFF by default
@@ -127,6 +129,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibEnabled', null);
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
+  fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
@@ -137,6 +140,7 @@ export function createServer(options = {}) {
     request.mashlibEnabled = mashlibEnabled;
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
+    request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
 
     // Extract pod name from subdomain if enabled
@@ -296,7 +300,7 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, solidos-ui, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following'];
     // Check if request wants ActivityPub content for profile
@@ -308,6 +312,7 @@ export function createServer(options = {}) {
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
         request.url.startsWith('/.well-known/') ||
+        request.url.startsWith('/solidos-ui/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
@@ -379,6 +384,37 @@ export function createServer(options = {}) {
         });
       }
     }
+  }
+
+  // SolidOS UI static files (modern Nextcloud-style interface)
+  // Serves from /solidos-ui/* - requires mashlib to be enabled as well
+  if (solidosUiEnabled && mashlibEnabled) {
+    const solidosUiDir = join(__dirname, 'mashlib-local', 'dist', 'solidos-ui');
+
+    // Serve all files under /solidos-ui/* path
+    fastify.get('/solidos-ui/*', async (request, reply) => {
+      try {
+        // Get the path after /solidos-ui/
+        const filePath = request.url.replace('/solidos-ui/', '').split('?')[0];
+        const fullPath = join(solidosUiDir, filePath);
+
+        // Determine content type based on extension
+        const ext = filePath.split('.').pop()?.toLowerCase();
+        const contentTypes = {
+          'js': 'application/javascript',
+          'css': 'text/css',
+          'map': 'application/json',
+          'html': 'text/html'
+        };
+        const contentType = contentTypes[ext] || 'application/octet-stream';
+
+        const content = await readFile(fullPath);
+        return reply.type(contentType).send(content);
+      } catch (err) {
+        request.log.error(err, 'Failed to serve solidos-ui file');
+        return reply.code(404).send({ error: 'Not Found' });
+      }
+    });
   }
 
   // Rate limit configuration for write operations

@@ -56,6 +56,7 @@ export function getResponseHeaders({ isContainer = false, etag = null, contentTy
   const headers = {
     'Link': getLinkHeader(isContainer, aclUrl),
     'Accept-Patch': 'text/n3, application/sparql-update',
+    'Accept-Ranges': isContainer ? 'none' : 'bytes',
     'Allow': 'GET, HEAD, PUT, DELETE, PATCH, OPTIONS' + (isContainer ? ', POST' : ''),
     'Vary': connegEnabled ? 'Accept, Authorization, Origin' : 'Authorization, Origin'
   };
@@ -94,8 +95,8 @@ export function getCorsHeaders(origin) {
   return {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, PUT, DELETE, PATCH, OPTIONS',
-    'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type, DPoP, If-Match, If-None-Match, Link, Slug, Origin',
-    'Access-Control-Expose-Headers': 'Accept-Patch, Accept-Post, Allow, Content-Type, ETag, Link, Location, Updates-Via, WAC-Allow',
+    'Access-Control-Allow-Headers': 'Accept, Authorization, Content-Type, DPoP, If-Match, If-None-Match, Link, Range, Slug, Origin',
+    'Access-Control-Expose-Headers': 'Accept-Patch, Accept-Post, Accept-Ranges, Allow, Content-Length, Content-Range, Content-Type, ETag, Link, Location, Updates-Via, WAC-Allow',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Max-Age': '86400'
   };

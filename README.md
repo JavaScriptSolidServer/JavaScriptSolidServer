@@ -122,6 +122,7 @@ jss --help             # Show help
 | `--mashlib` | Enable Mashlib (local mode) | false |
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
+| `--solidos-ui` | Enable modern SolidOS UI (requires --mashlib) | false |
 | `--git` | Enable Git HTTP backend | false |
 | `--nostr` | Enable Nostr relay | false |
 | `--nostr-path <path>` | Nostr relay WebSocket path | /relay |
@@ -332,6 +333,18 @@ npm install && npm run build
 4. Mashlib renders an interactive, editable view
 
 **Note:** Mashlib works best with `--conneg` enabled for Turtle support.
+
+**Modern UI (SolidOS UI):**
+```bash
+jss start --mashlib --solidos-ui --conneg
+```
+Serves a modern Nextcloud-style UI shell while reusing mashlib's data layer. The `--solidos-ui` flag swaps the classic databrowser interface for a cleaner, mobile-friendly design with:
+- Modern file browser with breadcrumb navigation
+- Profile, Contacts, Sharing, and Settings views
+- Path-based URLs (browser URL reflects current resource)
+- Responsive design for mobile devices
+
+Requires solidos-ui dist files in `src/mashlib-local/dist/solidos-ui/`. See [solidos-ui](https://github.com/solidos/solidos/tree/main/workspaces/solidos-ui) for details.
 
 ### Profile Pages
 

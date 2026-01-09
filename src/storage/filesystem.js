@@ -52,6 +52,28 @@ export async function read(urlPath) {
 }
 
 /**
+ * Create a readable stream for a resource (supports range requests)
+ * @param {string} urlPath
+ * @param {object} options - { start, end } byte range options
+ * @returns {{ stream: ReadStream, filePath: string } | null}
+ */
+export function createReadStream(urlPath, options = {}) {
+  const filePath = urlToPath(urlPath);
+
+  // Check file exists before creating stream (createReadStream doesn't throw sync)
+  if (!fs.pathExistsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const stream = fs.createReadStream(filePath, options);
+    return { stream, filePath };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Write resource content
  * @param {string} urlPath
  * @param {Buffer | string} content
