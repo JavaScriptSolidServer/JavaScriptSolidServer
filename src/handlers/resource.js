@@ -15,7 +15,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateSolidosUiHtml, shouldServeMashlib } from '../mashlib/index.js';
 
 /**
  * Get the storage path and resource URL for a request
@@ -207,8 +207,10 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
-      const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
-      const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
+      // Use SolidOS UI if enabled, otherwise fallback to classic mashlib
+      const html = request.solidosUiEnabled
+        ? generateSolidosUiHtml()
+        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -282,9 +284,10 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
-    // Pass CDN version if using CDN mode, null for local mode
-    const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
-    const html = generateDatabrowserHtml(resourceUrl, cdnVersion);
+    // Use SolidOS UI if enabled, otherwise fallback to classic mashlib
+    const html = request.solidosUiEnabled
+      ? generateSolidosUiHtml()
+      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,

@@ -9,7 +9,7 @@ import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
 import * as storage from '../storage/filesystem.js';
 import { getEffectiveUrlPath } from '../utils/url.js';
-import { generateDatabrowserHtml } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index.js';
 
 /**
  * Check if request is authorized
@@ -117,8 +117,11 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     // If mashlib is enabled, serve mashlib instead of static error page
     // Mashlib has built-in login functionality via panes.runDataBrowser()
     if (request.mashlibEnabled) {
-      const cdnVersion = request.mashlibCdn ? request.mashlibVersion : null;
-      return reply.code(statusCode).type('text/html').send(generateDatabrowserHtml(request.url, cdnVersion));
+      // Use SolidOS UI if enabled, otherwise fallback to classic mashlib
+      const html = request.solidosUiEnabled
+        ? generateSolidosUiHtml()
+        : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
+      return reply.code(statusCode).type('text/html').send(html);
     }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
   }

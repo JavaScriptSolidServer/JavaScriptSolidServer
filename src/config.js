@@ -42,6 +42,9 @@ export const defaults = {
   mashlibCdn: false,
   mashlibVersion: '2.0.0',
 
+  // SolidOS UI (modern Nextcloud-style interface)
+  solidosUi: false,
+
   // Git HTTP backend
   git: false,
 
@@ -95,6 +98,7 @@ const envMap = {
   JSS_MASHLIB: 'mashlib',
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
+  JSS_SOLIDOS_UI: 'solidosUi',
   JSS_GIT: 'git',
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
@@ -258,5 +262,6 @@ export function printConfig(config) {
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
   console.log(`  Mashlib:       ${config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
+  console.log(`  SolidOS UI:    ${config.solidosUi ? 'enabled' : 'disabled'}`);
   console.log('─'.repeat(40));
 }

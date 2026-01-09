@@ -95,6 +95,113 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
 }
 
 /**
+ * Generate SolidOS UI HTML (modern Nextcloud-style interface)
+ * Uses mashlib for data layer but solidos-ui for the UI shell
+ *
+ * @returns {string} HTML content
+ */
+export function generateSolidosUiHtml() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SolidOS - Modern UI</title>
+  <!-- SolidOS UI Styles -->
+  <link rel="stylesheet" href="/solidos-ui/styles/variables.css">
+  <link rel="stylesheet" href="/solidos-ui/styles/shell.css">
+  <link rel="stylesheet" href="/solidos-ui/styles/components.css">
+  <link rel="stylesheet" href="/solidos-ui/styles/responsive.css">
+  <!-- View-specific styles -->
+  <link rel="stylesheet" href="/solidos-ui/views/profile/profile.css">
+  <link rel="stylesheet" href="/solidos-ui/views/contacts/contacts.css">
+  <link rel="stylesheet" href="/solidos-ui/views/sharing/sharing.css">
+  <link rel="stylesheet" href="/solidos-ui/views/settings/settings.css">
+  <!-- Bundled styles (contains all component styles) -->
+  <link rel="stylesheet" href="/solidos-ui/style.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    #app { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    // Load mashlib first, then solidos-ui
+    (function() {
+      var mashScript = document.createElement('script');
+      mashScript.src = '/mashlib.min.js';
+      mashScript.onload = function() {
+        // Now load solidos-ui
+        import('/solidos-ui/solidos-ui.js').then(function(module) {
+          var initSolidOSSkin = module.initSolidOSSkin;
+          var SolidLogic = window.SolidLogic;
+          var panes = window.panes;
+          var store = SolidLogic.store;
+
+          initSolidOSSkin('#app', {
+            store: store,
+            fetcher: store.fetcher,
+            paneRegistry: panes,
+            authn: SolidLogic.authn,
+            logic: SolidLogic.solidLogicSingleton,
+          }, {
+            onNavigate: function(uri) {
+              if (uri) {
+                // Use path-based navigation - update URL to match resource
+                try {
+                  var url = new URL(uri);
+                  // Always use the path from the URI, regardless of origin
+                  // (URIs may use internal hostname like jss:4000 vs localhost:4000)
+                  var newPath = url.pathname;
+                  if (newPath !== window.location.pathname) {
+                    window.history.pushState({ uri: uri }, '', newPath);
+                  }
+                } catch (e) {
+                  console.warn('Invalid URI for navigation:', uri);
+                }
+              }
+            },
+            onLogout: function() {
+              window.location.reload();
+            },
+          }).then(function(skin) {
+            // Handle browser back/forward
+            window.addEventListener('popstate', function(event) {
+              // Use the current URL as the resource (not hash-based)
+              var resourceUrl = window.location.origin + window.location.pathname;
+              skin.goto(resourceUrl);
+            });
+
+            // Navigate to the current URL's resource
+            // The URL path IS the resource in JSS (not hash-based routing)
+            var currentPath = window.location.pathname;
+            if (currentPath && currentPath !== '/') {
+              var resourceUrl = window.location.origin + currentPath;
+              skin.goto(resourceUrl);
+            }
+
+            // Expose for debugging
+            window.solidosSkin = skin;
+          });
+        }).catch(function(err) {
+          console.error('Failed to load solidos-ui:', err);
+          document.body.innerHTML = '<p>Failed to load SolidOS UI</p>';
+        });
+      };
+      mashScript.onerror = function() {
+        document.body.innerHTML = '<p>Failed to load Mashlib</p>';
+      };
+      document.head.appendChild(mashScript);
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+/**
  * Escape HTML special characters
  */
 function escapeHtml(str) {
