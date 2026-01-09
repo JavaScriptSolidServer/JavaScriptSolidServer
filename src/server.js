@@ -4,7 +4,8 @@ import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
-import { handlePost, handleCreatePod } from './handlers/container.js';
+import { handlePost, handleCreatePod, createPodStructure } from './handlers/container.js';
+import * as storage from './storage/filesystem.js';
 import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
@@ -71,6 +72,9 @@ export function createServer(options = {}) {
   const apNostrPubkey = options.apNostrPubkey ?? null;
   // Invite-only registration is OFF by default - open registration
   const inviteOnly = options.inviteOnly ?? false;
+  // Single-user mode - creates pod on startup, disables registration
+  const singleUser = options.singleUser ?? false;
+  const singleUserName = options.singleUserName ?? 'me';
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
   // WebID-TLS client certificate authentication is OFF by default
@@ -165,7 +169,7 @@ export function createServer(options = {}) {
 
   // Register Identity Provider plugin if enabled
   if (idpEnabled) {
-    fastify.register(idpPlugin, { issuer: idpIssuer, inviteOnly });
+    fastify.register(idpPlugin, { issuer: idpIssuer, inviteOnly, singleUser });
   }
 
   // Register Nostr relay if enabled
@@ -446,6 +450,91 @@ export function createServer(options = {}) {
   fastify.head('/', handleHead);
   fastify.options('/', handleOptions);
   fastify.post('/', writeRateLimit, handlePost);
+
+  // Single-user mode: create pod on startup if it doesn't exist
+  if (singleUser) {
+    fastify.addHook('onReady', async () => {
+      // Determine base URL for pod URIs
+      const protocol = options.ssl ? 'https' : 'http';
+      const host = options.host === '0.0.0.0' ? 'localhost' : (options.host || 'localhost');
+      const port = options.port || 3000;
+      const baseUrl = idpIssuer?.replace(/\/$/, '') || `${protocol}://${host}:${port}`;
+      const issuer = idpIssuer || `${baseUrl}/`;
+
+      // Root-level pod (empty or '/' name) vs named pod
+      const isRootPod = !singleUserName || singleUserName === '/';
+      const podPath = isRootPod ? '/' : `/${singleUserName}/`;
+      const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
+      const webId = `${podUri}profile/card#me`;
+      const displayName = isRootPod ? 'me' : singleUserName;
+
+      // Check if pod already exists (profile/card is the indicator)
+      const profileExists = await storage.exists(`${podPath}profile/card`);
+
+      if (!profileExists) {
+        fastify.log.info(`Creating single-user pod at ${podUri}...`);
+
+        if (isRootPod) {
+          // Root-level pod - create structure directly at /
+          await createRootPodStructure(webId, podUri, issuer, displayName);
+        } else {
+          // Named pod at /{name}/
+          await createPodStructure(singleUserName, webId, podUri, issuer, defaultQuota);
+        }
+        fastify.log.info(`Single-user pod created at ${podUri}`);
+      }
+    });
+  }
+
+  /**
+   * Create root-level pod structure (for single-user mode with pod at /)
+   */
+  async function createRootPodStructure(webId, podUri, issuer, displayName) {
+    const { generateProfile, generatePreferences, generateTypeIndex, serialize } = await import('./webid/profile.js');
+    const { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } = await import('./wac/parser.js');
+
+    // Create directories at root
+    await storage.createContainer('/inbox/');
+    await storage.createContainer('/public/');
+    await storage.createContainer('/private/');
+    await storage.createContainer('/Settings/');
+    await storage.createContainer('/profile/');
+
+    // Generate profile
+    const profileHtml = generateProfile({ webId, name: displayName, podUri, issuer });
+    await storage.write('/profile/card', profileHtml);
+
+    // Preferences and type indexes
+    const prefs = generatePreferences({ webId, podUri });
+    await storage.write('/Settings/Preferences.ttl', serialize(prefs));
+
+    const publicTypeIndex = generateTypeIndex(`${podUri}Settings/publicTypeIndex.ttl`);
+    await storage.write('/Settings/publicTypeIndex.ttl', serialize(publicTypeIndex));
+
+    const privateTypeIndex = generateTypeIndex(`${podUri}Settings/privateTypeIndex.ttl`);
+    await storage.write('/Settings/privateTypeIndex.ttl', serialize(privateTypeIndex));
+
+    // ACL files
+    const rootAcl = generateOwnerAcl(podUri, webId, true);
+    await storage.write('/.acl', serializeAcl(rootAcl));
+
+    const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
+    await storage.write('/private/.acl', serializeAcl(privateAcl));
+
+    const settingsAcl = generatePrivateAcl(`${podUri}Settings/`, webId);
+    await storage.write('/Settings/.acl', serializeAcl(settingsAcl));
+
+    const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
+    await storage.write('/inbox/.acl', serializeAcl(inboxAcl));
+
+    const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
+    await storage.write('/public/.acl', serializeAcl(publicAcl));
+
+    const profileAcl = generatePublicFolderAcl(`${podUri}profile/`, webId);
+    await storage.write('/profile/.acl', serializeAcl(profileAcl));
+
+    // Note: Quota not initialized for root-level pods (no user directory)
+  }
 
   return fastify;
 }

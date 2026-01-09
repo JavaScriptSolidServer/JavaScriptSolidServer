@@ -63,6 +63,10 @@ export const defaults = {
   // Invite-only registration
   inviteOnly: false,
 
+  // Single-user mode (personal pod server)
+  singleUser: false,
+  singleUserName: 'me',
+
   // WebID-TLS client certificate authentication
   webidTls: false,
 
@@ -109,6 +113,8 @@ const envMap = {
   JSS_AP_SUMMARY: 'apSummary',
   JSS_AP_NOSTR_PUBKEY: 'apNostrPubkey',
   JSS_INVITE_ONLY: 'inviteOnly',
+  JSS_SINGLE_USER: 'singleUser',
+  JSS_SINGLE_USER_NAME: 'singleUserName',
   JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
 };
