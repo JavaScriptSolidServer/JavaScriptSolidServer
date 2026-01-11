@@ -568,6 +568,9 @@ export function passkeyPromptPage(uid, accountId) {
           return;
         }
 
+        // Save challengeKey for verification
+        const challengeKey = options.challengeKey;
+
         // Convert base64url to ArrayBuffer
         options.challenge = base64urlToBuffer(options.challenge);
         options.user.id = base64urlToBuffer(options.user.id);
@@ -587,6 +590,7 @@ export function passkeyPromptPage(uid, accountId) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             accountId: ACCOUNT_ID,
+            challengeKey: challengeKey,
             credential: {
               id: credential.id,
               rawId: bufferToBase64url(credential.rawId),

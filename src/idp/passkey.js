@@ -114,10 +114,12 @@ export async function registrationOptions(request, reply) {
     }
   });
 
-  // Store challenge for verification
-  const stored = storeChallenge(account.id, {
+  // Store challenge for verification with unique key (prevents race conditions from multiple tabs)
+  const challengeKey = crypto.randomUUID();
+  const stored = storeChallenge(challengeKey, {
     challenge: options.challenge,
     type: 'registration',
+    accountId: account.id,
     expires: Date.now() + 60000 // 1 minute
   });
 
@@ -125,7 +127,7 @@ export async function registrationOptions(request, reply) {
     return reply.code(503).send({ error: 'Server busy, try again later' });
   }
 
-  return reply.send(options);
+  return reply.send({ ...options, challengeKey });
 }
 
 /**
@@ -133,20 +135,25 @@ export async function registrationOptions(request, reply) {
  * Verify and store the registration response
  */
 export async function registrationVerify(request, reply) {
-  const { accountId, credential, name } = request.body || {};
+  const { accountId, credential, name, challengeKey } = request.body || {};
 
-  if (!accountId || !credential) {
-    return reply.code(400).send({ error: 'Missing accountId or credential' });
+  if (!accountId || !credential || !challengeKey) {
+    return reply.code(400).send({ error: 'Missing required fields' });
+  }
+
+  const stored = challenges.get(challengeKey);
+  if (!stored || stored.type !== 'registration' || Date.now() > stored.expires) {
+    return reply.code(400).send({ error: 'Challenge expired or invalid' });
+  }
+
+  // Verify the accountId matches the challenge
+  if (stored.accountId !== accountId) {
+    return reply.code(403).send({ error: 'Account mismatch' });
   }
 
   const account = await accounts.findById(accountId);
   if (!account) {
     return reply.code(404).send({ error: 'Account not found' });
-  }
-
-  const stored = challenges.get(account.id);
-  if (!stored || stored.type !== 'registration' || Date.now() > stored.expires) {
-    return reply.code(400).send({ error: 'Challenge expired or invalid' });
   }
 
   const rp = getRP(request);
@@ -160,6 +167,7 @@ export async function registrationVerify(request, reply) {
     });
 
     if (!verification.verified || !verification.registrationInfo) {
+      request.log.warn({ verified: verification.verified, hasInfo: !!verification.registrationInfo }, 'Passkey registration verification failed');
       return reply.code(400).send({ error: 'Verification failed' });
     }
 
@@ -173,7 +181,7 @@ export async function registrationVerify(request, reply) {
       name: name || 'Security Key'
     });
 
-    challenges.delete(account.id);
+    challenges.delete(challengeKey);
 
     return reply.send({ success: true });
   } catch (err) {
