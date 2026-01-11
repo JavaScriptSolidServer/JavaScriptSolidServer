@@ -196,10 +196,26 @@ const scopeDescriptions = {
 };
 
 /**
+ * Escape string for safe use in JavaScript
+ */
+function escapeJs(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/</g, '\\x3c')
+    .replace(/>/g, '\\x3e')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+/**
  * Login page HTML
  */
 export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
   const appName = clientId || 'An application';
+  const safeUid = escapeJs(uid);
 
   const passkeySection = passkeyEnabled ? `
     <button type="button" class="btn btn-passkey" onclick="loginWithPasskey()">
@@ -212,6 +228,8 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
 
   const passkeyScript = passkeyEnabled ? `
   <script>
+    var INTERACTION_UID = '${safeUid}';
+
     async function loginWithPasskey() {
       try {
         // Get authentication options
@@ -262,8 +280,9 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
 
         const result = await verifyRes.json();
         if (result.success) {
-          // Complete the OIDC interaction
-          window.location.href = '/idp/interaction/${uid}/passkey-complete?accountId=' + result.accountId;
+          // Complete the OIDC interaction - build URL safely
+          const redirectUrl = '/idp/interaction/' + encodeURIComponent(INTERACTION_UID) + '/passkey-complete?accountId=' + encodeURIComponent(result.accountId);
+          window.location.href = redirectUrl;
         } else {
           alert('Passkey authentication failed: ' + (result.error || 'Unknown error'));
         }
@@ -291,7 +310,7 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
       const bytes = new Uint8Array(buffer);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+      return btoa(binary).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=/g, '');
     }
   </script>
   ` : '';
@@ -489,6 +508,11 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
  * Passkey prompt page - shown after password login to encourage passkey setup
  */
 export function passkeyPromptPage(uid, accountId) {
+  const safeUid = escapeJs(uid);
+  const safeAccountId = escapeJs(accountId);
+  // Pre-escape the SVG for innerHTML assignment (no user data, just static SVG)
+  const passkeyIconEscaped = passkeyIcon.replace(/'/g, "\\'").replace(/\n/g, '');
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -514,12 +538,16 @@ export function passkeyPromptPage(uid, accountId) {
       Add Passkey
     </button>
 
-    <form method="GET" action="/idp/interaction/${uid}/passkey-skip">
+    <form method="GET" action="/idp/interaction/${escapeHtml(uid)}/passkey-skip">
       <button type="submit" class="btn btn-secondary">Skip for now</button>
     </form>
   </div>
 
   <script>
+    var INTERACTION_UID = '${safeUid}';
+    var ACCOUNT_ID = '${safeAccountId}';
+    var PASSKEY_ICON = '${passkeyIconEscaped}';
+
     async function registerPasskey() {
       const btn = document.getElementById('addBtn');
       btn.disabled = true;
@@ -530,13 +558,13 @@ export function passkeyPromptPage(uid, accountId) {
         const optionsRes = await fetch('/idp/passkey/register/options', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountId: '${accountId}' })
+          body: JSON.stringify({ accountId: ACCOUNT_ID })
         });
         const options = await optionsRes.json();
         if (options.error) {
           alert('Error: ' + options.error);
           btn.disabled = false;
-          btn.innerHTML = '${passkeyIcon} Add Passkey';
+          btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
           return;
         }
 
@@ -558,7 +586,7 @@ export function passkeyPromptPage(uid, accountId) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            accountId: '${accountId}',
+            accountId: ACCOUNT_ID,
             credential: {
               id: credential.id,
               rawId: bufferToBase64url(credential.rawId),
@@ -575,12 +603,13 @@ export function passkeyPromptPage(uid, accountId) {
 
         const result = await verifyRes.json();
         if (result.success) {
-          // Passkey added, continue to app
-          window.location.href = '/idp/interaction/${uid}/passkey-complete?accountId=${accountId}';
+          // Passkey added, continue to app - build URL safely
+          const redirectUrl = '/idp/interaction/' + encodeURIComponent(INTERACTION_UID) + '/passkey-complete?accountId=' + encodeURIComponent(ACCOUNT_ID);
+          window.location.href = redirectUrl;
         } else {
           alert('Failed to add passkey: ' + (result.error || 'Unknown error'));
           btn.disabled = false;
-          btn.innerHTML = '${passkeyIcon} Add Passkey';
+          btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
         }
       } catch (err) {
         if (err.name === 'NotAllowedError') {
@@ -590,7 +619,7 @@ export function passkeyPromptPage(uid, accountId) {
           alert('Failed to add passkey: ' + err.message);
         }
         btn.disabled = false;
-        btn.innerHTML = '${passkeyIcon} Add Passkey';
+        btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
       }
     }
 
@@ -619,7 +648,7 @@ export function passkeyPromptPage(uid, accountId) {
       const bytes = new Uint8Array(buffer);
       let binary = '';
       for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-      return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=/g, '');
+      return btoa(binary).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=/g, '');
     }
   </script>
 </body>

@@ -294,8 +294,16 @@ export async function idpPlugin(fastify, options) {
   });
 
   // Passkey routes
-  // Registration options - requires authenticated session context
-  fastify.post('/idp/passkey/register/options', async (request, reply) => {
+  // Registration options - rate limited to prevent DoS
+  fastify.post('/idp/passkey/register/options', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return passkey.registrationOptions(request, reply);
   });
 
@@ -312,8 +320,16 @@ export async function idpPlugin(fastify, options) {
     return passkey.registrationVerify(request, reply);
   });
 
-  // Login options
-  fastify.post('/idp/passkey/login/options', async (request, reply) => {
+  // Login options - rate limited to prevent DoS
+  fastify.post('/idp/passkey/login/options', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
     return passkey.authenticationOptions(request, reply);
   });
 

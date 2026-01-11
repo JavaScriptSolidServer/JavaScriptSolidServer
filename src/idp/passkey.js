@@ -30,9 +30,18 @@ cleanupInterval.unref();
 
 /**
  * Get Relying Party configuration from request
+ * Handles both IPv4 (with port) and IPv6 addresses correctly
  */
 function getRP(request) {
-  const hostname = request.hostname.split(':')[0]; // Remove port
+  let hostname;
+  try {
+    // Use URL parsing to correctly extract hostname (handles IPv6)
+    const url = new URL(`${request.protocol}://${request.hostname}`);
+    hostname = url.hostname;
+  } catch {
+    // Fallback: strip port from hostname (IPv4 only)
+    hostname = String(request.hostname || '').split(':')[0];
+  }
   return {
     name: 'Solid Pod',
     id: hostname
@@ -141,7 +150,7 @@ export async function registrationVerify(request, reply) {
 
     return reply.send({ success: true });
   } catch (err) {
-    console.error('Passkey registration error:', err);
+    request.log.error({ err }, 'Passkey registration error');
     return reply.code(400).send({ error: err.message });
   }
 }
@@ -257,7 +266,7 @@ export async function authenticationVerify(request, reply) {
       webId: account.webId
     });
   } catch (err) {
-    console.error('Passkey authentication error:', err);
+    request.log.error({ err }, 'Passkey authentication error');
     return reply.code(400).send({ error: err.message });
   }
 }

@@ -471,6 +471,15 @@ export async function handlePasskeyComplete(request, reply, provider) {
       return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
     }
 
+    // If this is a post-login passkey registration flow, validate accountId matches
+    // the already-authenticated user to prevent account takeover
+    if (interaction.passkeyPromptPending && interaction.result?.login?.accountId) {
+      if (interaction.result.login.accountId !== accountId) {
+        request.log.warn({ expected: interaction.result.login.accountId, provided: accountId }, 'AccountId mismatch in passkey complete');
+        return reply.code(403).type('text/html').send(errorPage('Access denied', 'Account mismatch.'));
+      }
+    }
+
     const account = await findById(accountId);
     if (!account) {
       return reply.code(404).type('text/html').send(errorPage('Account not found', 'The account could not be found.'));
@@ -508,6 +517,11 @@ export async function handlePasskeySkip(request, reply, provider) {
     const interaction = await provider.Interaction.find(uid);
     if (!interaction) {
       return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
+    }
+
+    // Validate the interaction is in the passkey prompt state
+    if (!interaction.passkeyPromptPending) {
+      return reply.code(400).type('text/html').send(errorPage('Invalid state', 'Not in passkey prompt flow.'));
     }
 
     // Get the pending login result
