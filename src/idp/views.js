@@ -385,10 +385,8 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true, sc
         const response = await fetch(authUrl, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             'Authorization': 'Nostr ' + btoa(JSON.stringify(signedEvent))
-          },
-          body: JSON.stringify({ event: signedEvent })
+          }
         });
 
         const result = await response.json();
@@ -398,11 +396,11 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true, sc
         } else if (result.error) {
           alert('Schnorr login failed: ' + result.error);
           btn.disabled = false;
-          btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+          btn.textContent = 'Sign in with Schnorr';
         } else {
           alert('Schnorr login failed: Unknown error');
           btn.disabled = false;
-          btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+          btn.textContent = 'Sign in with Schnorr';
         }
       } catch (err) {
         console.error('Schnorr login error:', err);
@@ -412,7 +410,7 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true, sc
           alert('Schnorr login failed: ' + err.message);
         }
         btn.disabled = false;
-        btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+        btn.textContent = 'Sign in with Schnorr';
       }
     }
   </script>

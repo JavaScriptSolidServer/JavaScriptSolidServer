@@ -358,7 +358,14 @@ export async function idpPlugin(fastify, options) {
   });
 
   // Schnorr (NIP-98) interaction handlers
-  fastify.post('/idp/interaction/:uid/schnorr-login', async (request, reply) => {
+  fastify.post('/idp/interaction/:uid/schnorr-login', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute'
+      }
+    }
+  }, async (request, reply) => {
     return handleSchnorrLogin(request, reply, provider);
   });
 

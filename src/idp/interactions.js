@@ -8,7 +8,7 @@ import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } fr
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
-import { verifyNostrAuth, pubkeyToDidNostr } from '../auth/nostr.js';
+import { verifyNostrAuth } from '../auth/nostr.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
