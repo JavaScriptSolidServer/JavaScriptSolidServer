@@ -17,14 +17,16 @@ import * as accounts from './accounts.js';
 const challenges = new Map();
 
 // Clean up expired challenges periodically
-setInterval(() => {
+// Use unref() so this timer doesn't prevent process exit (important for tests)
+const cleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, value] of challenges.entries()) {
     if (now > value.expires) {
       challenges.delete(key);
     }
   }
-}, 60000); // Clean every minute
+}, 60000);
+cleanupInterval.unref();
 
 /**
  * Get Relying Party configuration from request
