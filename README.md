@@ -6,8 +6,9 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.77)
+### Implemented (v0.0.78)
 
+- **Schnorr SSO** - Passwordless login via BIP-340 Schnorr signatures using NIP-07 browser extensions (Podkey, nos2x, Alby)
 - **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
 - **HTTP Range Requests** - Partial content delivery for large files and media streaming
 - **Single-User Mode** - Simplified setup for personal pod servers
@@ -692,6 +693,29 @@ jss start --idp
 - Works on mobile and desktop
 
 Passkeys are stored per-account and work across devices via platform sync (iCloud Keychain, Google Password Manager, etc.).
+
+### Schnorr SSO (v0.0.78+)
+
+Sign in with your Nostr key using NIP-07 browser extensions:
+
+```bash
+jss start --idp
+```
+
+**How it works:**
+1. User clicks "Sign in with Schnorr" on the login page
+2. NIP-07 extension (Podkey, nos2x, Alby) signs a NIP-98 auth event
+3. Server verifies BIP-340 Schnorr signature
+4. User authenticated via linked did:nostr identity
+
+**Requirements:**
+- Account must have a `did:nostr:<pubkey>` WebID linked
+- User needs a NIP-07 compatible browser extension
+
+**Benefits:**
+- No passwords - cryptographic authentication
+- Works with existing Nostr identity
+- Single sign-on across Solid and Nostr ecosystems
 
 ### Solid-OIDC (External IdP)
 
