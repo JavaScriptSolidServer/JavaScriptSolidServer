@@ -3,11 +3,12 @@
  * Handles the user-facing parts of the authentication flow
  */
 
-import { authenticate, findById, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
+import { authenticate, findById, findByWebId, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
 import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } from './views.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
+import { verifyNostrAuth, pubkeyToDidNostr } from '../auth/nostr.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
@@ -539,6 +540,123 @@ export async function handlePasskeySkip(request, reply, provider) {
     return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
   } catch (err) {
     request.log.error(err, 'Passkey skip error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
+ * Handle POST /idp/interaction/:uid/schnorr-login
+ * Authenticates user via Schnorr signature (NIP-98)
+ */
+export async function handleSchnorrLogin(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('application/json').send({
+        success: false,
+        error: 'Session expired. Please try again.'
+      });
+    }
+
+    // Verify the Schnorr signature
+    const authResult = await verifyNostrAuth(request);
+
+    if (authResult.error) {
+      request.log.warn({ error: authResult.error }, 'Schnorr auth failed');
+      return reply.code(401).type('application/json').send({
+        success: false,
+        error: authResult.error
+      });
+    }
+
+    // authResult.webId is either a resolved WebID or did:nostr:pubkey
+    const identity = authResult.webId;
+    request.log.info({ identity, uid }, 'Schnorr auth verified');
+
+    // Try to find an existing account linked to this identity
+    let account = await findByWebId(identity);
+
+    if (!account) {
+      // No account linked to this did:nostr
+      // For now, return error - user needs to link their did:nostr to an account
+      // Future: could auto-create account or prompt for linking
+      return reply.code(403).type('application/json').send({
+        success: false,
+        error: 'No account linked to this identity. Please register or link your Schnorr key to an existing account.'
+      });
+    }
+
+    // Update last login
+    await updateLastLogin(account.id);
+
+    // Complete the OIDC interaction
+    const result = {
+      login: {
+        accountId: account.id,
+        remember: true,
+      },
+    };
+
+    // Save the login result
+    interaction.result = result;
+    await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+
+    request.log.info({ accountId: account.id, identity, uid }, 'Schnorr login successful');
+
+    // Return success with redirect URL
+    // The client will follow this redirect
+    const redirectUrl = `/idp/interaction/${uid}/schnorr-complete?accountId=${encodeURIComponent(account.id)}`;
+
+    return reply.type('application/json').send({
+      success: true,
+      redirectUrl
+    });
+  } catch (err) {
+    request.log.error(err, 'Schnorr login error');
+    return reply.code(500).type('application/json').send({
+      success: false,
+      error: err.message
+    });
+  }
+}
+
+/**
+ * Handle GET /idp/interaction/:uid/schnorr-complete
+ * Completes OIDC interaction after Schnorr login
+ */
+export async function handleSchnorrComplete(request, reply, provider) {
+  const { uid } = request.params;
+  const { accountId } = request.query;
+
+  if (!accountId) {
+    return reply.code(400).type('text/html').send(errorPage('Missing account', 'Account ID is required.'));
+  }
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
+    }
+
+    // Validate accountId matches the interaction result
+    if (interaction.result?.login?.accountId !== accountId) {
+      request.log.warn({ expected: interaction.result?.login?.accountId, provided: accountId }, 'AccountId mismatch in schnorr complete');
+      return reply.code(403).type('text/html').send(errorPage('Access denied', 'Account mismatch.'));
+    }
+
+    const account = await findById(accountId);
+    if (!account) {
+      return reply.code(404).type('text/html').send(errorPage('Account not found', 'The account could not be found.'));
+    }
+
+    request.log.info({ accountId: account.id, uid }, 'Schnorr login completed');
+
+    reply.hijack();
+    return provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
+  } catch (err) {
+    request.log.error(err, 'Schnorr complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
   }
 }

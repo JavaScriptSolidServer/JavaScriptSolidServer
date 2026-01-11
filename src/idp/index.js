@@ -15,6 +15,8 @@ import {
   handleRegisterPost,
   handlePasskeyComplete,
   handlePasskeySkip,
+  handleSchnorrLogin,
+  handleSchnorrComplete,
 } from './interactions.js';
 import {
   handleCredentials,
@@ -353,6 +355,15 @@ export async function idpPlugin(fastify, options) {
 
   fastify.get('/idp/interaction/:uid/passkey-skip', async (request, reply) => {
     return handlePasskeySkip(request, reply, provider);
+  });
+
+  // Schnorr (NIP-98) interaction handlers
+  fastify.post('/idp/interaction/:uid/schnorr-login', async (request, reply) => {
+    return handleSchnorrLogin(request, reply, provider);
+  });
+
+  fastify.get('/idp/interaction/:uid/schnorr-complete', async (request, reply) => {
+    return handleSchnorrComplete(request, reply, provider);
   });
 
   fastify.log.info(`IdP initialized with issuer: ${issuer}`);

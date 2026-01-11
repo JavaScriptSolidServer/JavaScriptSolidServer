@@ -121,6 +121,23 @@ const styles = `
     width: 20px;
     height: 20px;
   }
+  .btn-schnorr {
+    background: #7b1fa2;
+    color: white;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .btn-schnorr:hover {
+    background: #6a1b9a;
+  }
+  .btn-schnorr svg {
+    width: 20px;
+    height: 20px;
+  }
   .divider {
     display: flex;
     align-items: center;
@@ -187,6 +204,12 @@ const passkeyIcon = `
 </svg>
 `;
 
+const schnorrIcon = `
+<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/>
+</svg>
+`;
+
 const scopeDescriptions = {
   openid: 'Access your identity',
   webid: 'Access your WebID',
@@ -213,7 +236,7 @@ function escapeJs(text) {
 /**
  * Login page HTML
  */
-export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
+export function loginPage(uid, clientId, error = null, passkeyEnabled = true, schnorrEnabled = true) {
   const appName = clientId || 'An application';
   const safeUid = escapeJs(uid);
 
@@ -222,7 +245,18 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
       ${passkeyIcon}
       Sign in with Passkey
     </button>
+  ` : '';
 
+  const schnorrSection = schnorrEnabled ? `
+    <button type="button" class="btn btn-schnorr" onclick="loginWithSchnorr()" id="schnorrBtn">
+      ${schnorrIcon}
+      Sign in with Schnorr
+    </button>
+  ` : '';
+
+  const ssoSection = (passkeyEnabled || schnorrEnabled) ? `
+    ${passkeySection}
+    ${schnorrSection}
     <div class="divider"><span>or</span></div>
   ` : '';
 
@@ -315,6 +349,75 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
   </script>
   ` : '';
 
+  const schnorrScript = schnorrEnabled ? `
+  <script>
+    async function loginWithSchnorr() {
+      const btn = document.getElementById('schnorrBtn');
+
+      // Check for NIP-07 extension (window.nostr)
+      if (typeof window.nostr === 'undefined') {
+        alert('No Schnorr signer found. Please install a NIP-07 compatible extension like Podkey, nos2x, or Alby.');
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Signing...';
+
+      try {
+        // Get the current URL for the auth event
+        const authUrl = window.location.origin + '/idp/interaction/${safeUid}/schnorr-login';
+
+        // Create NIP-98 event (kind 27235)
+        const event = {
+          kind: 27235,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['u', authUrl],
+            ['method', 'POST']
+          ],
+          content: ''
+        };
+
+        // Sign with NIP-07 extension
+        const signedEvent = await window.nostr.signEvent(event);
+
+        // Send to server
+        const response = await fetch(authUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Nostr ' + btoa(JSON.stringify(signedEvent))
+          },
+          body: JSON.stringify({ event: signedEvent })
+        });
+
+        const result = await response.json();
+
+        if (result.success && result.redirectUrl) {
+          window.location.href = result.redirectUrl;
+        } else if (result.error) {
+          alert('Schnorr login failed: ' + result.error);
+          btn.disabled = false;
+          btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+        } else {
+          alert('Schnorr login failed: Unknown error');
+          btn.disabled = false;
+          btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+        }
+      } catch (err) {
+        console.error('Schnorr login error:', err);
+        if (err.message && err.message.includes('User rejected')) {
+          // User cancelled signing - do nothing
+        } else {
+          alert('Schnorr login failed: ' + err.message);
+        }
+        btn.disabled = false;
+        btn.innerHTML = '${schnorrIcon.replace(/'/g, "\\'")}' + ' Sign in with Schnorr';
+      }
+    }
+  </script>
+  ` : '';
+
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -337,7 +440,7 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
 
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
-    ${passkeySection}
+    ${ssoSection}
 
     <form method="POST" action="/idp/interaction/${uid}/login">
       <label for="username">Username</label>
@@ -358,6 +461,7 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
     </p>
   </div>
   ${passkeyScript}
+  ${schnorrScript}
 </body>
 </html>
   `;
