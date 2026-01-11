@@ -15,6 +15,7 @@ import * as accounts from './accounts.js';
 // Temporary challenge storage (in-memory, cleared on restart)
 // For production clusters, use Redis or session storage
 const challenges = new Map();
+const MAX_CHALLENGES = 10000; // Prevent unbounded growth
 
 // Clean up expired challenges periodically
 // Use unref() so this timer doesn't prevent process exit (important for tests)
@@ -27,6 +28,28 @@ const cleanupInterval = setInterval(() => {
   }
 }, 60000);
 cleanupInterval.unref();
+
+/**
+ * Store a challenge with size limit enforcement
+ */
+function storeChallenge(key, value) {
+  // If at capacity, remove oldest expired entries first
+  if (challenges.size >= MAX_CHALLENGES) {
+    const now = Date.now();
+    for (const [k, v] of challenges.entries()) {
+      if (now > v.expires) {
+        challenges.delete(k);
+      }
+      if (challenges.size < MAX_CHALLENGES) break;
+    }
+  }
+  // If still at capacity, reject (DoS protection)
+  if (challenges.size >= MAX_CHALLENGES) {
+    return false;
+  }
+  challenges.set(key, value);
+  return true;
+}
 
 /**
  * Get Relying Party configuration from request
@@ -92,11 +115,15 @@ export async function registrationOptions(request, reply) {
   });
 
   // Store challenge for verification
-  challenges.set(account.id, {
+  const stored = storeChallenge(account.id, {
     challenge: options.challenge,
     type: 'registration',
     expires: Date.now() + 60000 // 1 minute
   });
+
+  if (!stored) {
+    return reply.code(503).send({ error: 'Server busy, try again later' });
+  }
 
   return reply.send(options);
 }
@@ -151,7 +178,7 @@ export async function registrationVerify(request, reply) {
     return reply.send({ success: true });
   } catch (err) {
     request.log.error({ err }, 'Passkey registration error');
-    return reply.code(400).send({ error: err.message });
+    return reply.code(400).send({ error: 'Passkey registration failed' });
   }
 }
 
@@ -187,12 +214,16 @@ export async function authenticationOptions(request, reply) {
 
   // Store challenge - use visitorId for anonymous requests
   const challengeKey = accountId || request.body?.visitorId || crypto.randomUUID();
-  challenges.set(challengeKey, {
+  const stored = storeChallenge(challengeKey, {
     challenge: options.challenge,
     type: 'authentication',
     accountId,
     expires: Date.now() + 60000 // 1 minute
   });
+
+  if (!stored) {
+    return reply.code(503).send({ error: 'Server busy, try again later' });
+  }
 
   return reply.send({ ...options, challengeKey });
 }
@@ -267,6 +298,6 @@ export async function authenticationVerify(request, reply) {
     });
   } catch (err) {
     request.log.error({ err }, 'Passkey authentication error');
-    return reply.code(400).send({ error: err.message });
+    return reply.code(400).send({ error: 'Authentication failed' });
   }
 }

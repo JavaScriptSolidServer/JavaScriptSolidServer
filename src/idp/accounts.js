@@ -310,6 +310,13 @@ export async function addPasskey(accountId, credential) {
   if (!account) return false;
 
   account.passkeys = account.passkeys || [];
+
+  // Check for duplicate credentialId
+  const existingPasskey = account.passkeys.find(pk => pk.credentialId === credential.credentialId);
+  if (existingPasskey) {
+    return false; // Already registered
+  }
+
   account.passkeys.push({
     credentialId: credential.credentialId,
     publicKey: credential.publicKey,

@@ -133,8 +133,7 @@ export async function handleLogin(request, reply, provider) {
     const fullAccount = await findById(account.id);
     const shouldPromptPasskey = wantsBrowserRedirect &&
       !fullAccount.passkeys?.length &&
-      !fullAccount.passkeyPromptDismissed &&
-      request.passkeyEnabled !== false;
+      !fullAccount.passkeyPromptDismissed;
 
     if (shouldPromptPasskey) {
       // Show passkey registration prompt before completing login
