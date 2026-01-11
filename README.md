@@ -6,8 +6,11 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.75)
+### Implemented (v0.0.77)
 
+- **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
+- **HTTP Range Requests** - Partial content delivery for large files and media streaming
+- **Single-User Mode** - Simplified setup for personal pod servers
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
@@ -670,6 +673,26 @@ Response:
 
 For DPoP-bound tokens (Solid-OIDC compliant), include a DPoP proof header.
 
+### Passkey Authentication (v0.0.77+)
+
+Enable passwordless login with WebAuthn/FIDO2:
+
+```bash
+jss start --idp
+```
+
+**How it works:**
+1. User logs in with username/password
+2. Prompted to add a passkey (Touch ID, Face ID, security key)
+3. Future logins: tap "Sign in with Passkey" → biometric → done!
+
+**Benefits:**
+- Phishing-resistant (bound to domain)
+- No passwords to remember or leak
+- Works on mobile and desktop
+
+Passkeys are stored per-account and work across devices via platform sync (iCloud Keychain, Google Password Manager, etc.).
+
 ### Solid-OIDC (External IdP)
 
 The server also accepts DPoP-bound access tokens from external Solid identity providers:
@@ -869,7 +892,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **213 tests** (including 27 conformance tests)
+Currently passing: **223 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
