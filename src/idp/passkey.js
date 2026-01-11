@@ -171,13 +171,13 @@ export async function registrationVerify(request, reply) {
       return reply.code(400).send({ error: 'Verification failed' });
     }
 
-    const { credential: regCredential, credentialPublicKey, counter } = verification.registrationInfo;
+    const { credential: regCredential } = verification.registrationInfo;
 
     await accounts.addPasskey(accountId, {
-      credentialId: Buffer.from(regCredential.id).toString('base64url'),
-      publicKey: Buffer.from(credentialPublicKey).toString('base64url'),
-      counter,
-      transports: credential.response?.transports || [],
+      credentialId: regCredential.id, // Already base64url string
+      publicKey: Buffer.from(regCredential.publicKey).toString('base64url'),
+      counter: regCredential.counter,
+      transports: regCredential.transports || credential.response?.transports || [],
       name: name || 'Security Key'
     });
 
