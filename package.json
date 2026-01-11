@@ -26,6 +26,7 @@
     "@fastify/middie": "^8.3.3",
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/websocket": "^8.3.1",
+    "@simplewebauthn/server": "^13.2.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.5.0",

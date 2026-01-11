@@ -3,8 +3,8 @@
  * Handles the user-facing parts of the authentication flow
  */
 
-import { authenticate, findById, createAccount } from './accounts.js';
-import { loginPage, consentPage, errorPage, registerPage } from './views.js';
+import { authenticate, findById, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
+import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } from './views.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
@@ -122,19 +122,37 @@ export async function handleLogin(request, reply, provider) {
       return reply.redirect(`/idp/interaction/${uid}`);
     }
 
-    // Login successful - complete the interaction
+    // Login successful
+    request.log.info({ accountId: account.id, uid }, 'Login successful');
+
+    // Detect if this is a browser (wants HTML/redirect) or programmatic client (wants JSON)
+    const acceptHeader = request.headers.accept || '';
+    const wantsBrowserRedirect = acceptHeader.includes('text/html') && !acceptHeader.includes('application/json');
+
+    // Check if user should see passkey prompt (browser only, no passkeys, not dismissed)
+    const fullAccount = await findById(account.id);
+    const shouldPromptPasskey = wantsBrowserRedirect &&
+      !fullAccount.passkeys?.length &&
+      !fullAccount.passkeyPromptDismissed;
+
+    if (shouldPromptPasskey) {
+      // Show passkey registration prompt before completing login
+      // Store the pending login in the interaction
+      interaction.result = {
+        login: { accountId: account.id, remember: true }
+      };
+      interaction.passkeyPromptPending = true;
+      await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+      return reply.type('text/html').send(passkeyPromptPage(uid, account.id));
+    }
+
+    // Complete the interaction
     const result = {
       login: {
         accountId: account.id,
         remember: true,
       },
     };
-
-    request.log.info({ accountId: account.id, uid }, 'Login successful');
-
-    // Detect if this is a browser (wants HTML/redirect) or programmatic client (wants JSON)
-    const acceptHeader = request.headers.accept || '';
-    const wantsBrowserRedirect = acceptHeader.includes('text/html') && !acceptHeader.includes('application/json');
 
     // Save the login result to the interaction
     interaction.result = result;
@@ -431,5 +449,96 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   } catch (err) {
     request.log.error(err, 'Registration error');
     return reply.type('text/html').send(registerPage(uid, err.message, null, inviteOnly));
+  }
+}
+
+/**
+ * Handle GET /idp/interaction/:uid/passkey-complete
+ * Completes OIDC interaction after passkey login or registration
+ */
+export async function handlePasskeyComplete(request, reply, provider) {
+  const { uid } = request.params;
+  const { accountId } = request.query;
+
+  if (!accountId) {
+    return reply.code(400).type('text/html').send(errorPage('Missing account', 'Account ID is required.'));
+  }
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
+    }
+
+    // If this is a post-login passkey registration flow, validate accountId matches
+    // the already-authenticated user to prevent account takeover
+    if (interaction.passkeyPromptPending && interaction.result?.login?.accountId) {
+      if (interaction.result.login.accountId !== accountId) {
+        request.log.warn({ expected: interaction.result.login.accountId, provided: accountId }, 'AccountId mismatch in passkey complete');
+        return reply.code(403).type('text/html').send(errorPage('Access denied', 'Account mismatch.'));
+      }
+    }
+
+    const account = await findById(accountId);
+    if (!account) {
+      return reply.code(404).type('text/html').send(errorPage('Account not found', 'The account could not be found.'));
+    }
+
+    // Update last login
+    await updateLastLogin(accountId);
+
+    // Complete the OIDC interaction
+    const result = {
+      login: {
+        accountId: account.id,
+        remember: true,
+      },
+    };
+
+    request.log.info({ accountId: account.id, uid }, 'Passkey login completed');
+
+    reply.hijack();
+    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+  } catch (err) {
+    request.log.error(err, 'Passkey complete error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
+ * Handle GET /idp/interaction/:uid/passkey-skip
+ * User skipped passkey registration, complete login
+ */
+export async function handlePasskeySkip(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
+    }
+
+    // Validate the interaction is in the passkey prompt state
+    if (!interaction.passkeyPromptPending) {
+      return reply.code(400).type('text/html').send(errorPage('Invalid state', 'Not in passkey prompt flow.'));
+    }
+
+    // Get the pending login result
+    const result = interaction.result;
+    if (!result?.login?.accountId) {
+      return reply.code(400).type('text/html').send(errorPage('Invalid state', 'No pending login found.'));
+    }
+
+    // Mark passkey prompt as dismissed so we don't nag again
+    await setPasskeyPromptDismissed(result.login.accountId, true);
+
+    request.log.info({ accountId: result.login.accountId, uid }, 'Passkey prompt skipped');
+
+    // Complete the OIDC interaction
+    reply.hijack();
+    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+  } catch (err) {
+    request.log.error(err, 'Passkey skip error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
   }
 }

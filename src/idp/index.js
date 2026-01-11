@@ -13,11 +13,14 @@ import {
   handleAbort,
   handleRegisterGet,
   handleRegisterPost,
+  handlePasskeyComplete,
+  handlePasskeySkip,
 } from './interactions.js';
 import {
   handleCredentials,
   handleCredentialsInfo,
 } from './credentials.js';
+import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
 
 /**
@@ -288,6 +291,68 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleRegisterPost(request, reply, issuer, inviteOnly);
+  });
+
+  // Passkey routes
+  // Registration options - rate limited to prevent DoS
+  fastify.post('/idp/passkey/register/options', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return passkey.registrationOptions(request, reply);
+  });
+
+  // Registration verify - rate limited
+  fastify.post('/idp/passkey/register/verify', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return passkey.registrationVerify(request, reply);
+  });
+
+  // Login options - rate limited to prevent DoS
+  fastify.post('/idp/passkey/login/options', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return passkey.authenticationOptions(request, reply);
+  });
+
+  // Login verify - rate limited
+  fastify.post('/idp/passkey/login/verify', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return passkey.authenticationVerify(request, reply);
+  });
+
+  // Passkey interaction handlers
+  fastify.get('/idp/interaction/:uid/passkey-complete', async (request, reply) => {
+    return handlePasskeyComplete(request, reply, provider);
+  });
+
+  fastify.get('/idp/interaction/:uid/passkey-skip', async (request, reply) => {
+    return handlePasskeySkip(request, reply, provider);
   });
 
   fastify.log.info(`IdP initialized with issuer: ${issuer}`);

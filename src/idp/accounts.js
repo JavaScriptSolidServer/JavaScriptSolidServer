@@ -38,6 +38,10 @@ function getWebIdIndexPath() {
   return path.join(getAccountsDir(), '_webid_index.json');
 }
 
+function getCredentialIndexPath() {
+  return path.join(getAccountsDir(), '_credential_index.json');
+}
+
 const SALT_ROUNDS = 10;
 
 /**
@@ -268,6 +272,135 @@ export async function deleteAccount(id) {
   // Delete account file
   const accountPath = path.join(getAccountsDir(), `${id}.json`);
   await fs.remove(accountPath);
+}
+
+/**
+ * Save an account (internal helper)
+ * @param {object} account - Account object
+ */
+async function saveAccount(account) {
+  const accountPath = path.join(getAccountsDir(), `${account.id}.json`);
+  await fs.writeJson(accountPath, account, { spaces: 2 });
+}
+
+/**
+ * Update last login timestamp
+ * @param {string} id - Account ID
+ */
+export async function updateLastLogin(id) {
+  const account = await findById(id);
+  if (!account) return;
+  account.lastLogin = new Date().toISOString();
+  await saveAccount(account);
+}
+
+/**
+ * Add a passkey credential to an account
+ * @param {string} accountId - Account ID
+ * @param {object} credential - Passkey credential
+ * @param {string} credential.credentialId - Base64url encoded credential ID
+ * @param {string} credential.publicKey - Base64url encoded public key
+ * @param {number} credential.counter - Authenticator counter
+ * @param {string[]} [credential.transports] - Supported transports
+ * @param {string} [credential.name] - User-friendly name
+ * @returns {Promise<boolean>} - Success
+ */
+export async function addPasskey(accountId, credential) {
+  const account = await findById(accountId);
+  if (!account) return false;
+
+  account.passkeys = account.passkeys || [];
+
+  // Check for duplicate credentialId
+  const existingPasskey = account.passkeys.find(pk => pk.credentialId === credential.credentialId);
+  if (existingPasskey) {
+    return false; // Already registered
+  }
+
+  account.passkeys.push({
+    credentialId: credential.credentialId,
+    publicKey: credential.publicKey,
+    counter: credential.counter || 0,
+    transports: credential.transports || [],
+    createdAt: new Date().toISOString(),
+    lastUsed: null,
+    name: credential.name || 'Security Key'
+  });
+
+  await saveAccount(account);
+
+  // Update credential index
+  const credentialIndex = await loadIndex(getCredentialIndexPath());
+  credentialIndex[credential.credentialId] = accountId;
+  await saveIndex(getCredentialIndexPath(), credentialIndex);
+
+  return true;
+}
+
+/**
+ * Find an account by passkey credential ID
+ * @param {string} credentialId - Base64url encoded credential ID
+ * @returns {Promise<object|null>} - Account or null
+ */
+export async function findByCredentialId(credentialId) {
+  const credentialIndex = await loadIndex(getCredentialIndexPath());
+  const id = credentialIndex[credentialId];
+  if (!id) return null;
+  return findById(id);
+}
+
+/**
+ * Update passkey counter after successful authentication
+ * @param {string} accountId - Account ID
+ * @param {string} credentialId - Credential ID
+ * @param {number} newCounter - New counter value
+ */
+export async function updatePasskeyCounter(accountId, credentialId, newCounter) {
+  const account = await findById(accountId);
+  if (!account || !account.passkeys) return;
+
+  const passkey = account.passkeys.find(p => p.credentialId === credentialId);
+  if (passkey) {
+    passkey.counter = newCounter;
+    passkey.lastUsed = new Date().toISOString();
+    await saveAccount(account);
+  }
+}
+
+/**
+ * Remove a passkey from an account
+ * @param {string} accountId - Account ID
+ * @param {string} credentialId - Credential ID to remove
+ * @returns {Promise<boolean>} - Success
+ */
+export async function removePasskey(accountId, credentialId) {
+  const account = await findById(accountId);
+  if (!account || !account.passkeys) return false;
+
+  const index = account.passkeys.findIndex(p => p.credentialId === credentialId);
+  if (index === -1) return false;
+
+  account.passkeys.splice(index, 1);
+  await saveAccount(account);
+
+  // Update credential index
+  const credentialIndex = await loadIndex(getCredentialIndexPath());
+  delete credentialIndex[credentialId];
+  await saveIndex(getCredentialIndexPath(), credentialIndex);
+
+  return true;
+}
+
+/**
+ * Set passkey prompt dismissed flag
+ * @param {string} accountId - Account ID
+ * @param {boolean} dismissed - Whether prompt was dismissed
+ */
+export async function setPasskeyPromptDismissed(accountId, dismissed = true) {
+  const account = await findById(accountId);
+  if (!account) return;
+  account.passkeyPromptDismissed = dismissed;
+  await saveAccount(account);
 }
 
 /**

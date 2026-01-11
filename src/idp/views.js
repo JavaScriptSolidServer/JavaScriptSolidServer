@@ -105,6 +105,38 @@ const styles = `
   .btn-secondary:hover {
     background: #e0e0e0;
   }
+  .btn-passkey {
+    background: #1a73e8;
+    color: white;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .btn-passkey:hover {
+    background: #1557b0;
+  }
+  .btn-passkey svg {
+    width: 20px;
+    height: 20px;
+  }
+  .divider {
+    display: flex;
+    align-items: center;
+    margin: 20px 0;
+    color: #666;
+    font-size: 14px;
+  }
+  .divider::before,
+  .divider::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px solid #ddd;
+  }
+  .divider span {
+    padding: 0 12px;
+  }
   .scopes {
     margin: 20px 0;
   }
@@ -149,6 +181,12 @@ const solidLogo = `
 </svg>
 `;
 
+const passkeyIcon = `
+<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+  <path d="M12.65 10C11.83 7.67 9.61 6 7 6c-3.31 0-6 2.69-6 6s2.69 6 6 6c2.61 0 4.83-1.67 5.65-4H17v4h4v-4h2v-4H12.65zM7 14c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
+</svg>
+`;
+
 const scopeDescriptions = {
   openid: 'Access your identity',
   webid: 'Access your WebID',
@@ -158,10 +196,124 @@ const scopeDescriptions = {
 };
 
 /**
+ * Escape string for safe use in JavaScript
+ */
+function escapeJs(text) {
+  if (!text) return '';
+  return String(text)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/</g, '\\x3c')
+    .replace(/>/g, '\\x3e')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+
+/**
  * Login page HTML
  */
-export function loginPage(uid, clientId, error = null) {
+export function loginPage(uid, clientId, error = null, passkeyEnabled = true) {
   const appName = clientId || 'An application';
+  const safeUid = escapeJs(uid);
+
+  const passkeySection = passkeyEnabled ? `
+    <button type="button" class="btn btn-passkey" onclick="loginWithPasskey()">
+      ${passkeyIcon}
+      Sign in with Passkey
+    </button>
+
+    <div class="divider"><span>or</span></div>
+  ` : '';
+
+  const passkeyScript = passkeyEnabled ? `
+  <script>
+    var INTERACTION_UID = '${safeUid}';
+
+    async function loginWithPasskey() {
+      try {
+        // Get authentication options
+        const optionsRes = await fetch('/idp/passkey/login/options', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visitorId: crypto.randomUUID() })
+        });
+        const options = await optionsRes.json();
+        if (options.error) {
+          alert('Error: ' + options.error);
+          return;
+        }
+
+        // Convert base64url to ArrayBuffer
+        options.challenge = base64urlToBuffer(options.challenge);
+        if (options.allowCredentials) {
+          options.allowCredentials = options.allowCredentials.map(c => ({
+            ...c,
+            id: base64urlToBuffer(c.id)
+          }));
+        }
+
+        // Prompt user for passkey
+        const credential = await navigator.credentials.get({ publicKey: options });
+
+        // Send response to server
+        const verifyRes = await fetch('/idp/passkey/login/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challengeKey: options.challengeKey,
+            credential: {
+              id: credential.id,
+              rawId: bufferToBase64url(credential.rawId),
+              type: credential.type,
+              response: {
+                clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+                authenticatorData: bufferToBase64url(credential.response.authenticatorData),
+                signature: bufferToBase64url(credential.response.signature),
+                userHandle: credential.response.userHandle
+                  ? bufferToBase64url(credential.response.userHandle)
+                  : null
+              }
+            }
+          })
+        });
+
+        const result = await verifyRes.json();
+        if (result.success) {
+          // Complete the OIDC interaction - build URL safely
+          const redirectUrl = '/idp/interaction/' + encodeURIComponent(INTERACTION_UID) + '/passkey-complete?accountId=' + encodeURIComponent(result.accountId);
+          window.location.href = redirectUrl;
+        } else {
+          alert('Passkey authentication failed: ' + (result.error || 'Unknown error'));
+        }
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          // User cancelled - do nothing
+        } else {
+          console.error('Passkey error:', err);
+          alert('Passkey authentication failed: ' + err.message);
+        }
+      }
+    }
+
+    function base64urlToBuffer(base64url) {
+      const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+      const padLen = (4 - base64.length % 4) % 4;
+      const padded = base64 + '='.repeat(padLen);
+      const binary = atob(padded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    function bufferToBase64url(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=/g, '');
+    }
+  </script>
+  ` : '';
 
   return `
 <!DOCTYPE html>
@@ -185,6 +337,8 @@ export function loginPage(uid, clientId, error = null) {
 
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
+    ${passkeySection}
+
     <form method="POST" action="/idp/interaction/${uid}/login">
       <label for="username">Username</label>
       <input type="text" id="username" name="username" required autofocus placeholder="Your username">
@@ -203,6 +357,7 @@ export function loginPage(uid, clientId, error = null) {
       Don't have an account? <a href="/idp/register?uid=${uid}" style="color: #0066cc;">Register</a>
     </p>
   </div>
+  ${passkeyScript}
 </body>
 </html>
   `;
@@ -344,6 +499,162 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
       Already have an account? <a href="${uid ? `/idp/interaction/${uid}` : '/idp/auth'}" style="color: #0066cc;">Sign In</a>
     </p>
   </div>
+</body>
+</html>
+  `;
+}
+
+/**
+ * Passkey prompt page - shown after password login to encourage passkey setup
+ */
+export function passkeyPromptPage(uid, accountId) {
+  const safeUid = escapeJs(uid);
+  const safeAccountId = escapeJs(accountId);
+  // Pre-escape the SVG for innerHTML assignment (no user data, just static SVG)
+  const passkeyIconEscaped = passkeyIcon.replace(/'/g, "\\'").replace(/\n/g, '');
+
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Add a Passkey - Solid IdP</title>
+  <style>${styles}</style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">${solidLogo}</div>
+    <h1>Add a Passkey?</h1>
+    <p class="subtitle">Sign in faster next time</p>
+
+    <div class="client-info">
+      <div class="client-name">Passkeys are more secure</div>
+      <div class="client-uri">Use Touch ID, Face ID, or a security key instead of your password</div>
+    </div>
+
+    <button type="button" class="btn btn-passkey" onclick="registerPasskey()" id="addBtn">
+      ${passkeyIcon}
+      Add Passkey
+    </button>
+
+    <form method="GET" action="/idp/interaction/${escapeHtml(uid)}/passkey-skip">
+      <button type="submit" class="btn btn-secondary">Skip for now</button>
+    </form>
+  </div>
+
+  <script>
+    var INTERACTION_UID = '${safeUid}';
+    var ACCOUNT_ID = '${safeAccountId}';
+    var PASSKEY_ICON = '${passkeyIconEscaped}';
+
+    async function registerPasskey() {
+      const btn = document.getElementById('addBtn');
+      btn.disabled = true;
+      btn.textContent = 'Setting up...';
+
+      try {
+        // Get registration options
+        const optionsRes = await fetch('/idp/passkey/register/options', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ accountId: ACCOUNT_ID })
+        });
+        const options = await optionsRes.json();
+        if (options.error) {
+          alert('Error: ' + options.error);
+          btn.disabled = false;
+          btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
+          return;
+        }
+
+        // Save challengeKey for verification
+        const challengeKey = options.challengeKey;
+
+        // Convert base64url to ArrayBuffer
+        options.challenge = base64urlToBuffer(options.challenge);
+        options.user.id = base64urlToBuffer(options.user.id);
+        if (options.excludeCredentials) {
+          options.excludeCredentials = options.excludeCredentials.map(c => ({
+            ...c,
+            id: base64urlToBuffer(c.id)
+          }));
+        }
+
+        // Prompt user to create passkey
+        const credential = await navigator.credentials.create({ publicKey: options });
+
+        // Send response to server
+        const verifyRes = await fetch('/idp/passkey/register/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountId: ACCOUNT_ID,
+            challengeKey: challengeKey,
+            credential: {
+              id: credential.id,
+              rawId: bufferToBase64url(credential.rawId),
+              type: credential.type,
+              response: {
+                clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+                attestationObject: bufferToBase64url(credential.response.attestationObject),
+                transports: credential.response.getTransports ? credential.response.getTransports() : []
+              }
+            },
+            name: detectDeviceName()
+          })
+        });
+
+        const result = await verifyRes.json();
+        if (result.success) {
+          // Passkey added, continue to app - build URL safely
+          const redirectUrl = '/idp/interaction/' + encodeURIComponent(INTERACTION_UID) + '/passkey-complete?accountId=' + encodeURIComponent(ACCOUNT_ID);
+          window.location.href = redirectUrl;
+        } else {
+          alert('Failed to add passkey: ' + (result.error || 'Unknown error'));
+          btn.disabled = false;
+          btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
+        }
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          // User cancelled
+        } else {
+          console.error('Passkey error:', err);
+          alert('Failed to add passkey: ' + err.message);
+        }
+        btn.disabled = false;
+        btn.innerHTML = PASSKEY_ICON + ' Add Passkey';
+      }
+    }
+
+    function detectDeviceName() {
+      const ua = navigator.userAgent;
+      if (/iPhone/.test(ua)) return 'iPhone';
+      if (/iPad/.test(ua)) return 'iPad';
+      if (/Mac/.test(ua)) return 'Mac';
+      if (/Android/.test(ua)) return 'Android';
+      if (/Windows/.test(ua)) return 'Windows';
+      if (/Linux/.test(ua)) return 'Linux';
+      return 'Security Key';
+    }
+
+    function base64urlToBuffer(base64url) {
+      const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+      const padLen = (4 - base64.length % 4) % 4;
+      const padded = base64 + '='.repeat(padLen);
+      const binary = atob(padded);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes.buffer;
+    }
+
+    function bufferToBase64url(buffer) {
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=/g, '');
+    }
+  </script>
 </body>
 </html>
   `;
