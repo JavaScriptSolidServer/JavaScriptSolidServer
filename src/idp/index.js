@@ -32,7 +32,7 @@ import { addTrustedIssuer } from '../auth/solid-oidc.js';
  * @param {string} options.issuer - The issuer URL
  */
 export async function idpPlugin(fastify, options) {
-  const { issuer, inviteOnly = false } = options;
+  const { issuer, inviteOnly = false, singleUser = false } = options;
 
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
@@ -277,23 +277,41 @@ export async function idpPlugin(fastify, options) {
     return handleAbort(request, reply, provider);
   });
 
-  // Registration routes
-  fastify.get('/idp/register', async (request, reply) => {
-    return handleRegisterGet(request, reply, inviteOnly);
-  });
+  // Registration routes (disabled in single-user mode)
+  if (singleUser) {
+    // Single-user mode: registration disabled
+    fastify.get('/idp/register', async (request, reply) => {
+      return reply.code(403).type('text/html').send(`
+        <!DOCTYPE html>
+        <html><head><title>Registration Disabled</title></head>
+        <body style="font-family: system-ui; padding: 2rem; text-align: center;">
+          <h1>Registration Disabled</h1>
+          <p>This server is running in single-user mode. Registration is not available.</p>
+          <p><a href="/idp/login">Login</a></p>
+        </body></html>
+      `);
+    });
+    fastify.post('/idp/register', async (request, reply) => {
+      return reply.code(403).send({ error: 'Registration disabled in single-user mode' });
+    });
+  } else {
+    fastify.get('/idp/register', async (request, reply) => {
+      return handleRegisterGet(request, reply, inviteOnly);
+    });
 
-  // Registration - rate limited to prevent spam accounts
-  fastify.post('/idp/register', {
-    config: {
-      rateLimit: {
-        max: 5,
-        timeWindow: '1 hour',
-        keyGenerator: (request) => request.ip
+    // Registration - rate limited to prevent spam accounts
+    fastify.post('/idp/register', {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 hour',
+          keyGenerator: (request) => request.ip
+        }
       }
-    }
-  }, async (request, reply) => {
-    return handleRegisterPost(request, reply, issuer, inviteOnly);
-  });
+    }, async (request, reply) => {
+      return handleRegisterPost(request, reply, issuer, inviteOnly);
+    });
+  }
 
   // Passkey routes
   // Registration options - rate limited to prevent DoS
@@ -373,7 +391,8 @@ export async function idpPlugin(fastify, options) {
     return handleSchnorrComplete(request, reply, provider);
   });
 
-  fastify.log.info(`IdP initialized with issuer: ${issuer}`);
+  const modeInfo = singleUser ? ' (single-user mode, registration disabled)' : inviteOnly ? ' (invite-only)' : '';
+  fastify.log.info(`IdP initialized with issuer: ${issuer}${modeInfo}`);
 }
 
 export default idpPlugin;

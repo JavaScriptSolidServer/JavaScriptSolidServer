@@ -72,6 +72,8 @@ program
   .option('--ap-nostr-pubkey <hex>', 'Nostr pubkey for identity linking')
   .option('--invite-only', 'Require invite code for registration')
   .option('--no-invite-only', 'Allow open registration')
+  .option('--single-user', 'Single-user mode (creates pod on startup, disables registration)')
+  .option('--single-user-name <name>', 'Username for single-user mode (default: me)')
   .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')
   .option('-q, --quiet', 'Suppress log output')
@@ -127,6 +129,8 @@ program
         apNostrPubkey: config.apNostrPubkey,
         inviteOnly: config.inviteOnly,
         webidTls: config.webidTls,
+        singleUser: config.singleUser,
+        singleUserName: config.singleUserName,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -149,7 +153,8 @@ program
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
-        if (config.inviteOnly) console.log('  Registration: invite-only');
+        if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
+        else if (config.inviteOnly) console.log('  Registration: invite-only');
         if (config.webidTls) console.log('  WebID-TLS: enabled (client certificate auth)');
         console.log('\n  Press Ctrl+C to stop\n');
       }
