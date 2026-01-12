@@ -6,7 +6,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.78)
+### Implemented (v0.0.79)
 
 - **Schnorr SSO** - Passwordless login via BIP-340 Schnorr signatures using NIP-07 browser extensions (Podkey, nos2x, Alby)
 - **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
@@ -180,6 +180,31 @@ Create `config.json`:
 Then: `jss start --config config.json`
 
 ### Creating a Pod
+
+### Single-User Mode
+
+For personal pod servers where only one user needs access:
+
+```bash
+# Basic single-user mode (creates pod at /me/)
+jss start --single-user --idp
+
+# Custom username
+jss start --single-user --single-user-name alice --idp
+
+# Root-level pod (pod at /, WebID at /profile/card#me)
+jss start --single-user --single-user-name '' --idp
+
+# Via environment
+JSS_SINGLE_USER=true jss start --idp
+```
+
+**Features:**
+- Pod auto-created on first startup with full structure (inbox, public, private, profile, Settings)
+- Registration endpoint disabled (returns 403)
+- Login still works for the single user
+- Proper ACLs generated automatically
+
 
 ```bash
 curl -X POST http://localhost:3000/.pods \
@@ -694,7 +719,7 @@ jss start --idp
 
 Passkeys are stored per-account and work across devices via platform sync (iCloud Keychain, Google Password Manager, etc.).
 
-### Schnorr SSO (v0.0.78+)
+### Schnorr SSO (v0.0.79+)
 
 Sign in with your Nostr key using NIP-07 browser extensions:
 
