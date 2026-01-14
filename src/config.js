@@ -28,6 +28,7 @@ export const defaults = {
   multiuser: true,
   conneg: false,
   notifications: false,
+  lwsMode: false,  // LWS protocol mode (draft)
 
   // Identity Provider
   idp: false,
@@ -89,6 +90,7 @@ const envMap = {
   JSS_MULTIUSER: 'multiuser',
   JSS_CONNEG: 'conneg',
   JSS_NOTIFICATIONS: 'notifications',
+  JSS_LWS_MODE: 'lwsMode',
   JSS_QUIET: 'quiet',
   JSS_CONFIG_PATH: 'configPath',
   JSS_IDP: 'idp',
@@ -259,6 +261,7 @@ export function printConfig(config) {
   console.log(`  Multi-user:    ${config.multiuser}`);
   console.log(`  Conneg:        ${config.conneg}`);
   console.log(`  Notifications: ${config.notifications}`);
+  console.log(`  LWS Mode:      ${config.lwsMode ? 'enabled (DRAFT)' : 'disabled'}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
   console.log(`  Mashlib:       ${config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);

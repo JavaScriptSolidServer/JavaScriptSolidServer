@@ -10,6 +10,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 - **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
 - **HTTP Range Requests** - Partial content delivery for large files and media streaming
+- **LWS Protocol Mode (DRAFT)** - Optional W3C Linked Web Storage semantics (`--lws-mode` flag, see #87)
 - **Single-User Mode** - Simplified setup for personal pod servers
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
@@ -301,6 +302,7 @@ createServer({
   logger: true,        // Enable Fastify logging (default: true)
   conneg: false,       // Enable content negotiation (default: false)
   notifications: false, // Enable WebSocket notifications (default: false)
+  lwsMode: false,      // Enable LWS protocol mode - DRAFT (default: false)
   subdomains: false,   // Enable subdomain-based pods (default: false)
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
   mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
@@ -348,6 +350,48 @@ Serves a modern Nextcloud-style UI shell while reusing mashlib's data layer. The
 - Responsive design for mobile devices
 
 Requires solidos-ui dist files in `src/mashlib-local/dist/solidos-ui/`. See [solidos-ui](https://github.com/solidos/solidos/tree/main/workspaces/solidos-ui) for details.
+
+### LWS Protocol Mode (DRAFT)
+
+⚠️ **Experimental Feature** - See [issue #87](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/87) for full details.
+
+Enable W3C Linked Web Storage protocol semantics (alternative to Solid/LDP):
+
+```bash
+jss start --lws-mode
+```
+
+**Key Differences from Solid/LDP:**
+
+| Aspect | Solid/LDP (Default) | LWS Mode |
+|--------|-------------------|----------|
+| Resource Creation | PUT or POST | POST only |
+| PUT Semantics | Create or update | Update only (404 if not exists) |
+| Container Detection | Trailing slash `/` | Link header `rel="type"` |
+
+**Example - LWS Mode:**
+```bash
+# PUT fails for non-existent resource
+curl -X PUT http://localhost:3000/alice/public/new.json \
+  -H "Content-Type: application/json" \
+  -d '{"test": true}'
+# 404: Use POST to create resources
+
+# POST required for creation
+curl -X POST http://localhost:3000/alice/public/ \
+  -H "Content-Type: application/json" \
+  -H "Slug: new-resource" \
+  -d '{"test": true}'
+# 201 Created
+
+# PUT works for updates
+curl -X PUT http://localhost:3000/alice/public/new-resource.json \
+  -H "Content-Type: application/json" \
+  -d '{"test": "updated"}'
+# 204 No Content
+```
+
+**Status:** Early draft implementation. LWS spec is evolving - monitor ecosystem adoption before production use.
 
 ### Profile Pages
 

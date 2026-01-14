@@ -47,6 +47,8 @@ program
   .option('--no-conneg', 'Disable content negotiation')
   .option('--notifications', 'Enable WebSocket notifications')
   .option('--no-notifications', 'Disable WebSocket notifications')
+  .option('--lws-mode', 'Enable LWS protocol mode (DRAFT - see issue #87)')
+  .option('--no-lws-mode', 'Use Solid/LDP protocol mode (default)')
   .option('--idp', 'Enable built-in Identity Provider')
   .option('--no-idp', 'Disable built-in Identity Provider')
   .option('--idp-issuer <url>', 'IdP issuer URL (defaults to server URL)')

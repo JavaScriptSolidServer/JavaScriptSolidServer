@@ -513,6 +513,7 @@ export async function handleHead(request, reply) {
 export async function handlePut(request, reply) {
   const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
   const connegEnabled = request.connegEnabled || false;
+  const lwsMode = request.lwsMode || false;
 
   // Handle container creation via PUT
   if (isContainer(urlPath)) {
@@ -540,6 +541,17 @@ export async function handlePut(request, reply) {
     return reply.code(201).send();
   }
 
+  // LWS Mode: PUT is for updates only, not creation
+  // Check if resource exists first
+  const stats = await storage.stat(storagePath);
+
+  if (lwsMode && !stats) {
+    return reply.code(404).send({
+      error: 'Resource not found',
+      message: 'LWS mode: Use POST to create resources. PUT is for updates only.'
+    });
+  }
+
   const contentType = request.headers['content-type'] || '';
 
   // Check if we can accept this input type
@@ -552,8 +564,7 @@ export async function handlePut(request, reply) {
     });
   }
 
-  // Check if resource already exists and get current ETag
-  const stats = await storage.stat(storagePath);
+  // stats already fetched above for LWS check
   const existed = stats !== null;
   const currentEtag = stats?.etag || null;
 
