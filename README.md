@@ -355,7 +355,7 @@ Requires solidos-ui dist files in `src/mashlib-local/dist/solidos-ui/`. See [sol
 
 ⚠️ **Experimental Feature** - See [issue #87](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/87) for full details.
 
-Enable W3C Linked Web Storage protocol semantics (alternative to Solid/LDP):
+Enable W3C Linked Web Storage protocol semantics:
 
 ```bash
 jss start --lws-mode
@@ -365,33 +365,35 @@ jss start --lws-mode
 
 | Aspect | Solid/LDP (Default) | LWS Mode |
 |--------|-------------------|----------|
-| Resource Creation | PUT or POST | POST only |
-| PUT Semantics | Create or update | Update only (404 if not exists) |
-| Container Detection | Trailing slash `/` | Link header `rel="type"` |
+| Resource Creation | PUT or POST | PUT or POST (POST+Slug emphasized) |
+| Container Detection | Trailing slash `/` | Link header `rel="type"` (planned) |
+| Metadata Updates | N3 Patch, SPARQL | JSON Merge Patch on linkset (planned) |
 
-**Example - LWS Mode:**
+**Current Status:**
+
+Currently, `--lws-mode` is primarily infrastructure. The PUT/POST semantics are **the same** as Solid/LDP (PUT can create or update).
+
+Future LWS-specific features (when implemented):
+- Link header-based container detection (alternative to trailing slash)
+- Linkset metadata endpoints (`/resource;linkset`)
+- JSON Merge Patch for metadata updates
+
+**Example:**
 ```bash
-# PUT fails for non-existent resource
+# Both work in LWS mode (same as default)
 curl -X PUT http://localhost:3000/alice/public/new.json \
   -H "Content-Type: application/json" \
   -d '{"test": true}'
-# 404: Use POST to create resources
-
-# POST required for creation
-curl -X POST http://localhost:3000/alice/public/ \
-  -H "Content-Type: application/json" \
-  -H "Slug: new-resource" \
-  -d '{"test": true}'
 # 201 Created
 
-# PUT works for updates
-curl -X PUT http://localhost:3000/alice/public/new-resource.json \
+curl -X POST http://localhost:3000/alice/public/ \
   -H "Content-Type: application/json" \
-  -d '{"test": "updated"}'
-# 204 No Content
+  -H "Slug: another-resource" \
+  -d '{"test": true}'
+# 201 Created
 ```
 
-**Status:** Early draft implementation. LWS spec is evolving - monitor ecosystem adoption before production use.
+**Status:** Early draft implementation. LWS spec is evolving - monitor ecosystem adoption before production use. Per Solid CG clarification, PUT creation is allowed in LWS.
 
 ### Profile Pages
 

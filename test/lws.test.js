@@ -29,18 +29,22 @@ describe('LWS Protocol Mode (DRAFT)', () => {
     await stopTestServer();
   });
 
-  describe('PUT Semantics (Updates Only)', () => {
-    it('should reject PUT for non-existent resource in LWS mode', async () => {
-      const res = await request('/lwstest/public/new-resource.json', {
+  describe('PUT Semantics (Creation and Updates)', () => {
+    it('should allow PUT for resource creation in LWS mode', async () => {
+      // LWS allows PUT for creation (clarified by Eric on Solid CG call)
+      const res = await request('/lwstest/public/new-via-put.json', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test: true }),
+        body: JSON.stringify({ created: 'via PUT' }),
         auth: 'lwstest'
       });
 
-      assertStatus(res, 404);
-      const body = await res.json();
-      assert.ok(body.message.includes('POST to create'), 'Error should suggest POST');
+      assertStatus(res, 201);
+
+      // Verify created
+      const verify = await request('/lwstest/public/new-via-put.json');
+      const data = await verify.json();
+      assert.strictEqual(data.created, 'via PUT');
     });
 
     it('should allow PUT to update existing resource in LWS mode', async () => {
@@ -113,15 +117,16 @@ describe('LWS Protocol Mode (DRAFT)', () => {
     it('should document LWS mode differences', () => {
       // This test serves as documentation
       const differences = {
-        PUT: 'Updates only (404 if not exists)',
-        POST: 'Required for creation',
-        containerDetection: 'Link header (future: remove slash semantics)',
+        PUT: 'Allowed for creation and updates (same as LDP)',
+        POST: 'Emphasized pattern with Slug for server-assigned URIs',
+        containerDetection: 'Link header (future: may remove slash semantics)',
         metadataUpdates: 'Future: JSON Merge Patch on linkset resources',
         etagRequirement: 'Mandatory (already implemented)'
       };
 
-      // Test demonstrates PUT restriction is implemented
-      assert.ok(differences.PUT.includes('404'), 'PUT rejects non-existent');
+      // Note: Per Eric on Solid CG call, LWS allows PUT creation
+      // The main difference is POST+Slug is the emphasized pattern
+      assert.ok(differences.POST.includes('Slug'), 'POST with Slug emphasized');
     });
   });
 });
