@@ -45,6 +45,8 @@ export function createServer(options = {}) {
   const connegEnabled = options.conneg ?? false;
   // WebSocket notifications are OFF by default
   const notificationsEnabled = options.notifications ?? false;
+  // LWS protocol mode is OFF by default - use Solid/LDP semantics
+  const lwsMode = options.lwsMode ?? false;
   // Identity Provider is OFF by default
   const idpEnabled = options.idp ?? false;
   const idpIssuer = options.idpIssuer;
@@ -126,6 +128,7 @@ export function createServer(options = {}) {
   // Attach server config to requests
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
+  fastify.decorateRequest('lwsMode', null);
   fastify.decorateRequest('idpEnabled', null);
   fastify.decorateRequest('subdomainsEnabled', null);
   fastify.decorateRequest('baseDomain', null);
@@ -138,6 +141,7 @@ export function createServer(options = {}) {
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
+    request.lwsMode = lwsMode;
     request.idpEnabled = idpEnabled;
     request.subdomainsEnabled = subdomainsEnabled;
     request.baseDomain = baseDomain;

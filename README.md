@@ -11,6 +11,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Schnorr SSO** - Passwordless login via BIP-340 Schnorr signatures using NIP-07 browser extensions (Podkey, nos2x, Alby)
 - **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
 - **HTTP Range Requests** - Partial content delivery for large files and media streaming
+- **LWS Protocol Mode (DRAFT)** - Optional W3C Linked Web Storage semantics (`--lws-mode` flag, see #87)
 - **Single-User Mode** - Simplified setup for personal pod servers
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
@@ -327,6 +328,7 @@ createServer({
   logger: true,        // Enable Fastify logging (default: true)
   conneg: false,       // Enable content negotiation (default: false)
   notifications: false, // Enable WebSocket notifications (default: false)
+  lwsMode: false,      // Enable LWS protocol mode - DRAFT (default: false)
   subdomains: false,   // Enable subdomain-based pods (default: false)
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
   mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
@@ -374,6 +376,50 @@ Serves a modern Nextcloud-style UI shell while reusing mashlib's data layer. The
 - Responsive design for mobile devices
 
 Requires solidos-ui dist files in `src/mashlib-local/dist/solidos-ui/`. See [solidos-ui](https://github.com/solidos/solidos/tree/main/workspaces/solidos-ui) for details.
+
+### LWS Protocol Mode (DRAFT)
+
+⚠️ **Experimental Feature** - See [issue #87](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/87) for full details.
+
+Enable W3C Linked Web Storage protocol semantics:
+
+```bash
+jss start --lws-mode
+```
+
+**Key Differences from Solid/LDP:**
+
+| Aspect | Solid/LDP (Default) | LWS Mode |
+|--------|-------------------|----------|
+| Resource Creation | PUT or POST | PUT or POST (POST+Slug emphasized) |
+| Container Detection | Trailing slash `/` | Link header `rel="type"` (planned) |
+| Metadata Updates | N3 Patch, SPARQL | JSON Merge Patch on linkset (planned) |
+
+**Current Status:**
+
+Currently, `--lws-mode` is primarily infrastructure. The PUT/POST semantics are **the same** as Solid/LDP (PUT can create or update).
+
+Future LWS-specific features (when implemented):
+- Link header-based container detection (alternative to trailing slash)
+- Linkset metadata endpoints (`/resource;linkset`)
+- JSON Merge Patch for metadata updates
+
+**Example:**
+```bash
+# Both work in LWS mode (same as default)
+curl -X PUT http://localhost:3000/alice/public/new.json \
+  -H "Content-Type: application/json" \
+  -d '{"test": true}'
+# 201 Created
+
+curl -X POST http://localhost:3000/alice/public/ \
+  -H "Content-Type: application/json" \
+  -H "Slug: another-resource" \
+  -d '{"test": true}'
+# 201 Created
+```
+
+**Status:** Early draft implementation. LWS spec is evolving - monitor ecosystem adoption before production use. Per Solid CG clarification, PUT creation is allowed in LWS.
 
 ### Profile Pages
 
