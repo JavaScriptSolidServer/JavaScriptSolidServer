@@ -2,8 +2,8 @@
  * ActivityPub SQLite Storage
  * Persistence layer for federation data
  *
- * Uses better-sqlite3 when available (native, fast)
- * Falls back to sql.js on Android/platforms without native builds
+ * Uses sql.js (WASM) for cross-platform compatibility
+ * Works on Android/Termux, Windows, and all platforms
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
@@ -11,7 +11,6 @@ import { dirname } from 'path'
 
 let db = null
 let dbPath = null
-let usingSqlJs = false
 
 // SQL schema
 const SCHEMA = `
@@ -59,7 +58,7 @@ const SCHEMA = `
 
 /**
  * Initialize the database
- * Tries better-sqlite3 first, falls back to sql.js
+ * Uses sql.js (WASM) for cross-platform compatibility
  * @param {string} path - Path to SQLite file
  */
 export async function initStore(path = 'data/activitypub.db') {
@@ -71,43 +70,31 @@ export async function initStore(path = 'data/activitypub.db') {
 
   dbPath = path
 
-  // Try better-sqlite3 first (fast, native)
-  try {
-    const Database = (await import('better-sqlite3')).default
-    db = new Database(path)
-    db.exec(SCHEMA)
-    usingSqlJs = false
-    return db
-  } catch (e) {
-    // Fall back to sql.js (WASM, works everywhere)
-    console.log('ActivityPub: Using sql.js (WASM) for SQLite storage')
+  // Use sql.js (WASM, works everywhere)
+  const initSqlJs = (await import('sql.js')).default
+  const SQL = await initSqlJs()
 
-    const initSqlJs = (await import('sql.js')).default
-    const SQL = await initSqlJs()
-
-    // Load existing database if it exists
-    if (existsSync(path)) {
-      const buffer = readFileSync(path)
-      db = new SQL.Database(buffer)
-    } else {
-      db = new SQL.Database()
-    }
-
-    db.run(SCHEMA)
-    usingSqlJs = true
-
-    // Save initial database
-    saveDatabase()
-
-    return db
+  // Load existing database if it exists
+  if (existsSync(path)) {
+    const buffer = readFileSync(path)
+    db = new SQL.Database(buffer)
+  } else {
+    db = new SQL.Database()
   }
+
+  db.run(SCHEMA)
+
+  // Save initial database
+  saveDatabase()
+
+  return db
 }
 
 /**
  * Save sql.js database to disk
  */
 function saveDatabase() {
-  if (usingSqlJs && db && dbPath) {
+  if (db && dbPath) {
     const data = db.export()
     const buffer = Buffer.from(data)
     writeFileSync(dbPath, buffer)
@@ -124,45 +111,33 @@ export function getStore() {
   return db
 }
 
-// Helper to run prepared statements across both implementations
+// Helper functions for sql.js API
 function runStmt(sql, params = []) {
-  if (usingSqlJs) {
-    db.run(sql, params)
-    saveDatabase()
-  } else {
-    db.prepare(sql).run(...params)
-  }
+  db.run(sql, params)
+  saveDatabase()
 }
 
 function getOne(sql, params = []) {
-  if (usingSqlJs) {
-    const stmt = db.prepare(sql)
-    stmt.bind(params)
-    if (stmt.step()) {
-      const row = stmt.getAsObject()
-      stmt.free()
-      return row
-    }
+  const stmt = db.prepare(sql)
+  stmt.bind(params)
+  if (stmt.step()) {
+    const row = stmt.getAsObject()
     stmt.free()
-    return null
-  } else {
-    return db.prepare(sql).get(...params)
+    return row
   }
+  stmt.free()
+  return null
 }
 
 function getAll(sql, params = []) {
-  if (usingSqlJs) {
-    const results = []
-    const stmt = db.prepare(sql)
-    stmt.bind(params)
-    while (stmt.step()) {
-      results.push(stmt.getAsObject())
-    }
-    stmt.free()
-    return results
-  } else {
-    return db.prepare(sql).all(...params)
+  const results = []
+  const stmt = db.prepare(sql)
+  stmt.bind(params)
+  while (stmt.step()) {
+    results.push(stmt.getAsObject())
   }
+  stmt.free()
+  return results
 }
 
 // Followers
