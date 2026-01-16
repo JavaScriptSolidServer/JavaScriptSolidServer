@@ -4,13 +4,8 @@
  * Email is optional - internally uses username@jss if not provided
  */
 
-// Try native bcrypt, fall back to pure JS bcryptjs (for Android/Termux)
-let bcrypt;
-try {
-  bcrypt = await import('bcrypt').then(m => m.default);
-} catch {
-  bcrypt = await import('bcryptjs').then(m => m.default);
-}
+// Use bcryptjs for cross-platform compatibility (works on Android/Termux/Windows)
+const bcrypt = await import('bcryptjs').then(m => m.default);
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';

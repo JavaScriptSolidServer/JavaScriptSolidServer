@@ -60,7 +60,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ### Android/Termux
 
-JSS runs on Android via Termux with automatic `bcryptjs` fallback:
+JSS runs on Android via Termux (uses pure JavaScript `bcryptjs` for compatibility):
 
 ```bash
 pkg install nodejs git
@@ -1045,7 +1045,7 @@ Minimal dependencies for a fast, secure server:
 - **jose** - JWT/JWK handling for Solid-OIDC
 - **n3** - Turtle parsing (only used when conneg enabled)
 - **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
-- **bcrypt** - Password hashing (only when IdP enabled)
+- **bcryptjs** - Password hashing (only when IdP enabled)
 - **microfed** - ActivityPub primitives (only when activitypub enabled)
 - **better-sqlite3** - SQLite storage for federation data
 
