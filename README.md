@@ -1047,7 +1047,7 @@ Minimal dependencies for a fast, secure server:
 - **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
 - **bcryptjs** - Password hashing (only when IdP enabled)
 - **microfed** - ActivityPub primitives (only when activitypub enabled)
-- **better-sqlite3** - SQLite storage for federation data
+- **sql.js** - SQLite storage for federation data (WASM, cross-platform)
 
 ## License
 

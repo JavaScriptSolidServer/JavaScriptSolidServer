@@ -28,7 +28,6 @@
     "@fastify/websocket": "^8.3.1",
     "@simplewebauthn/server": "^13.2.2",
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.5.0",
     "commander": "^14.0.2",
     "fastify": "^4.29.1",
     "fs-extra": "^11.2.0",
