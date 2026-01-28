@@ -218,6 +218,7 @@ export async function handleGet(request, reply) {
       // Inject live reload script for index.html
       if (request.liveReloadEnabled) {
         reply.header('Cache-Control', 'no-store');
+        reply.removeHeader('ETag');
         return reply.send(injectLiveReload(content));
       }
       return reply.send(content);
@@ -465,6 +466,7 @@ export async function handleGet(request, reply) {
   // Inject live reload script into HTML (disable caching since content is modified)
   if (actualContentType === 'text/html' && request.liveReloadEnabled) {
     reply.header('Cache-Control', 'no-store');
+    reply.removeHeader('ETag');
     return reply.send(injectLiveReload(content));
   }
   return reply.send(content);
