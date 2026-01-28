@@ -40,6 +40,7 @@ export function handleWebSocket(socket, request, webId = null) {
   // Store webId and server info on socket for ACL checks
   socket.webId = webId;
   socket.serverOrigin = `${request.protocol}://${request.hostname}`;
+  socket.publicMode = request.config?.public || false;
 
   // Send protocol greeting
   socket.send('protocol solid-0.1');
@@ -122,6 +123,11 @@ async function checkSubscriptionAccess(url, socket) {
     // Check if resource exists and if it's a container
     const stats = await storage.stat(resourcePath);
     const isContainer = stats?.isDirectory || resourcePath.endsWith('/');
+
+    // Skip WAC check in public mode
+    if (socket.publicMode) {
+      return true;
+    }
 
     // Check WAC read permission
     const { allowed } = await checkAccess({

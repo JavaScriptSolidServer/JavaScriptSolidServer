@@ -105,6 +105,8 @@ program
 
       // Create and start server
       const server = createServer({
+        port: config.port,
+        host: config.host,
         logger: config.logger,
         conneg: config.conneg,
         notifications: config.notifications,
