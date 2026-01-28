@@ -511,6 +511,11 @@ export async function handleHead(request, reply) {
  * Handle PUT request
  */
 export async function handlePut(request, reply) {
+  // Read-only mode - block all writes
+  if (request.config?.readOnly) {
+    return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
+  }
+
   const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
   const connegEnabled = request.connegEnabled || false;
 
@@ -644,6 +649,11 @@ export async function handlePut(request, reply) {
  * Handle DELETE request
  */
 export async function handleDelete(request, reply) {
+  // Read-only mode - block all writes
+  if (request.config?.readOnly) {
+    return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
+  }
+
   const { storagePath, resourceUrl } = getRequestPaths(request);
 
   // Check if resource exists and get current ETag
@@ -716,6 +726,11 @@ export async function handleOptions(request, reply) {
  * Supports N3 Patch format (text/n3) and SPARQL Update for updating RDF resources
  */
 export async function handlePatch(request, reply) {
+  // Read-only mode - block all writes
+  if (request.config?.readOnly) {
+    return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
+  }
+
   const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
 
   // Don't allow PATCH to containers
