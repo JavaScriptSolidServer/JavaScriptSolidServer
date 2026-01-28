@@ -9,6 +9,7 @@ import * as storage from './storage/filesystem.js';
 import { getCorsHeaders } from './ldp/headers.js';
 import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
+import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { AccessMode } from './wac/parser.js';
@@ -540,6 +541,16 @@ export function createServer(options = {}) {
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
     // Note: Quota not initialized for root-level pods (no user directory)
+  }
+
+  // Start file watcher for live reload (watches filesystem for external changes)
+  if (liveReloadEnabled) {
+    const dataRoot = options.root || process.env.DATA_ROOT || './data';
+    const protocol = options.ssl ? 'https' : 'http';
+    // Use configured port, or default; actual URL will be localhost
+    const port = options.port || 3000;
+    const baseUrl = `${protocol}://localhost:${port}`;
+    startFileWatcher(dataRoot, baseUrl);
   }
 
   return fastify;
