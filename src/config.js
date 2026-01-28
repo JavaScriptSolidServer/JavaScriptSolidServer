@@ -79,6 +79,9 @@ export const defaults = {
   // Read-only mode - disable PUT/DELETE/PATCH
   readOnly: false,
 
+  // Live reload - inject script to auto-refresh browser on file changes
+  liveReload: false,
+
   // Logging
   logger: true,
   quiet: false,
@@ -125,6 +128,7 @@ const envMap = {
   JSS_DEFAULT_QUOTA: 'defaultQuota',
   JSS_PUBLIC: 'public',
   JSS_READ_ONLY: 'readOnly',
+  JSS_LIVE_RELOAD: 'liveReload',
 };
 
 /**

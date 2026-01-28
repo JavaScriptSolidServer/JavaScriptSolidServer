@@ -18,6 +18,24 @@ import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '
 import { generateDatabrowserHtml, generateSolidosUiHtml, shouldServeMashlib } from '../mashlib/index.js';
 
 /**
+ * Live reload script - injected into HTML when --live-reload is enabled
+ */
+const LIVE_RELOAD_SCRIPT = `<script>(function(){var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//' +location.host+'/notifications/');ws.onmessage=function(){location.reload()};ws.onclose=function(){setTimeout(function(){location.reload()},1000)}})();</script>`;
+
+/**
+ * Inject live reload script into HTML content
+ */
+function injectLiveReload(content, enabled) {
+  if (!enabled) return content;
+  const html = content.toString();
+  // Inject before </body> or at end
+  if (html.includes('</body>')) {
+    return Buffer.from(html.replace('</body>', LIVE_RELOAD_SCRIPT + '</body>'));
+  }
+  return Buffer.from(html + LIVE_RELOAD_SCRIPT);
+}
+
+/**
  * Get the storage path and resource URL for a request
  * In subdomain mode, storage path includes pod name, URL uses subdomain
  */
@@ -439,6 +457,11 @@ export async function handleGet(request, reply) {
   headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Inject live reload script into HTML
+  if (actualContentType === 'text/html' && request.liveReloadEnabled) {
+    return reply.send(injectLiveReload(content, true));
+  }
   return reply.send(content);
 }
 

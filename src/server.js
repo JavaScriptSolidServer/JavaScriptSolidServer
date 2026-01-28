@@ -79,6 +79,8 @@ export function createServer(options = {}) {
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
   // WebID-TLS client certificate authentication is OFF by default
   const webidTlsEnabled = options.webidTls ?? false;
+  // Live reload - injects script to auto-refresh browser on file changes
+  const liveReloadEnabled = options.liveReload ?? false;
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -136,6 +138,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('config', null);
+  fastify.decorateRequest('liveReloadEnabled', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
@@ -148,6 +151,7 @@ export function createServer(options = {}) {
     request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
     request.config = { public: options.public, readOnly: options.readOnly };
+    request.liveReloadEnabled = liveReloadEnabled;
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {
@@ -164,8 +168,8 @@ export function createServer(options = {}) {
     }
   });
 
-  // Register WebSocket notifications plugin if enabled
-  if (notificationsEnabled) {
+  // Register WebSocket notifications plugin if enabled (or live reload needs it)
+  if (notificationsEnabled || liveReloadEnabled) {
     fastify.register(notificationsPlugin);
   }
 

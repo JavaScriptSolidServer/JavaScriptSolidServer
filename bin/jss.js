@@ -78,6 +78,7 @@ program
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')
   .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
   .option('--read-only', 'Disable PUT/DELETE/PATCH methods (read-only mode)')
+  .option('--live-reload', 'Inject live reload script into HTML (auto-refresh on changes)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -135,6 +136,7 @@ program
         singleUserName: config.singleUserName,
         public: config.public,
         readOnly: config.readOnly,
+        liveReload: config.liveReload,
       });
 
       await server.listen({ port: config.port, host: config.host });
