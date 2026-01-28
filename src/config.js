@@ -73,6 +73,12 @@ export const defaults = {
   // Storage quota (bytes) - 50MB default
   defaultQuota: 50 * 1024 * 1024,
 
+  // Public mode - skip WAC, allow unauthenticated access
+  public: false,
+
+  // Read-only mode - disable PUT/DELETE/PATCH
+  readOnly: false,
+
   // Logging
   logger: true,
   quiet: false,
@@ -117,6 +123,8 @@ const envMap = {
   JSS_SINGLE_USER_NAME: 'singleUserName',
   JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
+  JSS_PUBLIC: 'public',
+  JSS_READ_ONLY: 'readOnly',
 };
 
 /**

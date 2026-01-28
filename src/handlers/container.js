@@ -25,6 +25,11 @@ function getRequestPaths(request) {
  * Handle POST request to container (create new resource)
  */
 export async function handlePost(request, reply) {
+  // Read-only mode - block all writes
+  if (request.config?.readOnly) {
+    return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
+  }
+
   const { urlPath, storagePath } = getRequestPaths(request);
 
   // Ensure target is a container
@@ -233,6 +238,11 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
  *   /{name}/settings/privateTypeIndex
  */
 export async function handleCreatePod(request, reply) {
+  // Read-only mode - block pod creation
+  if (request.config?.readOnly) {
+    return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
+  }
+
   const { name, email, password } = request.body || {};
   const idpEnabled = request.idpEnabled;
 

@@ -28,6 +28,12 @@ export async function authorize(request, reply, options = {}) {
     return { authorized: true, webId: null, wacAllow: 'user="read write append control", public="read write append"', authError: null };
   }
 
+  // Public mode - skip all WAC checks, allow unauthenticated access
+  if (request.config?.public) {
+    const modes = request.config?.readOnly ? 'read' : 'read write append';
+    return { authorized: true, webId: null, wacAllow: `public="${modes}"`, authError: null };
+  }
+
   // Get WebID from token (supports both simple and Solid-OIDC tokens)
   const { webId, error: authError } = await getWebIdFromRequestAsync(request);
 

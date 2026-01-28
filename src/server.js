@@ -135,6 +135,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibVersion', null);
   fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
+  fastify.decorateRequest('config', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled;
@@ -146,6 +147,7 @@ export function createServer(options = {}) {
     request.mashlibVersion = mashlibVersion;
     request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
+    request.config = { public: options.public, readOnly: options.readOnly };
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {

@@ -76,6 +76,8 @@ program
   .option('--single-user-name <name>', 'Username for single-user mode (default: me)')
   .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')
+  .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
+  .option('--read-only', 'Disable PUT/DELETE/PATCH methods (read-only mode)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -131,6 +133,8 @@ program
         webidTls: config.webidTls,
         singleUser: config.singleUser,
         singleUserName: config.singleUserName,
+        public: config.public,
+        readOnly: config.readOnly,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -156,6 +160,16 @@ program
         if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
         else if (config.inviteOnly) console.log('  Registration: invite-only');
         if (config.webidTls) console.log('  WebID-TLS: enabled (client certificate auth)');
+        if (config.public) {
+          console.log('');
+          console.log('  ⚠️  WARNING: PUBLIC MODE ENABLED');
+          console.log('     All files are accessible without authentication.');
+          if (!config.readOnly) {
+            console.log('     Anyone can read, write, and delete files.');
+          }
+          console.log('     Do not expose to the internet!');
+        }
+        if (config.readOnly) console.log('  Read-only: enabled (PUT/DELETE/PATCH disabled)');
         console.log('\n  Press Ctrl+C to stop\n');
       }
 
