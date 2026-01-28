@@ -608,8 +608,8 @@ export async function handlePut(request, reply) {
     }
   }
 
-  // Check storage quota before writing
-  const podName = getPodName(request);
+  // Check storage quota before writing (skip in public mode - no pod structure)
+  const podName = request.config?.public ? null : getPodName(request);
   const oldSize = stats?.size || 0;
   const sizeDelta = content.length - oldSize;
 

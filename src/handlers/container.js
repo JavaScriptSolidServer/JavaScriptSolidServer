@@ -112,8 +112,8 @@ export async function handlePost(request, reply) {
       }
     }
 
-    // Check storage quota before writing
-    const podName = getPodName(request);
+    // Check storage quota before writing (skip in public mode - no pod structure)
+    const podName = request.config?.public ? null : getPodName(request);
     if (podName) {
       const { allowed, error } = await checkQuota(podName, content.length, request.defaultQuota || 0);
       if (!allowed) {
