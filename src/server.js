@@ -141,7 +141,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('liveReloadEnabled', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
-    request.notificationsEnabled = notificationsEnabled;
+    request.notificationsEnabled = notificationsEnabled || liveReloadEnabled;
     request.idpEnabled = idpEnabled;
     request.subdomainsEnabled = subdomainsEnabled;
     request.baseDomain = baseDomain;
