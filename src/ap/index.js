@@ -10,6 +10,7 @@ import { createInboxHandler } from './routes/inbox.js'
 import { createOutboxHandler, createOutboxPostHandler } from './routes/outbox.js'
 import { createCollectionsHandler } from './routes/collections.js'
 import { createActorHandler } from './routes/actor.js'
+import { getRequestHost } from '../utils/url.js'
 
 // Shared state for actor handler (accessed by server.js)
 let sharedActorHandler = null
@@ -56,7 +57,10 @@ export async function activityPubPlugin(fastify, options = {}) {
       }
     }
     // If still no protocol and hostname looks like a public domain, assume https
-    if (!protocol && request.hostname && !request.hostname.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
+    const hostName = getRequestHost(request)
+      ? String(getRequestHost(request)).split(':')[0]
+      : request.hostname
+    if (!protocol && hostName && !hostName.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
       protocol = 'https'
     }
     return protocol || request.protocol
@@ -65,14 +69,14 @@ export async function activityPubPlugin(fastify, options = {}) {
   // Helper to build actor ID from request
   const getActorId = (request) => {
     const protocol = getProtocol(request)
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     return `${protocol}://${host}/profile/card#me`
   }
 
   // Helper to get base URL
   const getBaseUrl = (request) => {
     const protocol = getProtocol(request)
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     return `${protocol}://${host}`
   }
 
@@ -89,8 +93,9 @@ export async function activityPubPlugin(fastify, options = {}) {
     }
 
     // Check if this is our user
-    const host = request.headers['x-forwarded-host'] || request.hostname
-    if (parsed.domain !== host) {
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
+    const hostName = host ? String(host).split(':')[0] : host
+    if (parsed.domain !== hostName) {
       return reply.code(404).send({ error: 'Not found' })
     }
 

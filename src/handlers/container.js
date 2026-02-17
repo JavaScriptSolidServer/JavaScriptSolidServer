@@ -1,7 +1,7 @@
 import * as storage from '../storage/filesystem.js';
 import { initializeQuota, checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders } from '../ldp/headers.js';
-import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
+import { isContainer, getEffectiveUrlPath, getPodName, getRequestHost } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
@@ -17,7 +17,8 @@ function getRequestPaths(request) {
   // Storage path - includes pod name in subdomain mode
   const storagePath = getEffectiveUrlPath(request);
   // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const host = getRequestHost(request);
+  const resourceUrl = `${request.protocol}://${host}${urlPath}`;
   return { urlPath, storagePath, resourceUrl };
 }
 
@@ -80,7 +81,8 @@ export async function handlePost(request, reply) {
   const filename = await storage.generateUniqueFilename(storagePath, slug, isCreatingContainer);
   const newUrlPath = urlPath + filename + (isCreatingContainer ? '/' : '');
   const newStoragePath = storagePath + filename + (isCreatingContainer ? '/' : '');
-  const resourceUrl = `${request.protocol}://${request.hostname}${newUrlPath}`;
+  const host = getRequestHost(request);
+  const resourceUrl = `${request.protocol}://${host}${newUrlPath}`;
 
   let success;
   if (isCreatingContainer) {
@@ -140,7 +142,7 @@ export async function handlePost(request, reply) {
     origin,
     connegEnabled
   });
-  headers['Location'] = resourceUrl;
+  headers['Location'] = newUrlPath;
   headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -286,7 +288,8 @@ export async function handleCreatePod(request, reply) {
     webId = `${podUri}profile/card#me`;
   } else {
     // Path mode: example.com/alice/profile/card#me
-    baseUri = `${request.protocol}://${request.hostname}`;
+    const host = getRequestHost(request);
+    baseUri = `${request.protocol}://${host}`;
     podUri = `${baseUri}${podPath}`;
     webId = `${podUri}profile/card#me`;
   }

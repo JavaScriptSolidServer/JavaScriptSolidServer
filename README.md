@@ -56,7 +56,7 @@ A minimal, fast, JSON-LD native Solid server.
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 
 ### Android/Termux
 

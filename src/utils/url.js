@@ -119,6 +119,26 @@ export function getEffectiveUrlPath(request) {
 }
 
 /**
+ * Get request host with port when available.
+ *
+ * Migration note: Fastify v5 no longer tolerates some implicit hostname/port
+ * assumptions from v4. Using the raw Host header (or socket port fallback)
+ * keeps absolute URLs, ACL checks, and Updates-Via consistent in tests and
+ * behind proxies when the port is non-default.
+ *
+ * @param {object} request - Fastify request object
+ * @returns {string|undefined}
+ */
+export function getRequestHost(request) {
+  const headerHost = request.headers?.host || request.raw?.headers?.host;
+  const baseHost = headerHost || request.host || request.hostname;
+  const localPort = request.socket?.localPort || request.raw?.socket?.localPort;
+  return baseHost && localPort && !baseHost.includes(':')
+    ? `${baseHost}:${localPort}`
+    : baseHost;
+}
+
+/**
  * Check if URL path represents a container (ends with /)
  * @param {string} urlPath
  * @returns {boolean}

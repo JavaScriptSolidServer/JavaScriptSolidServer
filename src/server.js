@@ -15,6 +15,7 @@ import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js'
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
+import { getRequestHost } from './utils/url.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -156,11 +157,12 @@ export function createServer(options = {}) {
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {
-      const host = request.hostname;
+      const host = getRequestHost(request);
+      const hostName = host ? String(host).split(':')[0] : request.hostname;
       // Check if host is a subdomain of baseDomain
-      if (host !== baseDomain && host.endsWith('.' + baseDomain)) {
+      if (hostName !== baseDomain && hostName.endsWith('.' + baseDomain)) {
         // Extract subdomain (e.g., "alice.example.com" -> "alice")
-        const subdomain = host.slice(0, -(baseDomain.length + 1));
+        const subdomain = hostName.slice(0, -(baseDomain.length + 1));
         // Only single-level subdomains (no dots)
         if (!subdomain.includes('.')) {
           request.podName = subdomain;
@@ -222,7 +224,10 @@ export function createServer(options = {}) {
     // Add Updates-Via header for WebSocket notification discovery
     if (notificationsEnabled) {
       const wsProtocol = request.protocol === 'https' ? 'wss' : 'ws';
-      reply.header('Updates-Via', `${wsProtocol}://${request.hostname}/.notifications`);
+      const host = getRequestHost(request);
+      if (host) {
+        reply.header('Updates-Via', `${wsProtocol}://${host}/.notifications`);
+      }
     }
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
@@ -369,7 +374,7 @@ export function createServer(options = {}) {
       fastify.addHook('onRequest', async (request, reply) => {
         if (chunkPattern.test(request.url)) {
           const filename = request.url.split('/').pop();
-          return reply.redirect(302, `${cdnBase}/${filename}`);
+          return reply.redirect(`${cdnBase}/${filename}`, 302);
         }
       });
     } else {
@@ -442,8 +447,8 @@ export function createServer(options = {}) {
 
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)
-  fastify.get('/*', handleGet);
   fastify.head('/*', handleHead);
+  fastify.get('/*', handleGet);
   fastify.options('/*', handleOptions);
 
   // Write operations - rate limited
@@ -453,8 +458,8 @@ export function createServer(options = {}) {
   fastify.patch('/*', writeRateLimit, handlePatch);
 
   // Root route
-  fastify.get('/', handleGet);
   fastify.head('/', handleHead);
+  fastify.get('/', handleGet);
   fastify.options('/', handleOptions);
   fastify.post('/', writeRateLimit, handlePost);
 
@@ -550,7 +555,12 @@ export function createServer(options = {}) {
     // Use configured port, or default; actual URL will be localhost
     const port = options.port || 3000;
     const baseUrl = `${protocol}://localhost:${port}`;
-    startFileWatcher(dataRoot, baseUrl);
+    const watcher = startFileWatcher(dataRoot, baseUrl);
+    if (watcher) {
+      fastify.addHook('onClose', async () => {
+        watcher.close();
+      });
+    }
   }
 
   return fastify;

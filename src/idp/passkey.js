@@ -10,6 +10,7 @@ import {
   verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 import crypto from 'crypto';
+import { getRequestHost } from '../utils/url.js';
 import * as accounts from './accounts.js';
 
 // Temporary challenge storage (in-memory, cleared on restart)
@@ -59,11 +60,13 @@ function getRP(request) {
   let hostname;
   try {
     // Use URL parsing to correctly extract hostname (handles IPv6)
-    const url = new URL(`${request.protocol}://${request.hostname}`);
+    const host = getRequestHost(request);
+    const url = new URL(`${request.protocol}://${host}`);
     hostname = url.hostname;
   } catch {
     // Fallback: strip port from hostname (IPv4 only)
-    hostname = String(request.hostname || '').split(':')[0];
+    const host = getRequestHost(request) || request.hostname;
+    hostname = String(host || '').split(':')[0];
   }
   return {
     name: 'Solid Pod',
@@ -75,7 +78,8 @@ function getRP(request) {
  * Get origin from request
  */
 function getOrigin(request) {
-  return `${request.protocol}://${request.hostname}`;
+  const host = getRequestHost(request);
+  return `${request.protocol}://${host}`;
 }
 
 /**
