@@ -6,8 +6,11 @@ A minimal, fast, JSON-LD native Solid server.
 
 ## Features
 
-### Implemented (v0.0.79)
+### Implemented (v0.0.86)
 
+- **Live Reload** - Auto-refresh browser on file changes (`--live-reload`)
+- **Read-Only Mode** - Disable write operations for static hosting (`--read-only`)
+- **Public Mode** - Skip WAC for open read/write access (`--public`)
 - **Schnorr SSO** - Passwordless login via BIP-340 Schnorr signatures using NIP-07 browser extensions (Podkey, nos2x, Alby)
 - **Passkey Authentication** - WebAuthn/FIDO2 passwordless login with Touch ID, Face ID, or security keys
 - **HTTP Range Requests** - Partial content delivery for large files and media streaming
@@ -35,7 +38,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Content Negotiation** - Turtle <-> JSON-LD conversion, including HTML data islands
 - **CORS Support** - Full cross-origin resource sharing
 - **Git HTTP Backend** - Clone and push to containers via `git` protocol
-- **Nostr Relay** - Integrated NIP-01 relay on the same port (`wss://your.pod/relay`)
+- **Nostr Relay** - Integrated NIP-01/NIP-11/NIP-16 relay on the same port (`wss://your.pod/relay`)
 - **Invite-Only Registration** - CLI-managed invite codes for controlled signups
 - **Storage Quotas** - Per-user storage limits with CLI management
 - **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
@@ -139,6 +142,9 @@ jss --help             # Show help
 | `--ap-display-name <name>` | ActivityPub display name | (username) |
 | `--ap-summary <text>` | ActivityPub bio/summary | - |
 | `--ap-nostr-pubkey <hex>` | Nostr pubkey for identity linking | - |
+| `--public` | Allow unauthenticated access (skip WAC) | false |
+| `--read-only` | Disable PUT/DELETE/PATCH methods | false |
+| `--live-reload` | Auto-refresh browser on file changes | false |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -159,6 +165,10 @@ export JSS_WEBID_TLS=true
 export JSS_DEFAULT_QUOTA=100MB
 export JSS_ACTIVITYPUB=true
 export JSS_AP_USERNAME=alice
+export JSS_PUBLIC=true
+export JSS_READ_ONLY=true
+export JSS_LIVE_RELOAD=true
+export JSS_SOLIDOS_UI=true
 jss start
 ```
 
@@ -868,7 +878,7 @@ curl -X POST https://example.com/.pods \
 
 | Server | Size | Deps | Notes |
 |--------|------|------|-------|
-| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | 432 KB | 10 | Minimal, JSON-LD native |
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~14K LoC | 14 | Minimal, JSON-LD native |
 | [NSS](https://github.com/nodeSolidServer/node-solid-server) | 777 KB | 58 | Original Solid server |
 | [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
 | [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
@@ -941,7 +951,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **223 tests** (including 27 conformance tests)
+Currently passing: **229 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
@@ -988,12 +998,12 @@ src/
 │   ├── filesystem.js     # File operations
 │   └── quota.js          # Storage quota management
 ├── auth/
-│   ├── middleware.js     # Auth hook
-│   ├── token.js          # Simple token auth
-│   ├── solid-oidc.js     # DPoP verification
-│   ├── nostr.js          # NIP-98 Nostr authentication
-│   ├── did-nostr.js      # did:nostr → WebID resolution
-│   └── webid-tls.js      # WebID-TLS client certificate auth
+│   ├── middleware.js      # Auth hook
+│   ├── token.js           # Simple token auth
+│   ├── solid-oidc.js      # DPoP verification
+│   ├── nostr.js           # NIP-98 Nostr authentication
+│   ├── did-nostr.js       # did:nostr → WebID resolution
+│   └── webid-tls.js       # WebID-TLS client certificate auth
 ├── wac/
 │   ├── parser.js         # ACL parsing
 │   └── checker.js        # Permission checking
@@ -1010,14 +1020,16 @@ src/
 │   ├── events.js         # Event emitter
 │   └── websocket.js      # solid-0.1 protocol
 ├── idp/
-│   ├── index.js          # Identity Provider plugin
-│   ├── provider.js       # oidc-provider config
-│   ├── adapter.js        # Filesystem adapter
-│   ├── accounts.js       # User account management
-│   ├── keys.js           # JWKS key management
-│   ├── interactions.js   # Login/consent handlers
-│   ├── views.js          # HTML templates
-│   └── invites.js        # Invite code management
+│   ├── index.js           # Identity Provider plugin
+│   ├── provider.js        # oidc-provider config
+│   ├── adapter.js         # Filesystem adapter
+│   ├── accounts.js        # User account management
+│   ├── credentials.js     # Credentials endpoint
+│   ├── keys.js            # JWKS key management
+│   ├── interactions.js    # Login/consent handlers
+│   ├── passkey.js         # WebAuthn/FIDO2 passkey support
+│   ├── views.js           # HTML templates
+│   └── invites.js         # Invite code management
 ├── ap/
 │   ├── index.js          # ActivityPub plugin
 │   ├── keys.js           # RSA keypair management
@@ -1030,23 +1042,31 @@ src/
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
+├── mashlib/
+│   └── index.js           # Mashlib data browser plugin
 └── utils/
-    ├── url.js            # URL utilities
-    └── conditional.js    # If-Match/If-None-Match
+    ├── url.js             # URL utilities
+    ├── conditional.js     # If-Match/If-None-Match
+    └── ssrf.js            # SSRF protection
 ```
 
 ## Dependencies
 
-Minimal dependencies for a fast, secure server:
+14 direct dependencies for a fast, secure server:
 
 - **fastify** - High-performance HTTP server
+- **@fastify/middie** - Express/Connect middleware bridge (for IdP)
+- **@fastify/rate-limit** - Rate limiting for API endpoints
 - **@fastify/websocket** - WebSocket support for notifications
+- **@simplewebauthn/server** - Passkey/WebAuthn authentication
+- **bcryptjs** - Password hashing (pure JS, works on Termux/Android)
+- **commander** - CLI command parsing
 - **fs-extra** - Enhanced file operations
 - **jose** - JWT/JWK handling for Solid-OIDC
-- **n3** - Turtle parsing (only used when conneg enabled)
-- **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
-- **bcryptjs** - Password hashing (only when IdP enabled)
 - **microfed** - ActivityPub primitives (only when activitypub enabled)
+- **n3** - Turtle parsing (only used when conneg enabled)
+- **nostr-tools** - Nostr protocol and Schnorr signature verification
+- **oidc-provider** - OpenID Connect Identity Provider (only when IdP enabled)
 - **sql.js** - SQLite storage for federation data (WASM, cross-platform)
 
 ## License
