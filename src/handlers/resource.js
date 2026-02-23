@@ -2,7 +2,7 @@ import * as storage from '../storage/filesystem.js';
 import { checkQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
-import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse, getPodName } from '../utils/url.js';
+import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse, getPodName, getRequestHost } from '../utils/url.js';
 import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
 import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
 import {
@@ -43,7 +43,8 @@ function getRequestPaths(request) {
   // Storage path - includes pod name in subdomain mode
   const storagePath = getEffectiveUrlPath(request);
   // Resource URL - uses the actual request hostname (subdomain in subdomain mode)
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const host = getRequestHost(request);
+  const resourceUrl = `${request.protocol}://${host}${urlPath}`;
   return { urlPath, storagePath, resourceUrl };
 }
 
@@ -571,7 +572,7 @@ export async function handlePut(request, reply) {
     });
     headers['Location'] = resourceUrl;
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-    emitChange(request.protocol + '://' + request.hostname, urlPath, 'created');
+    emitChange(resourceUrl);
     return reply.code(201).send();
   }
 

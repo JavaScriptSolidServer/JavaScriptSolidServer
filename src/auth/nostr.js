@@ -14,6 +14,7 @@
 import { verifyEvent } from 'nostr-tools';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
+import { getRequestHost } from '../utils/url.js';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -157,7 +158,7 @@ export async function verifyNostrAuth(request) {
 
   // Build full URL for validation
   const protocol = request.protocol || 'http';
-  const host = request.headers.host || request.hostname;
+  const host = request.headers['x-forwarded-host'] || getRequestHost(request);
   const fullUrl = `${protocol}://${host}${request.url}`;
 
   // Validate URL tag matches request URL

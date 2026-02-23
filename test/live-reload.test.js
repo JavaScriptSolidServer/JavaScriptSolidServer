@@ -7,10 +7,11 @@
 import { createServer } from '../src/server.js';
 import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
+import os from 'os';
 import WebSocket from 'ws';
 
 const TEST_PORT = 9876;
-const TEST_DIR = '/tmp/live-reload-test-suite';
+const TEST_DIR = join(os.tmpdir(), 'live-reload-test-suite');
 const BASE_URL = `http://localhost:${TEST_PORT}`;
 
 // Setup and teardown
@@ -164,7 +165,7 @@ async function testFsWatch() {
   console.log('\n=== Test 3: Basic fs.watch functionality ===');
 
   const { watch } = await import('fs');
-  const testFile = '/tmp/fswatch-test.txt';
+  const testFile = join(os.tmpdir(), 'fswatch-test.txt');
 
   writeFileSync(testFile, 'initial');
 
@@ -194,7 +195,7 @@ async function testFsWatchRecursive() {
   console.log('\n=== Test 4: fs.watch with recursive option ===');
 
   const { watch } = await import('fs');
-  const testDir = '/tmp/fswatch-recursive-test';
+  const testDir = join(os.tmpdir(), 'fswatch-recursive-test');
 
   if (existsSync(testDir)) rmSync(testDir, { recursive: true });
   mkdirSync(testDir, { recursive: true });

@@ -3,6 +3,8 @@
  * Returns ActivityPub Actor JSON-LD for content negotiation
  */
 
+import { getRequestHost } from '../../utils/url.js'
+
 /**
  * Create actor handler
  * @param {object} config - AP configuration
@@ -24,8 +26,9 @@ export function createActorHandler(config, keypair) {
       }
     }
     // If still no protocol and hostname looks like a public domain, assume https
-    const host = request.headers['x-forwarded-host'] || request.hostname
-    if (!protocol && host && !host.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
+    const hostName = host ? String(host).split(':')[0] : host
+    if (!protocol && hostName && !hostName.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
       protocol = 'https'
     }
     protocol = protocol || request.protocol

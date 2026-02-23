@@ -4,6 +4,7 @@
  */
 
 import { getFollowers, getFollowing, getFollowerCount, getFollowingCount } from '../store.js'
+import { getRequestHost } from '../../utils/url.js'
 
 /**
  * Create collections handler
@@ -13,7 +14,7 @@ import { getFollowers, getFollowing, getFollowerCount, getFollowingCount } from 
 export function createCollectionsHandler(config) {
   return async (request, reply, collectionType) => {
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`
 

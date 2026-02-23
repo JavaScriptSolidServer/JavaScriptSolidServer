@@ -12,6 +12,7 @@
 
 import * as jose from 'jose';
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { getRequestHost } from '../utils/url.js';
 
 // Cache for OIDC configurations and JWKS
 const oidcConfigCache = new Map();
@@ -197,7 +198,8 @@ async function verifyDpopProof(dpopProof, request, accessToken) {
     }
 
     // htu: HTTP URI (without query string and fragment)
-    const requestUrl = `${request.protocol}://${request.hostname}${request.url.split('?')[0]}`;
+    const host = getRequestHost(request);
+    const requestUrl = `${request.protocol}://${host}${request.url.split('?')[0]}`;
     // Normalize both URLs for comparison
     const payloadHtu = payload.htu?.replace(/\/$/, '');
     const expectedHtu = requestUrl.replace(/\/$/, '');

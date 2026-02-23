@@ -13,6 +13,7 @@ import {
   getCachedActor
 } from '../store.js'
 import { getKeyId } from '../keys.js'
+import { getRequestHost } from '../../utils/url.js'
 
 /**
  * Fetch remote actor (with caching)
@@ -84,14 +85,14 @@ async function verifySignature(request, body) {
     return { valid: false, reason: 'Actor has no public key' }
   }
 
-  // Verify digest if present
   const digestHeader = request.headers['digest']
   if (digestHeader && !auth.verifyDigest(body, digestHeader)) {
     return { valid: false, reason: 'Digest mismatch' }
   }
 
   // Build path from URL
-  const url = new URL(request.url, `http://${request.hostname}`)
+  const host = request.headers['x-forwarded-host'] || getRequestHost(request)
+  const url = new URL(request.url, `http://${host}`)
 
   // Verify signature
   try {
@@ -148,7 +149,7 @@ export function createInboxHandler(config, keypair) {
 
     // Handle activity by type
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`
     const actorId = `${profileUrl}#me`

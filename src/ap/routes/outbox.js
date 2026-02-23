@@ -7,6 +7,7 @@
 import { outbox } from 'microfed'
 import { getPosts, savePost, getFollowerInboxes } from '../store.js'
 import { randomUUID } from 'crypto'
+import { getRequestHost } from '../../utils/url.js'
 
 /**
  * Create outbox handler
@@ -17,7 +18,7 @@ import { randomUUID } from 'crypto'
 export function createOutboxHandler(config, keypair) {
   return async (request, reply) => {
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`
     const actorId = `${profileUrl}#me`
@@ -61,7 +62,7 @@ export function createOutboxHandler(config, keypair) {
 export function createOutboxPostHandler(config, keypair) {
   return async (request, reply) => {
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
-    const host = request.headers['x-forwarded-host'] || request.hostname
+    const host = request.headers['x-forwarded-host'] || getRequestHost(request)
     const baseUrl = `${protocol}://${host}`
     const profileUrl = `${baseUrl}/profile/card`
     const actorId = `${profileUrl}#me`

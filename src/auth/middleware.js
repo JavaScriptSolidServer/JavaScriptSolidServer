@@ -8,7 +8,7 @@ import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
 import * as storage from '../storage/filesystem.js';
-import { getEffectiveUrlPath } from '../utils/url.js';
+import { getEffectiveUrlPath, getRequestHost } from '../utils/url.js';
 import { generateDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index.js';
 
 /**
@@ -22,6 +22,8 @@ import { generateDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index
 export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];
   const method = request.method;
+  const host = getRequestHost(request);
+  const baseUrl = `${request.protocol}://${host}`;
 
   // OPTIONS is always allowed (CORS preflight)
   if (method === 'OPTIONS') {
@@ -56,7 +58,7 @@ export async function authorize(request, reply, options = {}) {
   const isContainer = stats?.isDirectory || urlPath.endsWith('/');
 
   // Build resource URL (uses actual request hostname which may be subdomain)
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  const resourceUrl = `${baseUrl}${urlPath}`;
 
   // Get required access mode - use override if provided, otherwise derive from method
   const requiredMode = options.requiredMode || getRequiredMode(method);
@@ -72,7 +74,7 @@ export async function authorize(request, reply, options = {}) {
     checkPath = parentPath;
     // For URL, also need to get parent
     const parentUrlPath = getParentPath(urlPath);
-    checkUrl = `${request.protocol}://${request.hostname}${parentUrlPath}`;
+    checkUrl = `${baseUrl}${parentUrlPath}`;
     checkIsContainer = true;
   }
 
@@ -156,7 +158,8 @@ function getErrorPage(statusCode, isAuthenticated, request) {
     ? "This resource is protected. You'll need to sign in to continue."
     : "You're signed in, but you don't have permission to view this resource.";
 
-  const baseUrl = `${request.protocol}://${request.hostname}`;
+  const host = getRequestHost(request);
+  const baseUrl = `${request.protocol}://${host}`;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -379,7 +382,8 @@ async function authorizeAclAccess(request, urlPath, method, webId, authError) {
   // /foo/bar.acl protects /foo/bar (resource)
   const protectedPath = urlPath.replace(/\.acl$/, '');
   const isProtectedContainer = protectedPath.endsWith('/');
-  const protectedUrl = `${request.protocol}://${request.hostname}${protectedPath}`;
+  const host = getRequestHost(request);
+  const protectedUrl = `${request.protocol}://${host}${protectedPath}`;
 
   // Get storage path for the protected resource
   const storagePath = getEffectiveUrlPath(request).replace(/\.acl$/, '');
@@ -397,3 +401,4 @@ async function authorizeAclAccess(request, urlPath, method, webId, authError) {
 
   return { authorized: allowed, webId, wacAllow, authError };
 }
+

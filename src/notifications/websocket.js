@@ -18,6 +18,7 @@
 import { resourceEvents } from './events.js';
 import { checkAccess } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
+import { getRequestHost } from '../utils/url.js';
 import * as storage from '../storage/filesystem.js';
 
 // Security limits
@@ -34,12 +35,19 @@ const subscribers = new Map();
  * Handle new WebSocket connection
  * @param {WebSocket} socket - The WebSocket connection
  * @param {Request} request - The HTTP request
- * @param {string|null} webId - Authenticated WebID (null for anonymous)
+ * @param {string|Promise<string|null>|null} webId - Authenticated WebID (null for anonymous)
  */
 export function handleWebSocket(socket, request, webId = null) {
   // Store webId and server info on socket for ACL checks
-  socket.webId = webId;
-  socket.serverOrigin = `${request.protocol}://${request.hostname}`;
+  if (webId && typeof webId.then === 'function') {
+    socket.webIdPromise = webId;
+    socket.webId = null;
+  } else {
+    socket.webIdPromise = null;
+    socket.webId = webId;
+  }
+  const host = getRequestHost(request);
+  socket.serverOrigin = `${request.protocol}://${host}`;
   socket.publicMode = request.config?.public || false;
 
   // Send protocol greeting
@@ -109,6 +117,15 @@ export function handleWebSocket(socket, request, webId = null) {
  */
 async function checkSubscriptionAccess(url, socket) {
   try {
+    if (socket.webIdPromise) {
+      try {
+        socket.webId = await socket.webIdPromise;
+      } catch {
+        socket.webId = null;
+      }
+      socket.webIdPromise = null;
+    }
+
     // Parse the subscription URL
     const parsedUrl = new URL(url);
 
