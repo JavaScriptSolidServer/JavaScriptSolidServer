@@ -216,11 +216,12 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
   const envConfig = loadEnvConfig();
 
   // Merge in order: defaults < file < env < cli
+  const cliConfig = filterUndefined(cliOptions);
   const config = {
     ...defaults,
     ...fileConfig,
     ...envConfig,
-    ...filterUndefined(cliOptions),
+    ...cliConfig,
   };
 
   // Derive additional settings
@@ -228,8 +229,10 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
     config.logger = false;
   }
 
-  // Mashlib requires content negotiation for Turtle support
-  if (config.mashlib || config.mashlibCdn) {
+  // Mashlib requires content negotiation for Turtle support.
+  // Only auto-enable if the user hasn't explicitly configured conneg.
+  const connegExplicitlySet = 'conneg' in fileConfig || 'conneg' in envConfig || 'conneg' in cliConfig;
+  if ((config.mashlib || config.mashlibCdn) && !connegExplicitlySet) {
     config.conneg = true;
   }
 
