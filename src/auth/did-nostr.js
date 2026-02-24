@@ -13,6 +13,28 @@ const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
 // Cache for resolved DIDs (pubkey -> webId or null)
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const FAILURE_CACHE_TTL = 60 * 1000; // 1 minute for failed lookups
+
+// Rate-limit repeated error logs (key -> { count, lastLogged })
+const errorLogTracker = new Map();
+const ERROR_LOG_INTERVAL = 60_000;
+
+function rateLimitedError(key, message) {
+  const now = Date.now();
+  const entry = errorLogTracker.get(key);
+  if (entry && now - entry.lastLogged < ERROR_LOG_INTERVAL) {
+    entry.count++;
+    return;
+  }
+  // Clean up stale entries while we're here
+  for (const [k, v] of errorLogTracker) {
+    if (now - v.lastLogged > ERROR_LOG_INTERVAL) errorLogTracker.delete(k);
+  }
+  const suppressed = entry ? entry.count : 0;
+  const suffix = suppressed > 0 ? ` (${suppressed} similar suppressed)` : '';
+  console.error(`${message}${suffix}`);
+  errorLogTracker.set(key, { count: 0, lastLogged: now });
+}
 
 /**
  * Fetch with timeout
@@ -41,11 +63,15 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
   }
 
-  // Check cache
+  // Check cache (lazy eviction of expired entries)
   const cacheKey = pubkey.toLowerCase();
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.webId;
+  if (cached) {
+    const ttl = cached.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
+    if (Date.now() - cached.timestamp < ttl) {
+      return cached.webId;
+    }
+    cache.delete(cacheKey);
   }
 
   try {
@@ -93,8 +119,9 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
 
   } catch (err) {
-    // Network error or timeout - don't cache failures
-    console.error(`DID resolution error for ${pubkey}:`, err.message);
+    // Cache failures with short TTL to avoid hammering a down service
+    cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+    rateLimitedError(`did:${pubkey.substring(0, 8)}`, `DID resolution error for ${pubkey}: ${err.message}`);
     return null;
   }
 }
@@ -148,7 +175,7 @@ async function verifyWebIdBacklink(webId, pubkey) {
     return false;
 
   } catch (err) {
-    console.error(`WebID backlink verification error for ${webId}:`, err.message);
+    rateLimitedError(`backlink:${webId}`, `WebID backlink verification error for ${webId}: ${err.message}`);
     return false;
   }
 }

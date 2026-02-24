@@ -89,8 +89,10 @@ export function createServer(options = {}) {
   }
 
   // Fastify options
+  const loggerEnabled = options.logger ?? true;
   const fastifyOptions = {
-    logger: options.logger ?? true,
+    logger: loggerEnabled ? { level: options.logLevel || 'info' } : false,
+    disableRequestLogging: true,
     trustProxy: true,
     // Handle raw body for non-JSON content
     bodyLimit: 10 * 1024 * 1024 // 10MB
@@ -167,6 +169,19 @@ export function createServer(options = {}) {
         }
       }
     }
+  });
+
+  // Unified access log — one line per request
+  fastify.addHook('onResponse', async (request, reply) => {
+    if (!request.log.isLevelEnabled('info')) return;
+    request.log.info({
+      req: { method: request.method, url: request.url, remoteAddress: request.ip },
+      res: { statusCode: reply.statusCode },
+      responseTime: Math.round(reply.elapsedTime * 100) / 100,
+      userAgent: request.headers['user-agent'] || undefined,
+      referrer: request.headers.referer || undefined,
+      contentLength: reply.getHeader('content-length') || undefined,
+    }, `${request.method} ${request.url} ${reply.statusCode} ${Math.round(reply.elapsedTime)}ms`);
   });
 
   // Register WebSocket notifications plugin if enabled (or live reload needs it)

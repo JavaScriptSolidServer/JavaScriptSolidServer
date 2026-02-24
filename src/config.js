@@ -85,6 +85,7 @@ export const defaults = {
   // Logging
   logger: true,
   quiet: false,
+  logLevel: 'info',
 
   // Paths
   configPath: './.jss',
@@ -103,6 +104,7 @@ const envMap = {
   JSS_CONNEG: 'conneg',
   JSS_NOTIFICATIONS: 'notifications',
   JSS_QUIET: 'quiet',
+  JSS_LOG_LEVEL: 'logLevel',
   JSS_CONFIG_PATH: 'configPath',
   JSS_IDP: 'idp',
   JSS_IDP_ISSUER: 'idpIssuer',
@@ -226,6 +228,13 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
   // Derive additional settings
   if (config.quiet) {
     config.logger = false;
+  }
+
+  // Validate log level
+  const validLevels = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
+  if (!validLevels.includes(config.logLevel)) {
+    console.warn(`Invalid log level '${config.logLevel}', falling back to 'info'. Valid levels: ${validLevels.join(', ')}`);
+    config.logLevel = 'info';
   }
 
   // Mashlib requires content negotiation for Turtle support
