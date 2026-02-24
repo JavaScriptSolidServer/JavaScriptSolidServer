@@ -1,12 +1,14 @@
 # JavaScript Solid Server
 
+[![npm version](https://img.shields.io/npm/v/javascript-solid-server)](https://www.npmjs.com/package/javascript-solid-server)
+
 A minimal, fast, JSON-LD native Solid server.
 
 **[Documentation](https://javascriptsolidserver.github.io/docs/)** | **[GitHub](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)**
 
 ## Features
 
-### Implemented (v0.0.86)
+### Implemented
 
 - **Live Reload** - Auto-refresh browser on file changes (`--live-reload`)
 - **Read-Only Mode** - Disable write operations for static hosting (`--read-only`)
