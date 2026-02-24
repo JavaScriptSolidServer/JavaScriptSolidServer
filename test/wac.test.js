@@ -187,6 +187,23 @@ describe('WAC Parser', () => {
         `Expected accessTo to include 'https://alice.example/other/', got: ${auths[0].accessTo}`);
     });
 
+    it('should resolve relative agent URIs against ACL URL', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:agent': { '@id': './#me' },
+        'acl:accessTo': { '@id': './' },
+        'acl:mode': [{ '@id': 'acl:Read' }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+
+      assert.strictEqual(auths.length, 1);
+      assert.ok(auths[0].agents.includes('https://alice.example/#me'),
+        `Expected agents to include 'https://alice.example/#me', got: ${auths[0].agents}`);
+    });
+
     it('should keep absolute URLs unchanged', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
