@@ -228,6 +228,11 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
     config.logger = false;
   }
 
+  // Mashlib requires content negotiation for Turtle support
+  if (config.mashlib || config.mashlibCdn) {
+    config.conneg = true;
+  }
+
   // Validate SSL config
   if ((config.sslKey && !config.sslCert) || (!config.sslKey && config.sslCert)) {
     throw new Error('Both --ssl-key and --ssl-cert must be provided together');
