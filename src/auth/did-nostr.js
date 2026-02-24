@@ -13,6 +13,7 @@ const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
 // Cache for resolved DIDs (pubkey -> webId or null)
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const FAILURE_CACHE_TTL = 60 * 1000; // 1 minute for failed lookups
 
 // Rate-limit repeated error logs (key -> { count, lastLogged })
 const errorLogTracker = new Map();
@@ -61,7 +62,8 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
   // Check cache
   const cacheKey = pubkey.toLowerCase();
   const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+  const ttl = cached?.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
+  if (cached && Date.now() - cached.timestamp < ttl) {
     return cached.webId;
   }
 
@@ -110,7 +112,8 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
 
   } catch (err) {
-    // Network error or timeout - don't cache failures
+    // Cache failures with short TTL to avoid hammering a down service
+    cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
     rateLimitedError(`did:${pubkey.substring(0, 8)}`, `DID resolution error for ${pubkey}: ${err.message}`);
     return null;
   }
