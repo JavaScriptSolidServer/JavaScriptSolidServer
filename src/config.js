@@ -233,6 +233,7 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
   // Validate log level
   const validLevels = ['fatal', 'error', 'warn', 'info', 'debug', 'trace'];
   if (!validLevels.includes(config.logLevel)) {
+    console.warn(`Invalid log level '${config.logLevel}', falling back to 'info'. Valid levels: ${validLevels.join(', ')}`);
     config.logLevel = 'info';
   }
 

@@ -26,6 +26,10 @@ function rateLimitedError(key, message) {
     entry.count++;
     return;
   }
+  // Clean up stale entries while we're here
+  for (const [k, v] of errorLogTracker) {
+    if (now - v.lastLogged > ERROR_LOG_INTERVAL) errorLogTracker.delete(k);
+  }
   const suppressed = entry ? entry.count : 0;
   const suffix = suppressed > 0 ? ` (${suppressed} similar suppressed)` : '';
   console.error(`${message}${suffix}`);
@@ -59,12 +63,15 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
   }
 
-  // Check cache
+  // Check cache (lazy eviction of expired entries)
   const cacheKey = pubkey.toLowerCase();
   const cached = cache.get(cacheKey);
-  const ttl = cached?.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
-  if (cached && Date.now() - cached.timestamp < ttl) {
-    return cached.webId;
+  if (cached) {
+    const ttl = cached.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
+    if (Date.now() - cached.timestamp < ttl) {
+      return cached.webId;
+    }
+    cache.delete(cacheKey);
   }
 
   try {
