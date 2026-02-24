@@ -175,7 +175,7 @@ export function createServer(options = {}) {
   fastify.addHook('onResponse', async (request, reply) => {
     if (!request.log.isLevelEnabled('info')) return;
     request.log.info({
-      req: { method: request.method, url: request.url, remoteAddress: request.ip },
+      req: { method: request.method, url: request.url, remoteAddress: request.ip || request.headers['x-forwarded-for'] || request.socket?.remoteAddress },
       res: { statusCode: reply.statusCode },
       responseTime: Math.round(reply.elapsedTime * 100) / 100,
       userAgent: request.headers['user-agent'] || undefined,
