@@ -173,6 +173,7 @@ export function createServer(options = {}) {
 
   // Unified access log — one line per request
   fastify.addHook('onResponse', async (request, reply) => {
+    if (!request.log.isLevelEnabled('info')) return;
     request.log.info({
       req: { method: request.method, url: request.url, remoteAddress: request.ip },
       res: { statusCode: reply.statusCode },
