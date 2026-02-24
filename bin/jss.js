@@ -80,6 +80,7 @@ program
   .option('--read-only', 'Disable PUT/DELETE/PATCH methods (read-only mode)')
   .option('--live-reload', 'Inject live reload script into HTML (auto-refresh on changes)')
   .option('-q, --quiet', 'Suppress log output')
+  .option('--log-level <level>', 'Log level: error, warn, info, debug (default: info)')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
     try {

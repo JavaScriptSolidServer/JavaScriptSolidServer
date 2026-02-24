@@ -14,6 +14,23 @@ const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Rate-limit repeated error logs (key -> { count, lastLogged })
+const errorLogTracker = new Map();
+const ERROR_LOG_INTERVAL = 60_000;
+
+function rateLimitedError(key, message) {
+  const now = Date.now();
+  const entry = errorLogTracker.get(key);
+  if (entry && now - entry.lastLogged < ERROR_LOG_INTERVAL) {
+    entry.count++;
+    return;
+  }
+  const suppressed = entry ? entry.count : 0;
+  const suffix = suppressed > 0 ? ` (${suppressed} similar suppressed)` : '';
+  console.error(`${message}${suffix}`);
+  errorLogTracker.set(key, { count: 0, lastLogged: now });
+}
+
 /**
  * Fetch with timeout
  */
@@ -94,7 +111,7 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
 
   } catch (err) {
     // Network error or timeout - don't cache failures
-    console.error(`DID resolution error for ${pubkey}:`, err.message);
+    rateLimitedError(`did:${pubkey.substring(0, 8)}`, `DID resolution error for ${pubkey}: ${err.message}`);
     return null;
   }
 }
@@ -148,7 +165,7 @@ async function verifyWebIdBacklink(webId, pubkey) {
     return false;
 
   } catch (err) {
-    console.error(`WebID backlink verification error for ${webId}:`, err.message);
+    rateLimitedError(`backlink:${webId}`, `WebID backlink verification error for ${webId}: ${err.message}`);
     return false;
   }
 }
