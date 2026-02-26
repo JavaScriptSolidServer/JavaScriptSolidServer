@@ -553,18 +553,17 @@ export async function handlePut(request, reply) {
   if (isContainer(urlPath)) {
     const stats = await storage.stat(storagePath);
     if (stats?.isDirectory) {
-      // If container has index.html and PUT sends HTML, route to the index document
-      // This mirrors GET behavior (line 138) which serves index.html for container URLs
+      // If container has index.html and PUT sends HTML, rewrite URL to target the
+      // index document and delegate to the standard PUT pipeline. This mirrors GET
+      // behavior (line 138) which serves index.html for container URLs, and reuses
+      // If-Match/If-None-Match, quota checks, and notification handling.
       const indexPath = storagePath.endsWith('/') ? `${storagePath}index.html` : `${storagePath}/index.html`;
       const contentType = request.headers['content-type'] || '';
       if (contentType.includes('text/html') && await storage.exists(indexPath)) {
-        const body = typeof request.body === 'string' ? request.body : Buffer.from(request.body).toString();
-        await storage.write(indexPath, body);
-        const origin = request.headers.origin;
-        const headers = getAllHeaders({ isContainer: false, origin, connegEnabled });
-        Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-        emitChange(request.protocol + '://' + request.hostname, urlPath + 'index.html', 'updated');
-        return reply.code(204).send();
+        const indexUrl = urlPath.endsWith('/') ? `${urlPath}index.html` : `${urlPath}/index.html`;
+        // Fastify request.url is a getter, so proxy it with the rewritten path
+        const proxied = Object.create(request, { url: { value: indexUrl } });
+        return handlePut(proxied, reply);
       }
       // Container exists but no index routing applies - reject
       return reply.code(409).send({ error: 'Cannot PUT to existing container' });
