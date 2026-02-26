@@ -163,6 +163,47 @@ describe('LDP CRUD Operations', () => {
       const verify = await request('/ldptest/public/new-container/');
       assertHeaderContains(verify, 'Link', 'Container');
     });
+
+    it('should PUT HTML to container with index.html routing to index document', async () => {
+      // Create container with an index.html inside
+      await request('/ldptest/public/board/', { method: 'PUT', auth: 'ldptest' });
+      await request('/ldptest/public/board/index.html', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/html' },
+        body: '<html><body>original</body></html>',
+        auth: 'ldptest'
+      });
+
+      // PUT to container URL with text/html should route to index.html
+      const res = await request('/ldptest/public/board/', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/html' },
+        body: '<html><body>updated</body></html>',
+        auth: 'ldptest'
+      });
+
+      assertStatus(res, 204);
+
+      // Verify index.html was updated
+      const verify = await request('/ldptest/public/board/index.html');
+      const content = await verify.text();
+      assert.ok(content.includes('updated'), 'index.html should contain updated content');
+    });
+
+    it('should still 409 on PUT to container without index.html', async () => {
+      // Create an empty container
+      await request('/ldptest/public/empty-dir/', { method: 'PUT', auth: 'ldptest' });
+
+      // PUT text/html to container without index.html should still 409
+      const res = await request('/ldptest/public/empty-dir/', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/html' },
+        body: '<html><body>test</body></html>',
+        auth: 'ldptest'
+      });
+
+      assertStatus(res, 409);
+    });
   });
 
   describe('POST', () => {
