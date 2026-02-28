@@ -95,7 +95,16 @@ export function createServer(options = {}) {
     disableRequestLogging: true,
     trustProxy: true,
     // Handle raw body for non-JSON content
-    bodyLimit: 10 * 1024 * 1024 // 10MB
+    bodyLimit: 10 * 1024 * 1024, // 10MB
+    // Gracefully handle client TCP errors (ECONNRESET, EPIPE, etc.)
+    clientErrorHandler: (err, socket) => {
+      if (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ECONNABORTED') {
+        socket.destroy();
+        return;
+      }
+      // Default Fastify behavior for other client errors
+      socket.destroy(err);
+    }
   };
 
   // Add HTTPS support if SSL config provided
