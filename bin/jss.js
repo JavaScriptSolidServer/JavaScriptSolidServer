@@ -188,6 +188,16 @@ program
       process.on('SIGINT', shutdown);
       process.on('SIGTERM', shutdown);
 
+      // Gracefully handle ECONNRESET — normal network noise from clients
+      // closing connections early (browser navigation, health checks, etc.)
+      process.on('uncaughtException', (err) => {
+        if (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ECONNABORTED') {
+          return;
+        }
+        console.error('Uncaught exception:', err);
+        process.exit(1);
+      });
+
     } catch (err) {
       console.error(`Error: ${err.message}`);
       process.exit(1);
