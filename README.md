@@ -130,6 +130,7 @@ jss --help             # Show help
 | `--base-domain <domain>` | Base domain for subdomains | - |
 | `--mashlib` | Enable Mashlib (local mode) | false |
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
+| `--mashlib-module <url>` | Enable ES module data browser from a URL | - |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
 | `--solidos-ui` | Enable modern SolidOS UI (requires --mashlib) | false |
 | `--git` | Enable Git HTTP backend | false |
@@ -161,6 +162,7 @@ export JSS_CONNEG=true
 export JSS_SUBDOMAINS=true
 export JSS_BASE_DOMAIN=example.com
 export JSS_MASHLIB=true
+export JSS_MASHLIB_MODULE=https://example.com/mashlib.js
 export JSS_NOSTR=true
 export JSS_INVITE_ONLY=true
 export JSS_WEBID_TLS=true
@@ -366,6 +368,12 @@ Serves mashlib from `src/mashlib-local/dist/`. Requires building mashlib locally
 cd src/mashlib-local
 npm install && npm run build
 ```
+
+**ES Module Mode** (for custom or next-gen mashlib builds):
+```bash
+jss start --mashlib-module https://example.com/mashlib.js
+```
+Loads an ES module-based data browser from any URL. Uses `<script type="module">` and `<div id="mashlib">` (self-initializing). CSS is auto-derived by replacing `.js` with `.css`. Content negotiation is auto-enabled.
 
 **How it works:**
 1. Browser requests `/alice/public/data.ttl` with `Accept: text/html`
