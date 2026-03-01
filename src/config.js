@@ -41,6 +41,7 @@ export const defaults = {
   mashlib: false,
   mashlibCdn: false,
   mashlibVersion: '2.0.0',
+  mashlibModule: false,
 
   // SolidOS UI (modern Nextcloud-style interface)
   solidosUi: false,
@@ -113,6 +114,7 @@ const envMap = {
   JSS_MASHLIB: 'mashlib',
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
+  JSS_MASHLIB_MODULE: 'mashlibModule',
   JSS_SOLIDOS_UI: 'solidosUi',
   JSS_GIT: 'git',
   JSS_NOSTR: 'nostr',
@@ -238,7 +240,7 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
   }
 
   // Mashlib requires content negotiation for Turtle support
-  if (config.mashlib || config.mashlibCdn) {
+  if (config.mashlib || config.mashlibCdn || config.mashlibModule) {
     config.conneg = true;
   }
 
@@ -293,7 +295,7 @@ export function printConfig(config) {
   console.log(`  Notifications: ${config.notifications}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
-  console.log(`  Mashlib:       ${config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
+  console.log(`  Mashlib:       ${config.mashlibModule ? `module (${config.mashlibModule})` : config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
   console.log(`  SolidOS UI:    ${config.solidosUi ? 'enabled' : 'disabled'}`);
   console.log('─'.repeat(40));
 }
