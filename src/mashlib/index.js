@@ -41,6 +41,23 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
 }
 
 /**
+ * Generate ES module-based databrowser HTML
+ *
+ * @param {string} moduleUrl - URL to the ES module entry point
+ * @returns {string} HTML content
+ */
+export function generateModuleDatabrowserHtml(moduleUrl) {
+  const cssUrl = moduleUrl.replace(/\.js$/, '.css');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solid Data Browser</title>
+<link rel="stylesheet" href="${cssUrl}"></head>
+<body><div id="mashlib"></div>
+<script type="module" src="${moduleUrl}"></script>
+</body></html>`;
+}
+
+/**
  * Check if request wants HTML and mashlib should handle it
  * @param {object} request - Fastify request
  * @param {boolean} mashlibEnabled - Whether mashlib is enabled

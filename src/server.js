@@ -54,7 +54,9 @@ export function createServer(options = {}) {
   const baseDomain = options.baseDomain || null;
   // Mashlib data browser is OFF by default
   // mashlibCdn: if true, load from CDN; if false, serve locally
-  const mashlibEnabled = options.mashlib ?? false;
+  // mashlibModule: URL to ES module entry point (alternative to classic mashlib)
+  const mashlibModule = options.mashlibModule ?? false;
+  const mashlibEnabled = options.mashlib || !!mashlibModule;
   const mashlibCdn = options.mashlibCdn ?? false;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // SolidOS UI (modern Nextcloud-style interface) - requires mashlib
@@ -147,6 +149,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibEnabled', null);
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
+  fastify.decorateRequest('mashlibModule', null);
   fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('config', null);
@@ -160,6 +163,7 @@ export function createServer(options = {}) {
     request.mashlibEnabled = mashlibEnabled;
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
+    request.mashlibModule = mashlibModule;
     request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
     request.config = { public: options.public, readOnly: options.readOnly };
