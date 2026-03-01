@@ -149,6 +149,69 @@ describe('Authentication', () => {
       const res = await request('/inboxread/inbox/');
       assertStatus(res, 401);
     });
+
+    it('should allow any authenticated user with acl:AuthenticatedAgent', async () => {
+      await createTestPod('authuser1');
+      await createTestPod('authuser2');
+
+      // Create a test resource with acl:AuthenticatedAgent ACL
+      const baseUrl = getBaseUrl();
+
+      // First, create a resource (this will create parent containers)
+      await request('/authuser1/authenticated-only/test.txt', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'authenticated content',
+        auth: 'authuser1'
+      });
+
+      // Now create a custom ACL for the container with acl:AuthenticatedAgent
+      // Include owner with Control so they can manage the ACL
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/authuser1/profile/card#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
+            'acl:mode': [{ '@id': 'acl:Read' }]
+          }
+        ]
+      };
+
+      await request('/authuser1/authenticated-only/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(acl),
+        auth: 'authuser1'
+      });
+
+      // Test 1: Anonymous access should be denied
+      const res1 = await request('/authuser1/authenticated-only/test.txt');
+      assertStatus(res1, 401);
+
+      // Test 2: Owner should have access
+      const res2 = await request('/authuser1/authenticated-only/test.txt', { auth: 'authuser1' });
+      assertStatus(res2, 200);
+
+      // Test 3: Different authenticated user should also have access (key test!)
+      const res3 = await request('/authuser1/authenticated-only/test.txt', { auth: 'authuser2' });
+      assertStatus(res3, 200);
+    });
   });
 
   describe('WAC-Allow Header', () => {
