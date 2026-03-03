@@ -140,9 +140,9 @@ export async function handleLogin(request, reply, provider) {
       // Show passkey registration prompt before completing login
       // Store the pending login in the interaction
       interaction.result = {
+        passkeyPromptPending: true,
         login: { accountId: account.id, remember: true }
       };
-      interaction.passkeyPromptPending = true;
       await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
       return reply.type('text/html').send(passkeyPromptPage(uid, account.id));
     }
@@ -473,7 +473,7 @@ export async function handlePasskeyComplete(request, reply, provider) {
 
     // If this is a post-login passkey registration flow, validate accountId matches
     // the already-authenticated user to prevent account takeover
-    if (interaction.passkeyPromptPending && interaction.result?.login?.accountId) {
+    if (interaction.result?.passkeyPromptPending && interaction.result?.login?.accountId) {
       if (interaction.result.login.accountId !== accountId) {
         request.log.warn({ expected: interaction.result.login.accountId, provided: accountId }, 'AccountId mismatch in passkey complete');
         return reply.code(403).type('text/html').send(errorPage('Access denied', 'Account mismatch.'));
@@ -520,7 +520,7 @@ export async function handlePasskeySkip(request, reply, provider) {
     }
 
     // Validate the interaction is in the passkey prompt state
-    if (!interaction.passkeyPromptPending) {
+    if (!interaction.result?.passkeyPromptPending) {
       return reply.code(400).type('text/html').send(errorPage('Invalid state', 'Not in passkey prompt flow.'));
     }
 
