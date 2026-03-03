@@ -12,6 +12,31 @@ import { getEffectiveUrlPath } from '../utils/url.js';
 import { generateDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index.js';
 
 /**
+ * Build a resource URL for WAC checking, normalizing path-based pod access
+ * to subdomain form so URLs match ACL entries.
+ *
+ * In subdomain mode, ACLs reference subdomain URLs (e.g. https://alice.example.com/public/).
+ * Path-based access on the main domain (e.g. https://example.com/alice/public/) must be
+ * normalized to match.
+ *
+ * @param {object} request - Fastify request
+ * @param {string} urlPath - URL path (e.g. /alice/public/file.ttl)
+ * @returns {string} Normalized resource URL
+ */
+function buildResourceUrl(request, urlPath) {
+  if (request.subdomainsEnabled && request.baseDomain &&
+      request.hostname === request.baseDomain && !request.podName) {
+    const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
+    if (pathMatch && !pathMatch[1].startsWith('.')) {
+      const podName = pathMatch[1];
+      const remainder = pathMatch[2] || '/';
+      return `${request.protocol}://${podName}.${request.baseDomain}${remainder}`;
+    }
+  }
+  return `${request.protocol}://${request.hostname}${urlPath}`;
+}
+
+/**
  * Check if request is authorized
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
@@ -55,8 +80,8 @@ export async function authorize(request, reply, options = {}) {
   const resourceExists = stats !== null;
   const isContainer = stats?.isDirectory || urlPath.endsWith('/');
 
-  // Build resource URL (uses actual request hostname which may be subdomain)
-  const resourceUrl = `${request.protocol}://${request.hostname}${urlPath}`;
+  // Build resource URL, normalizing path-based pod access to subdomain form for WAC
+  const resourceUrl = buildResourceUrl(request, urlPath);
 
   // Get required access mode - use override if provided, otherwise derive from method
   const requiredMode = options.requiredMode || getRequiredMode(method);
@@ -70,9 +95,9 @@ export async function authorize(request, reply, options = {}) {
     // Check write permission on parent container
     const parentPath = getParentPath(storagePath);
     checkPath = parentPath;
-    // For URL, also need to get parent
+    // For URL, also need to get parent (normalized for subdomain WAC matching)
     const parentUrlPath = getParentPath(urlPath);
-    checkUrl = `${request.protocol}://${request.hostname}${parentUrlPath}`;
+    checkUrl = buildResourceUrl(request, parentUrlPath);
     checkIsContainer = true;
   }
 
@@ -379,7 +404,7 @@ async function authorizeAclAccess(request, urlPath, method, webId, authError) {
   // /foo/bar.acl protects /foo/bar (resource)
   const protectedPath = urlPath.replace(/\.acl$/, '');
   const isProtectedContainer = protectedPath.endsWith('/');
-  const protectedUrl = `${request.protocol}://${request.hostname}${protectedPath}`;
+  const protectedUrl = buildResourceUrl(request, protectedPath);
 
   // Get storage path for the protected resource
   const storagePath = getEffectiveUrlPath(request).replace(/\.acl$/, '');
