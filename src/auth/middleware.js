@@ -26,9 +26,11 @@ import { generateDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index
 function buildResourceUrl(request, urlPath) {
   if (request.subdomainsEnabled && request.baseDomain &&
       request.hostname === request.baseDomain && !request.podName) {
-    const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)$/);
-    if (pathMatch) {
-      return `${request.protocol}://${pathMatch[1]}.${request.baseDomain}${pathMatch[2]}`;
+    const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
+    if (pathMatch && !pathMatch[1].startsWith('.')) {
+      const podName = pathMatch[1];
+      const remainder = pathMatch[2] || '/';
+      return `${request.protocol}://${podName}.${request.baseDomain}${remainder}`;
     }
   }
   return `${request.protocol}://${request.hostname}${urlPath}`;
