@@ -49,6 +49,9 @@ export async function dbPlugin(fastify, options) {
       return reply.code(401).send({ error: 'Unauthorized', message: 'Authentication required' });
     }
 
+    // Single-user mode: any authenticated user is the owner
+    if (options.singleUser) return;
+
     // Ownership check: only pod owner can write to /db/{podName}/...
     const urlPath = request.url.split('?')[0];
     const relative = urlPath.replace(/^\/db\//, '');
