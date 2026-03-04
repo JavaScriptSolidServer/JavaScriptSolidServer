@@ -55,10 +55,9 @@ export async function dbPlugin(fastify, options) {
     const podName = relative.split('/')[0];
     if (podName) {
       // Build expected WebID for both path and subdomain modes
-      const baseHost = request.baseDomain || request.hostname;
       const expectedWebId = request.subdomainsEnabled && request.baseDomain
         ? `${request.protocol}://${podName}.${request.baseDomain}/profile/card#me`
-        : `${request.protocol}://${baseHost}/${podName}/profile/card#me`;
+        : `${request.protocol}://${request.hostname}/${podName}/profile/card#me`;
       if (webId !== expectedWebId) {
         return reply.code(403).send({ error: 'Forbidden', message: 'You can only write to your own /db/ space' });
       }
@@ -93,8 +92,8 @@ async function handleDbGet(request, reply) {
   const origin = request.headers.origin;
   const connegEnabled = request.connegEnabled || false;
 
-  // Container request
-  if (urlPath.endsWith('/')) {
+  // Container request (treat /db as root container)
+  if (urlPath === '/db' || urlPath.endsWith('/')) {
     const entries = await listByPrefix(resourceUrl);
     const jsonLd = generateContainerJsonLd(resourceUrl, entries);
     const content = serializeJsonLd(jsonLd);
@@ -152,7 +151,7 @@ async function handleDbHead(request, reply) {
   const origin = request.headers.origin;
   const connegEnabled = request.connegEnabled || false;
 
-  if (urlPath.endsWith('/')) {
+  if (urlPath === '/db' || urlPath.endsWith('/')) {
     const entries = await listByPrefix(resourceUrl);
     const etag = `"container-${entries.length}"`;
     const headers = getAllHeaders({
@@ -195,7 +194,11 @@ async function handleDbPut(request, reply) {
     return reply.code(409).send({ error: 'Conflict', message: 'Cannot PUT to a container' });
   }
 
-  const contentType = request.headers['content-type'] || 'application/ld+json';
+  // Only accept JSON content types — stored as JSON-LD
+  const incomingType = (request.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (incomingType && incomingType !== 'application/ld+json' && incomingType !== 'application/json') {
+    return reply.code(415).send({ error: 'Unsupported Media Type', message: 'Only application/ld+json and application/json are accepted' });
+  }
 
   // Parse body
   let data;
@@ -226,7 +229,7 @@ async function handleDbPut(request, reply) {
     if (!check.ok) return reply.code(check.status).send({ error: check.error });
   }
 
-  const { created, etag } = await upsertOne(resourceUrl, data, contentType);
+  const { created, etag } = await upsertOne(resourceUrl, data, 'application/ld+json');
 
   const origin = request.headers.origin;
   const headers = getAllHeaders({
@@ -289,7 +292,7 @@ async function handleDbOptions(request, reply) {
   const resourceUrl = getResourceUrl(request);
   const origin = request.headers.origin;
   const headers = getAllHeaders({
-    isContainer: request.url.split('?')[0].endsWith('/'),
+    isContainer: request.url.split('?')[0] === '/db' || request.url.split('?')[0].endsWith('/'),
     origin, resourceUrl,
     connegEnabled: request.connegEnabled || false
   });
