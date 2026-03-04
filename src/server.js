@@ -236,7 +236,7 @@ export function createServer(options = {}) {
 
   // Register MongoDB /db/ route if enabled
   if (mongoEnabled) {
-    fastify.register(dbPlugin, { mongoUrl, mongoDatabase });
+    fastify.register(dbPlugin, { mongoUrl, mongoDatabase, singleUser });
   }
 
   // Register rate limiting plugin
