@@ -80,6 +80,10 @@ program
   .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
   .option('--read-only', 'Disable PUT/DELETE/PATCH methods (read-only mode)')
   .option('--live-reload', 'Inject live reload script into HTML (auto-refresh on changes)')
+  .option('--mongo', 'Enable MongoDB-backed /db/ route')
+  .option('--no-mongo', 'Disable MongoDB-backed /db/ route')
+  .option('--mongo-url <url>', 'MongoDB connection URL (default: mongodb://localhost:27017)')
+  .option('--mongo-database <name>', 'MongoDB database name (default: solid)')
   .option('-q, --quiet', 'Suppress log output')
   .option('--log-level <level>', 'Log level: error, warn, info, debug (default: info)')
   .option('--print-config', 'Print configuration and exit')
@@ -142,6 +146,9 @@ program
         public: config.public,
         readOnly: config.readOnly,
         liveReload: config.liveReload,
+        mongo: config.mongo,
+        mongoUrl: config.mongoUrl,
+        mongoDatabase: config.mongoDatabase,
       });
 
       await server.listen({ port: config.port, host: config.host });
@@ -177,6 +184,7 @@ program
           }
           console.log('     Do not expose to the internet!');
         }
+        if (config.mongo) console.log(`  MongoDB: ${config.mongoUrl} (${config.mongoDatabase})`);
         if (config.readOnly) console.log('  Read-only: enabled (PUT/DELETE/PATCH disabled)');
         console.log('\n  Press Ctrl+C to stop\n');
       }

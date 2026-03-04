@@ -15,6 +15,7 @@ import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js'
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
+import { dbPlugin } from './db/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -84,6 +85,10 @@ export function createServer(options = {}) {
   const webidTlsEnabled = options.webidTls ?? false;
   // Live reload - injects script to auto-refresh browser on file changes
   const liveReloadEnabled = options.liveReload ?? false;
+  // MongoDB-backed /db/ route is OFF by default
+  const mongoEnabled = options.mongo ?? false;
+  const mongoUrl = options.mongoUrl ?? 'mongodb://localhost:27017';
+  const mongoDatabase = options.mongoDatabase ?? 'solid';
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -229,6 +234,11 @@ export function createServer(options = {}) {
     });
   }
 
+  // Register MongoDB /db/ route if enabled
+  if (mongoEnabled) {
+    fastify.register(dbPlugin, { mongoUrl, mongoDatabase });
+  }
+
   // Register rate limiting plugin
   // Protects against brute force attacks and resource exhaustion
   fastify.register(rateLimit, {
@@ -358,6 +368,7 @@ export function createServer(options = {}) {
         (gitEnabled && isGitRequest(request.url)) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
         isProfileAP ||
+        (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
