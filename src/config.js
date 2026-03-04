@@ -83,6 +83,11 @@ export const defaults = {
   // Live reload - inject script to auto-refresh browser on file changes
   liveReload: false,
 
+  // MongoDB-backed /db/ route
+  mongo: false,
+  mongoUrl: 'mongodb://localhost:27017',
+  mongoDatabase: 'solid',
+
   // Logging
   logger: true,
   quiet: false,
@@ -133,6 +138,9 @@ const envMap = {
   JSS_PUBLIC: 'public',
   JSS_READ_ONLY: 'readOnly',
   JSS_LIVE_RELOAD: 'liveReload',
+  JSS_MONGO: 'mongo',
+  JSS_MONGO_URL: 'mongoUrl',
+  JSS_MONGO_DATABASE: 'mongoDatabase',
 };
 
 /**
@@ -297,5 +305,6 @@ export function printConfig(config) {
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
   console.log(`  Mashlib:       ${config.mashlibModule ? `module (${config.mashlibModule})` : config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
   console.log(`  SolidOS UI:    ${config.solidosUi ? 'enabled' : 'disabled'}`);
+  if (config.mongo) console.log(`  MongoDB:       ${config.mongoUrl} (${config.mongoDatabase})`);
   console.log('─'.repeat(40));
 }

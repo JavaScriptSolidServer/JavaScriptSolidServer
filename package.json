@@ -51,6 +51,9 @@
     "nostr"
   ],
   "license": "AGPL-3.0-only",
+  "optionalDependencies": {
+    "mongodb": "^6.0.0"
+  },
   "devDependencies": {
     "autocannon": "^8.0.0"
   }
