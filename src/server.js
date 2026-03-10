@@ -237,8 +237,8 @@ export function createServer(options = {}) {
 
   // Register remoteStorage plugin (always on — no flag needed)
   fastify.register(remoteStoragePlugin, {
-    username: apUsername || 'me',
-    ownerWebId: singleUser ? null : undefined  // single-user: any authenticated user; multi-user: check WebID
+    username: singleUserName || 'me',
+    ownerWebId: null  // single-user: any authenticated user can access
   });
 
   // Register MongoDB /db/ route if enabled
