@@ -98,6 +98,18 @@ export async function remoteStoragePlugin (fastify, options = {}) {
     }
 
     const info = await storage.stat(storagePath)
+
+    // Non-existent folder → return empty listing (RS spec: clients expect 200 to start writing)
+    if (!info && storagePath.endsWith('/')) {
+      return reply
+        .header('Content-Type', 'application/ld+json')
+        .header('Cache-Control', 'no-cache')
+        .send({
+          '@context': 'http://remotestorage.io/spec/folder-description',
+          items: {}
+        })
+    }
+
     if (!info) {
       return reply.code(404).send({ error: 'Not found' })
     }
@@ -112,7 +124,13 @@ export async function remoteStoragePlugin (fastify, options = {}) {
     if (info.isDirectory) {
       const entries = await storage.listContainer(storagePath)
       if (!entries) {
-        return reply.code(404).send({ error: 'Not found' })
+        return reply
+          .header('Content-Type', 'application/ld+json')
+          .header('Cache-Control', 'no-cache')
+          .send({
+            '@context': 'http://remotestorage.io/spec/folder-description',
+            items: {}
+          })
       }
 
       const items = {}
