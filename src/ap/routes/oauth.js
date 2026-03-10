@@ -8,6 +8,7 @@
  * Related: #158, #159 (Mastodon API), #106 (remoteStorage), #160 (this)
  */
 
+import crypto from 'crypto'
 import { getClient } from './mastodon.js'
 import { authenticate } from '../../idp/accounts.js'
 import { createToken } from '../../auth/token.js'
@@ -68,7 +69,7 @@ function validateClient (clientId, redirectUri) {
  */
 export function createAuthorizeHandler () {
   return async (request, reply) => {
-    const { client_id, redirect_uri, response_type, scope } = request.query
+    const { client_id, redirect_uri, response_type, scope, state } = request.query
 
     if (response_type && response_type !== 'code') {
       return reply.code(400).send({ error: 'unsupported_response_type', error_description: 'Only response_type=code is supported' })
@@ -80,7 +81,7 @@ export function createAuthorizeHandler () {
     }
 
     return reply.type('text/html').send(
-      loginPage({ clientId: client_id, redirectUri: redirect_uri, scope: scope || 'read', clientName: client.name })
+      loginPage({ clientId: client_id, redirectUri: redirect_uri, scope: scope || 'read', state, clientName: client.name })
     )
   }
 }
@@ -91,7 +92,7 @@ export function createAuthorizeHandler () {
 export function createAuthorizePostHandler () {
   return async (request, reply) => {
     const body = parseBody(request)
-    const { username, password, client_id, redirect_uri, scope } = body
+    const { username, password, client_id, redirect_uri, scope, state } = body
 
     // Validate client + redirect_uri (prevent open redirect via form tampering)
     const { client, error: clientError } = validateClient(client_id, redirect_uri)
@@ -101,14 +102,14 @@ export function createAuthorizePostHandler () {
 
     if (!username || !password) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, clientName: client.name, error: 'Username and password are required' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, state, clientName: client.name, error: 'Username and password are required' })
       )
     }
 
     const account = await authenticate(username, password)
     if (!account) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, clientName: client.name, error: 'Invalid username or password' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, state, clientName: client.name, error: 'Invalid username or password' })
       )
     }
 
@@ -127,9 +128,10 @@ export function createAuthorizePostHandler () {
       return reply.type('text/html').send(oobPage(code))
     }
 
-    // Redirect back to client with code
+    // Redirect back to client with code + state (RFC 6749 §4.1.2)
     const url = new URL(redirect_uri)
     url.searchParams.set('code', code)
+    if (state) url.searchParams.set('state', state)
     return reply.redirect(url.toString())
   }
 }
@@ -155,7 +157,11 @@ export function createTokenHandler () {
     if (!client) {
       return reply.code(401).send({ error: 'invalid_client', error_description: 'Unknown client_id' })
     }
-    if (client.client_secret !== client_secret) {
+    try {
+      if (!crypto.timingSafeEqual(Buffer.from(client.client_secret), Buffer.from(client_secret || ''))) {
+        return reply.code(401).send({ error: 'invalid_client', error_description: 'Invalid client_secret' })
+      }
+    } catch {
       return reply.code(401).send({ error: 'invalid_client', error_description: 'Invalid client_secret' })
     }
 
@@ -192,7 +198,7 @@ export function createTokenHandler () {
 /**
  * Minimal login page HTML
  */
-function loginPage ({ clientId, redirectUri, scope, clientName, error }) {
+function loginPage ({ clientId, redirectUri, scope, state, clientName, error }) {
   const escapedError = error ? escapeHtml(error) : ''
   const escapedName = escapeHtml(clientName || clientId || 'Unknown app')
 
@@ -227,6 +233,7 @@ function loginPage ({ clientId, redirectUri, scope, clientName, error }) {
       <input type="hidden" name="client_id" value="${escapeHtml(clientId || '')}">
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri || '')}">
       <input type="hidden" name="scope" value="${escapeHtml(scope || 'read')}">
+      ${state ? `<input type="hidden" name="state" value="${escapeHtml(state)}">` : ''}
       <label for="username">Username</label>
       <input type="text" id="username" name="username" required autocomplete="username">
       <label for="password">Password</label>

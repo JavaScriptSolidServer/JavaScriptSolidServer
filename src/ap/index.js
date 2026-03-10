@@ -183,7 +183,15 @@ export async function activityPubPlugin(fastify, options = {}) {
 
   // OAuth 2.0 authorize/token flow (Mastodon clients, remoteStorage, third-party panes)
   fastify.get('/oauth/authorize', createAuthorizeHandler())
-  fastify.post('/oauth/authorize', createAuthorizePostHandler())
+  fastify.post('/oauth/authorize', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, createAuthorizePostHandler())
   fastify.post('/oauth/token', createTokenHandler())
 }
 
