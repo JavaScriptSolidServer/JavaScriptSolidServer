@@ -115,7 +115,7 @@ export function createInstanceHandler (config) {
       title: config.displayName || 'JSS',
       description: 'SAND Stack: Solid + ActivityPub + Nostr + DID',
       short_description: 'Solid pod with Mastodon-compatible API',
-      version: '4.0.0 (compatible; JSS 0.0.97)',
+      version: '4.0.0 (compatible; JSS 0.0.98)',
       urls: {
         streaming_api: `${wsProtocol}://${host}`
       },
