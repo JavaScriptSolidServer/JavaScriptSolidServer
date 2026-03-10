@@ -12,6 +12,9 @@ import { getClient } from './mastodon.js'
 import { authenticate } from '../../idp/accounts.js'
 import { createToken } from '../../auth/token.js'
 
+// Mastodon OOB redirect — display code instead of redirecting
+const OOB_REDIRECT = 'urn:ietf:wg:oauth:2.0:oob'
+
 // Auth codes: code → { clientId, redirectUri, webId, scope, expiresAt }
 const authCodes = new Map()
 
@@ -39,23 +42,41 @@ function parseBody (request) {
 }
 
 /**
+ * Validate client_id and redirect_uri against registered client
+ * Returns { client, error } — client is null if validation fails
+ */
+function validateClient (clientId, redirectUri) {
+  if (!clientId || !redirectUri) {
+    return { client: null, error: 'Missing client_id or redirect_uri' }
+  }
+
+  const client = getClient(clientId)
+  if (!client) {
+    return { client: null, error: 'Unknown client_id. Register via POST /api/v1/apps first.' }
+  }
+
+  // Validate redirect_uri matches registered value (RFC 6749 §10.6)
+  if (redirectUri !== OOB_REDIRECT && redirectUri !== client.redirect_uri) {
+    return { client: null, error: 'redirect_uri does not match registered value' }
+  }
+
+  return { client, error: null }
+}
+
+/**
  * GET /oauth/authorize — Show login/consent page
  */
 export function createAuthorizeHandler () {
   return async (request, reply) => {
     const { client_id, redirect_uri, response_type, scope } = request.query
 
-    if (!client_id || !redirect_uri) {
-      return reply.code(400).send({ error: 'Missing client_id or redirect_uri' })
-    }
-
     if (response_type && response_type !== 'code') {
       return reply.code(400).send({ error: 'unsupported_response_type', error_description: 'Only response_type=code is supported' })
     }
 
-    const client = getClient(client_id)
+    const { client, error } = validateClient(client_id, redirect_uri)
     if (!client) {
-      return reply.code(400).send({ error: 'invalid_client', error_description: 'Unknown client_id. Register via POST /api/v1/apps first.' })
+      return reply.code(400).send({ error: 'invalid_client', error_description: error })
     }
 
     return reply.type('text/html').send(
@@ -72,16 +93,22 @@ export function createAuthorizePostHandler () {
     const body = parseBody(request)
     const { username, password, client_id, redirect_uri, scope } = body
 
+    // Validate client + redirect_uri (prevent open redirect via form tampering)
+    const { client, error: clientError } = validateClient(client_id, redirect_uri)
+    if (!client) {
+      return reply.code(400).send({ error: 'invalid_client', error_description: clientError })
+    }
+
     if (!username || !password) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, error: 'Username and password are required' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, clientName: client.name, error: 'Username and password are required' })
       )
     }
 
     const account = await authenticate(username, password)
     if (!account) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, error: 'Invalid username or password' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, clientName: client.name, error: 'Invalid username or password' })
       )
     }
 
@@ -94,6 +121,11 @@ export function createAuthorizePostHandler () {
       scope: scope || 'read',
       expiresAt: Date.now() + 600_000
     })
+
+    // Handle OOB redirect — display code to user instead of redirecting
+    if (redirect_uri === OOB_REDIRECT) {
+      return reply.type('text/html').send(oobPage(code))
+    }
 
     // Redirect back to client with code
     const url = new URL(redirect_uri)
@@ -116,6 +148,15 @@ export function createTokenHandler () {
 
     if (!code) {
       return reply.code(400).send({ error: 'invalid_request', error_description: 'Missing code' })
+    }
+
+    // Validate client credentials (RFC 6749 §2.3)
+    const client = getClient(client_id)
+    if (!client) {
+      return reply.code(401).send({ error: 'invalid_client', error_description: 'Unknown client_id' })
+    }
+    if (client.client_secret !== client_secret) {
+      return reply.code(401).send({ error: 'invalid_client', error_description: 'Invalid client_secret' })
     }
 
     // Look up and validate auth code
@@ -192,6 +233,36 @@ function loginPage ({ clientId, redirectUri, scope, clientName, error }) {
       <input type="password" id="password" name="password" required autocomplete="current-password">
       <button type="submit">Authorize</button>
     </form>
+  </div>
+</body>
+</html>`
+}
+
+/**
+ * OOB (out-of-band) code display page
+ * Used when redirect_uri is urn:ietf:wg:oauth:2.0:oob
+ */
+function oobPage (code) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authorization Code</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .card { background: white; border-radius: 12px; padding: 2rem; max-width: 400px; width: 90%; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
+    h1 { font-size: 1.25rem; margin-bottom: 1rem; }
+    .code { background: #f0f0f0; padding: 1rem; border-radius: 6px; font-family: monospace; font-size: 0.9rem; word-break: break-all; user-select: all; }
+    p { color: #666; margin-top: 1rem; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Authorization Successful</h1>
+    <div class="code">${escapeHtml(code)}</div>
+    <p>Copy this code and paste it into your application.</p>
   </div>
 </body>
 </html>`
