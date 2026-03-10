@@ -20,7 +20,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
 - **Mastodon-compatible API** - Dynamic client registration, instance info, account verification
 - **OAuth 2.0 Authorization** - Shared auth flow for Mastodon clients, remoteStorage apps, and third-party panes
-- **remoteStorage Protocol** - [draft-dejong-remotestorage-22](https://remotestorage.io/spec/) file sync — always on, no flag needed
+- **remoteStorage Protocol** - [draft-dejong-remotestorage-22](https://remotestorage.io/spec/) file sync (requires `--activitypub` for WebFinger discovery + OAuth)
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
 - **SPARQL Update** - Standard SPARQL UPDATE protocol for PATCH
@@ -602,7 +602,11 @@ curl http://localhost:3000/api/v1/instance
 
 ## remoteStorage
 
-JSS implements the [remoteStorage protocol](https://remotestorage.io/spec/draft-dejong-remotestorage-22) — always on, no flag needed. Any remoteStorage-compatible app can store and sync data on your pod.
+JSS implements the [remoteStorage protocol](https://remotestorage.io/spec/draft-dejong-remotestorage-22). The storage routes are always available, but WebFinger discovery and OAuth require `--activitypub` (which provides the WebFinger and OAuth endpoints). Any remoteStorage-compatible app can store and sync data on your pod.
+
+```bash
+jss start --activitypub --idp
+```
 
 ### Discovery
 
