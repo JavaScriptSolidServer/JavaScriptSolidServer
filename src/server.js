@@ -366,7 +366,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/solidos-ui/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
-        (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
+        (activitypubEnabled && (apPaths.some(p => request.url === p || request.url.startsWith(p + '?')) || request.url.startsWith('/api/v1/'))) ||
         isProfileAP ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {

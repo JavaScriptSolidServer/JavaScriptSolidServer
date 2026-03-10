@@ -10,13 +10,34 @@
 // In-memory client store (replace with persistent storage later)
 const clients = new Map()
 
+// Stable instance start time (used for created_at)
+const startedAt = new Date().toISOString()
+
+/**
+ * Parse request body — handles both JSON and form-urlencoded
+ * (JSS uses raw buffer parser for all content types)
+ */
+function parseBody (request) {
+  if (request.body && typeof request.body === 'object' && !Buffer.isBuffer(request.body)) {
+    return request.body
+  }
+  const raw = Buffer.isBuffer(request.body) ? request.body.toString() : String(request.body || '')
+  const ct = request.headers['content-type'] || ''
+  if (ct.includes('application/json')) {
+    try { return JSON.parse(raw) } catch { return {} }
+  }
+  // Default: parse as form-urlencoded
+  return Object.fromEntries(new URLSearchParams(raw))
+}
+
 /**
  * POST /api/v1/apps — Dynamic client registration
  * Mastodon clients call this to register before OAuth
  */
 export function createAppsHandler () {
   return async (request, reply) => {
-    const { client_name, redirect_uris, scopes, website } = request.body || {}
+    const body = parseBody(request)
+    const { client_name, redirect_uris, scopes, website } = body
 
     if (!client_name || !redirect_uris) {
       return reply.code(422).send({ error: 'client_name and redirect_uris are required' })
@@ -56,14 +77,14 @@ export function createVerifyCredentialsHandler (config) {
       username: config.username,
       acct: config.username,
       display_name: config.displayName,
-      note: config.summary ? `<p>${config.summary}</p>` : '',
+      note: config.summary ? `<p>${escapeHtml(config.summary)}</p>` : '',
       url: `${baseUrl}/profile/card`,
       uri: `${baseUrl}/profile/card#me`,
       avatar: `${baseUrl}/profile/avatar.png`,
       header: '',
       locked: false,
       bot: false,
-      created_at: new Date().toISOString(),
+      created_at: startedAt,
       followers_count: 0,
       following_count: 0,
       statuses_count: 0,
@@ -87,7 +108,7 @@ export function createInstanceHandler (config) {
   return async (request, reply) => {
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
     const host = request.headers['x-forwarded-host'] || request.hostname
-    const baseUrl = `${protocol}://${host}`
+    const wsProtocol = protocol === 'https' ? 'wss' : 'ws'
 
     return reply.send({
       uri: host,
@@ -96,7 +117,7 @@ export function createInstanceHandler (config) {
       short_description: 'Solid pod with Mastodon-compatible API',
       version: '4.0.0 (compatible; JSS 0.0.67)',
       urls: {
-        streaming_api: `wss://${host}`
+        streaming_api: `${wsProtocol}://${host}`
       },
       stats: {
         user_count: 1,
@@ -119,6 +140,10 @@ export function createInstanceHandler (config) {
  */
 export function getClient (clientId) {
   return clients.get(clientId) || null
+}
+
+function escapeHtml (str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 export default {
