@@ -10,6 +10,7 @@ import { createInboxHandler } from './routes/inbox.js'
 import { createOutboxHandler, createOutboxPostHandler } from './routes/outbox.js'
 import { createCollectionsHandler } from './routes/collections.js'
 import { createActorHandler } from './routes/actor.js'
+import { createAppsHandler, createVerifyCredentialsHandler, createInstanceHandler } from './routes/mastodon.js'
 
 // Shared state for actor handler (accessed by server.js)
 let sharedActorHandler = null
@@ -173,6 +174,11 @@ export async function activityPubPlugin(fastify, options = {}) {
   const collectionsHandler = createCollectionsHandler(config)
   fastify.get('/profile/card/followers', (req, reply) => collectionsHandler(req, reply, 'followers'))
   fastify.get('/profile/card/following', (req, reply) => collectionsHandler(req, reply, 'following'))
+
+  // Mastodon-compatible API endpoints
+  fastify.post('/api/v1/apps', createAppsHandler())
+  fastify.get('/api/v1/accounts/verify_credentials', createVerifyCredentialsHandler(config))
+  fastify.get('/api/v1/instance', createInstanceHandler(config))
 }
 
 export default activityPubPlugin
