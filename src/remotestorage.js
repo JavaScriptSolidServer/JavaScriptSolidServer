@@ -31,7 +31,8 @@ export async function remoteStoragePlugin (fastify, options = {}) {
    */
   function getStoragePath (request) {
     const wildcard = request.params['*'] || ''
-    return '/' + wildcard
+    // Normalize double slashes (RS library appends path to href which ends with /)
+    return ('/' + wildcard).replace(/\/\/+/g, '/')
   }
 
   /**
