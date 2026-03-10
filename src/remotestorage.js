@@ -100,6 +100,7 @@ export async function remoteStoragePlugin (fastify, options = {}) {
     const info = await storage.stat(storagePath)
 
     // Non-existent folder → return empty listing (RS spec: clients expect 200 to start writing)
+    // No ETag — forces RS clients to process the folder each sync cycle (304 would skip push logic)
     if (!info && storagePath.endsWith('/')) {
       return reply
         .header('Content-Type', 'application/ld+json')
@@ -126,6 +127,7 @@ export async function remoteStoragePlugin (fastify, options = {}) {
       if (!entries) {
         return reply
           .header('Content-Type', 'application/ld+json')
+          .header('ETag', info.etag || '"empty"')
           .header('Cache-Control', 'no-cache')
           .send({
             '@context': 'http://remotestorage.io/spec/folder-description',
