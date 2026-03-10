@@ -11,6 +11,7 @@ import { createOutboxHandler, createOutboxPostHandler } from './routes/outbox.js
 import { createCollectionsHandler } from './routes/collections.js'
 import { createActorHandler } from './routes/actor.js'
 import { createAppsHandler, createVerifyCredentialsHandler, createInstanceHandler } from './routes/mastodon.js'
+import { createAuthorizeHandler, createAuthorizePostHandler, createTokenHandler } from './routes/oauth.js'
 
 // Shared state for actor handler (accessed by server.js)
 let sharedActorHandler = null
@@ -179,6 +180,27 @@ export async function activityPubPlugin(fastify, options = {}) {
   fastify.post('/api/v1/apps', createAppsHandler())
   fastify.get('/api/v1/accounts/verify_credentials', createVerifyCredentialsHandler(config))
   fastify.get('/api/v1/instance', createInstanceHandler(config))
+
+  // OAuth 2.0 authorize/token flow (Mastodon clients, remoteStorage, third-party panes)
+  fastify.get('/oauth/authorize', createAuthorizeHandler())
+  fastify.post('/oauth/authorize', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, createAuthorizePostHandler())
+  fastify.post('/oauth/token', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, createTokenHandler())
 }
 
 export default activityPubPlugin
