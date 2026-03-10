@@ -15,6 +15,7 @@ import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js'
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
+import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -234,6 +235,12 @@ export function createServer(options = {}) {
     });
   }
 
+  // Register remoteStorage plugin (always on — no flag needed)
+  fastify.register(remoteStoragePlugin, {
+    username: apUsername || 'me',
+    ownerWebId: singleUser ? null : undefined  // single-user: any authenticated user; multi-user: check WebID
+  });
+
   // Register MongoDB /db/ route if enabled
   if (mongoEnabled) {
     fastify.register(dbPlugin, { mongoUrl, mongoDatabase, singleUser });
@@ -370,6 +377,7 @@ export function createServer(options = {}) {
         (gitEnabled && isGitRequest(request.url)) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
         isProfileAP ||
+        request.url.startsWith('/storage/') ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;

@@ -108,6 +108,17 @@ export async function activityPubPlugin(fastify, options = {}) {
       { profileUrl }
     )
 
+    // Add remoteStorage link relation
+    response.links.push({
+      rel: 'http://tools.ietf.org/id/draft-dejong-remotestorage',
+      href: `${baseUrl}/storage/${config.username}`,
+      properties: {
+        'http://remotestorage.io/spec/version': 'draft-dejong-remotestorage-22',
+        'http://tools.ietf.org/html/rfc6749#section-4.2': `${baseUrl}/oauth/authorize`,
+        'http://tools.ietf.org/html/rfc6750#section-2.3': 'Bearer'
+      }
+    })
+
     return reply
       .header('Content-Type', 'application/jrd+json')
       .header('Access-Control-Allow-Origin', '*')
