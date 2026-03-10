@@ -353,7 +353,8 @@ export function createServer(options = {}) {
   fastify.addHook('preHandler', async (request, reply) => {
     // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, solidos-ui, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
-    const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following'];
+    const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following',
+      '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials'];
     // Check if request wants ActivityPub content for profile
     const accept = request.headers.accept || '';
     const wantsAP = accept.includes('activity+json') || accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
