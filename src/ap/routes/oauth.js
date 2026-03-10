@@ -46,12 +46,19 @@ function parseBody (request) {
  * Validate client_id and redirect_uri against registered client
  * Returns { client, error } — client is null if validation fails
  */
-function validateClient (clientId, redirectUri) {
+function validateClient (clientId, redirectUri, responseType) {
   if (!clientId || !redirectUri) {
     return { client: null, error: 'Missing client_id or redirect_uri' }
   }
 
   const client = getClient(clientId)
+
+  // Implicit flow (response_type=token) allows unregistered clients
+  // remoteStorage clients pass their origin URL as client_id without pre-registration
+  if (!client && responseType === 'token') {
+    return { client: { name: clientId, redirect_uri: redirectUri }, error: null }
+  }
+
   if (!client) {
     return { client: null, error: 'Unknown client_id. Register via POST /api/v1/apps first.' }
   }
@@ -71,17 +78,17 @@ export function createAuthorizeHandler () {
   return async (request, reply) => {
     const { client_id, redirect_uri, response_type, scope, state } = request.query
 
-    if (response_type && response_type !== 'code') {
-      return reply.code(400).send({ error: 'unsupported_response_type', error_description: 'Only response_type=code is supported' })
+    if (response_type && response_type !== 'code' && response_type !== 'token') {
+      return reply.code(400).send({ error: 'unsupported_response_type', error_description: 'Supported: code, token' })
     }
 
-    const { client, error } = validateClient(client_id, redirect_uri)
+    const { client, error } = validateClient(client_id, redirect_uri, response_type)
     if (!client) {
       return reply.code(400).send({ error: 'invalid_client', error_description: error })
     }
 
     return reply.type('text/html').send(
-      loginPage({ clientId: client_id, redirectUri: redirect_uri, scope: scope || 'read', state, clientName: client.name })
+      loginPage({ clientId: client_id, redirectUri: redirect_uri, responseType: response_type || 'code', scope: scope || 'read', state, clientName: client.name })
     )
   }
 }
@@ -92,28 +99,47 @@ export function createAuthorizeHandler () {
 export function createAuthorizePostHandler () {
   return async (request, reply) => {
     const body = parseBody(request)
-    const { username, password, client_id, redirect_uri, scope, state } = body
+    const { username, password, client_id, redirect_uri, response_type, scope, state } = body
 
     // Validate client + redirect_uri (prevent open redirect via form tampering)
-    const { client, error: clientError } = validateClient(client_id, redirect_uri)
+    const { client, error: clientError } = validateClient(client_id, redirect_uri, response_type)
     if (!client) {
       return reply.code(400).send({ error: 'invalid_client', error_description: clientError })
     }
 
     if (!username || !password) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, state, clientName: client.name, error: 'Username and password are required' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, responseType: response_type || 'code', scope, state, clientName: client.name, error: 'Username and password are required' })
       )
     }
 
     const account = await authenticate(username, password)
     if (!account) {
       return reply.type('text/html').send(
-        loginPage({ clientId: client_id, redirectUri: redirect_uri, scope, state, clientName: client.name, error: 'Invalid username or password' })
+        loginPage({ clientId: client_id, redirectUri: redirect_uri, responseType: response_type || 'code', scope, state, clientName: client.name, error: 'Invalid username or password' })
       )
     }
 
-    // Generate one-time auth code (10 min TTL)
+    // Implicit grant (response_type=token) — return token directly in fragment (RFC 6749 §4.2.2)
+    // Used by remoteStorage clients
+    if (response_type === 'token') {
+      const accessToken = createToken(account.webId)
+
+      // Handle OOB — display token
+      if (redirect_uri === OOB_REDIRECT) {
+        return reply.type('text/html').send(oobPage(accessToken))
+      }
+
+      // Fragment-based redirect (token MUST be in fragment, not query — RFC 6749 §4.2.2)
+      const params = new URLSearchParams()
+      params.set('access_token', accessToken)
+      params.set('token_type', 'bearer')
+      params.set('scope', scope || 'read')
+      if (state) params.set('state', state)
+      return reply.redirect(`${redirect_uri}#${params.toString()}`)
+    }
+
+    // Authorization code grant (response_type=code) — generate one-time auth code (10 min TTL)
     const code = crypto.randomUUID()
     authCodes.set(code, {
       clientId: client_id,
@@ -196,7 +222,7 @@ export function createTokenHandler () {
 /**
  * Minimal login page HTML
  */
-function loginPage ({ clientId, redirectUri, scope, state, clientName, error }) {
+function loginPage ({ clientId, redirectUri, responseType, scope, state, clientName, error }) {
   const escapedError = error ? escapeHtml(error) : ''
   const escapedName = escapeHtml(clientName || clientId || 'Unknown app')
 
@@ -230,6 +256,7 @@ function loginPage ({ clientId, redirectUri, scope, state, clientName, error }) 
     <form method="POST" action="/oauth/authorize">
       <input type="hidden" name="client_id" value="${escapeHtml(clientId || '')}">
       <input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri || '')}">
+      <input type="hidden" name="response_type" value="${escapeHtml(responseType || 'code')}">
       <input type="hidden" name="scope" value="${escapeHtml(scope || 'read')}">
       ${state ? `<input type="hidden" name="state" value="${escapeHtml(state)}">` : ''}
       <label for="username">Username</label>
