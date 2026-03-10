@@ -165,10 +165,11 @@ export function createTokenHandler () {
       return reply.code(401).send({ error: 'invalid_client', error_description: 'Invalid client_secret' })
     }
 
-    // Look up and validate auth code
+    // Look up auth code and consume immediately (RFC 6749 §10.5 — one-time use)
     const authCode = authCodes.get(code)
+    authCodes.delete(code)
+
     if (!authCode || authCode.expiresAt < Date.now()) {
-      authCodes.delete(code)
       return reply.code(400).send({ error: 'invalid_grant', error_description: 'Code expired or invalid' })
     }
 
@@ -179,9 +180,6 @@ export function createTokenHandler () {
     if (authCode.redirectUri !== redirect_uri) {
       return reply.code(400).send({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' })
     }
-
-    // Consume code (one-time use)
-    authCodes.delete(code)
 
     // Generate Bearer token using existing token infrastructure
     const accessToken = createToken(authCode.webId)
@@ -203,7 +201,7 @@ function loginPage ({ clientId, redirectUri, scope, state, clientName, error }) 
   const escapedName = escapeHtml(clientName || clientId || 'Unknown app')
 
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -251,7 +249,7 @@ function loginPage ({ clientId, redirectUri, scope, state, clientName, error }) 
  */
 function oobPage (code) {
   return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">

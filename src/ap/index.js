@@ -192,7 +192,15 @@ export async function activityPubPlugin(fastify, options = {}) {
       }
     }
   }, createAuthorizePostHandler())
-  fastify.post('/oauth/token', createTokenHandler())
+  fastify.post('/oauth/token', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, createTokenHandler())
 }
 
 export default activityPubPlugin
