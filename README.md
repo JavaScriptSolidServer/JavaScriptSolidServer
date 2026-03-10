@@ -18,6 +18,9 @@ A minimal, fast, JSON-LD native Solid server.
 - **HTTP Range Requests** - Partial content delivery for large files and media streaming
 - **Single-User Mode** - Simplified setup for personal pod servers
 - **ActivityPub Federation** - Fediverse integration with WebFinger, inbox/outbox, HTTP signatures
+- **Mastodon-compatible API** - Dynamic client registration, instance info, account verification
+- **OAuth 2.0 Authorization** - Shared auth flow for Mastodon clients, remoteStorage apps, and third-party panes
+- **remoteStorage Protocol** - [draft-dejong-remotestorage-22](https://remotestorage.io/spec/) file sync (requires `--activitypub` for WebFinger discovery + OAuth)
 - **LDP CRUD Operations** - GET, PUT, POST, DELETE, HEAD
 - **N3 Patch** - Solid's native patch format for RDF updates
 - **SPARQL Update** - Standard SPARQL UPDATE protocol for PATCH
@@ -552,6 +555,106 @@ curl -H "Accept: application/activity+json" http://localhost:3000/profile/card
 
 # Check NodeInfo
 curl http://localhost:3000/.well-known/nodeinfo/2.1
+```
+
+## Mastodon-compatible API
+
+JSS exposes Mastodon API endpoints so that Mastodon clients (Elk, Phanpy, Ice Cubes) can connect:
+
+```bash
+jss start --activitypub --idp
+```
+
+### Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/v1/apps` | Dynamic client registration |
+| `GET /api/v1/accounts/verify_credentials` | Current user profile |
+| `GET /api/v1/instance` | Instance metadata |
+| `GET /oauth/authorize` | OAuth authorize page |
+| `POST /oauth/authorize` | Process login |
+| `POST /oauth/token` | Exchange code for Bearer token |
+
+### OAuth 2.0 Flow
+
+The OAuth layer is shared between Mastodon clients, remoteStorage apps, and third-party Solid panes:
+
+1. Client registers via `POST /api/v1/apps` (gets `client_id` + `client_secret`)
+2. Client redirects user to `GET /oauth/authorize?client_id=...&redirect_uri=...&response_type=code`
+3. User logs in, JSS redirects back with `?code=...`
+4. Client exchanges code for Bearer token via `POST /oauth/token`
+5. Bearer token works with all JSS endpoints (Solid, ActivityPub, remoteStorage)
+
+Supports out-of-band (OOB) redirect for CLI/desktop clients.
+
+### Testing
+
+```bash
+# Register a client
+curl -X POST http://localhost:3000/api/v1/apps \
+  -H "Content-Type: application/json" \
+  -d '{"client_name": "Test App", "redirect_uris": "urn:ietf:wg:oauth:2.0:oob"}'
+
+# Check instance info
+curl http://localhost:3000/api/v1/instance
+```
+
+## remoteStorage
+
+JSS implements the [remoteStorage protocol](https://remotestorage.io/spec/draft-dejong-remotestorage-22). The storage routes are always available, but WebFinger discovery and OAuth require `--activitypub` (which provides the WebFinger and OAuth endpoints). Any remoteStorage-compatible app can store and sync data on your pod.
+
+```bash
+jss start --activitypub --idp
+```
+
+### Discovery
+
+remoteStorage clients discover the storage endpoint via WebFinger:
+
+```bash
+curl "http://localhost:3000/.well-known/webfinger?resource=acct:me@localhost:3000"
+```
+
+The response includes a `remotestorage` link relation pointing to `/storage/me/`.
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/storage/:user/*` | Read file or list folder (JSON-LD) |
+| `HEAD` | `/storage/:user/*` | Get metadata (ETag, Content-Type, size) |
+| `PUT` | `/storage/:user/*` | Write file (creates parent folders) |
+| `DELETE` | `/storage/:user/*` | Delete file |
+
+### How It Works
+
+- **Auth**: Bearer token via OAuth 2.0 (same flow as Mastodon clients)
+- **Public folder**: `/storage/me/public/*` is readable without auth
+- **Conditional requests**: If-Match, If-None-Match (uses shared ETag utilities)
+- **Dotfile protection**: `.acl`, `.meta`, and other dotfiles are blocked
+- **Read-only mode**: Respects `--read-only` flag
+- **Streaming**: Large files are streamed, not buffered
+
+### Testing
+
+```bash
+# Write a file (needs Bearer token from OAuth flow)
+curl -X PUT http://localhost:3000/storage/me/documents/hello.txt \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: text/plain" \
+  -d "Hello, remoteStorage!"
+
+# Read it back
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:3000/storage/me/documents/hello.txt
+
+# List a folder
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  http://localhost:3000/storage/me/documents/
+
+# Read from public folder (no auth needed)
+curl http://localhost:3000/storage/me/public/readme.txt
 ```
 
 ### Linking Nostr to WebID (did:nostr)
@@ -1097,7 +1200,10 @@ src/
 │       ├── actor.js      # Actor JSON-LD
 │       ├── inbox.js      # Receive activities
 │       ├── outbox.js     # User's activities
-│       └── collections.js # Followers/following
+│       ├── collections.js # Followers/following
+│       ├── mastodon.js  # Mastodon API (apps, instance, verify_credentials)
+│       └── oauth.js     # OAuth 2.0 authorize/token flow
+├── remotestorage.js      # remoteStorage protocol (draft-dejong-remotestorage-22)
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
 │   └── conneg.js         # Content negotiation
