@@ -14,9 +14,6 @@ import { getContentType } from './utils/url.js'
 import { getWebIdFromRequestAsync } from './auth/token.js'
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from './utils/conditional.js'
 
-// Dotfiles that must never be exposed via remoteStorage
-const BLOCKED_NAMES = new Set(['.acl', '.meta', '.pods'])
-
 /**
  * remoteStorage Fastify plugin
  * @param {FastifyInstance} fastify
