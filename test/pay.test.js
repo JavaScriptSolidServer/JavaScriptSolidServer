@@ -205,6 +205,215 @@ describe('HTTP 402 Pay Middleware', () => {
     });
   });
 
+  describe('GET /pay/.info', () => {
+    it('should return info without auth', async () => {
+      const res = await fetch(`${getBaseUrl()}/pay/.info`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.strictEqual(body.cost, 10);
+      assert.strictEqual(body.unit, 'sat');
+      assert.strictEqual(body.deposit, '/pay/.deposit');
+      assert.strictEqual(body.balance, '/pay/.balance');
+    });
+
+    it('should not include token info when payToken not configured', async () => {
+      const res = await fetch(`${getBaseUrl()}/pay/.info`);
+      const body = await res.json();
+      assert.strictEqual(body.token, undefined);
+    });
+  });
+
+  describe('POST /pay/.buy', () => {
+    it('should return 401 without auth', async () => {
+      const url = `${getBaseUrl()}/pay/.buy`;
+      const res = await fetch(url, { method: 'POST', body: '{"amount":10}' });
+      assertStatus(res, 401);
+    });
+
+    it('should return 400 when payToken not configured', async () => {
+      const url = `${getBaseUrl()}/pay/.buy`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ amount: 10 })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('not configured'));
+    });
+  });
+
+  describe('POST /pay/.withdraw', () => {
+    it('should return 401 without auth', async () => {
+      const url = `${getBaseUrl()}/pay/.withdraw`;
+      const res = await fetch(url, { method: 'POST', body: '{"all":true}' });
+      assertStatus(res, 401);
+    });
+
+    it('should return 400 when payToken not configured', async () => {
+      const url = `${getBaseUrl()}/pay/.withdraw`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ all: true })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('not configured'));
+    });
+  });
+
+  describe('Pay with token configured', () => {
+    let tokenServer;
+    let tokenUrl;
+    const tokenPrivkey = crypto.randomBytes(32);
+    const tokenPubkey = Buffer.from(schnorr.getPublicKey(tokenPrivkey)).toString('hex');
+
+    function tokenNip98(url, method = 'GET') {
+      const event = {
+        pubkey: tokenPubkey,
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 27235,
+        tags: [['u', url], ['method', method]],
+        content: ''
+      };
+      const serialized = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+      event.id = crypto.createHash('sha256').update(serialized).digest('hex');
+      event.sig = Buffer.from(schnorr.sign(event.id, tokenPrivkey)).toString('hex');
+      return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`;
+    }
+
+    before(async () => {
+      const { createServer } = await import('../src/server.js');
+      tokenServer = createServer({
+        logger: false,
+        forceCloseConnections: true,
+        pay: true,
+        payCost: 5,
+        payAddress: 'test-addr',
+        payToken: 'TEST',
+        payRate: 10
+      });
+      await tokenServer.listen({ port: 0, host: '127.0.0.1' });
+      const addr = tokenServer.server.address();
+      tokenUrl = `http://127.0.0.1:${addr.port}`;
+    });
+
+    after(async () => {
+      if (tokenServer) await tokenServer.close();
+    });
+
+    it('GET /pay/.info should include token info', async () => {
+      const res = await fetch(`${tokenUrl}/pay/.info`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.strictEqual(body.cost, 5);
+      assert.strictEqual(body.token.ticker, 'TEST');
+      assert.strictEqual(body.token.rate, 10);
+      assert.strictEqual(body.token.buy, '/pay/.buy');
+      assert.strictEqual(body.token.withdraw, '/pay/.withdraw');
+    });
+
+    it('POST /pay/.buy should return 402 with zero balance', async () => {
+      const url = `${tokenUrl}/pay/.buy`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ amount: 10 })
+      });
+      assertStatus(res, 402);
+      const body = await res.json();
+      assert.strictEqual(body.error, 'Insufficient sat balance');
+      assert.strictEqual(body.balance, 0);
+      assert.strictEqual(body.cost, 100); // 10 tokens * rate 10
+      assert.strictEqual(body.rate, 10);
+    });
+
+    it('POST /pay/.buy should reject wrong ticker', async () => {
+      const url = `${tokenUrl}/pay/.buy`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ticker: 'WRONG', amount: 10 })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('only sells TEST'));
+    });
+
+    it('POST /pay/.buy should reject missing amount', async () => {
+      const url = `${tokenUrl}/pay/.buy`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Specify'));
+    });
+
+    it('POST /pay/.withdraw should return 400 with zero balance and all:true', async () => {
+      const url = `${tokenUrl}/pay/.withdraw`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ all: true })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Nothing to withdraw'));
+    });
+
+    it('POST /pay/.withdraw should return 402 when balance insufficient', async () => {
+      const url = `${tokenUrl}/pay/.withdraw`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ tokens: 1000 })
+      });
+      assertStatus(res, 402);
+      const body = await res.json();
+      assert.strictEqual(body.error, 'Insufficient balance');
+    });
+
+    it('POST /pay/.withdraw should reject missing params', async () => {
+      const url = `${tokenUrl}/pay/.withdraw`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Specify'));
+    });
+  });
+
   describe('Pay disabled', () => {
     let noPayServer;
     let noPayUrl;
