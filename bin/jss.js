@@ -85,6 +85,8 @@ program
   .option('--pay-cost <n>', 'Cost per request in satoshis (default: 1)', parseInt)
   .option('--pay-mempool-url <url>', 'Mempool API URL for deposit verification')
   .option('--pay-address <addr>', 'Address for receiving deposits')
+  .option('--pay-token <ticker>', 'Token to sell (enables primary market)')
+  .option('--pay-rate <n>', 'Sats per token for primary market (default: 1)', parseInt)
   .option('--mongo', 'Enable MongoDB-backed /db/ route')
   .option('--no-mongo', 'Disable MongoDB-backed /db/ route')
   .option('--mongo-url <url>', 'MongoDB connection URL (default: mongodb://localhost:27017)')
@@ -155,6 +157,8 @@ program
         payCost: config.payCost,
         payMempoolUrl: config.payMempoolUrl,
         payAddress: config.payAddress,
+        payToken: config.payToken,
+        payRate: config.payRate,
         mongo: config.mongo,
         mongoUrl: config.mongoUrl,
         mongoDatabase: config.mongoDatabase,
@@ -193,7 +197,10 @@ program
           }
           console.log('     Do not expose to the internet!');
         }
-        if (config.pay) console.log(`  Pay: ${config.payCost} sat/req (402 enabled)`);
+        if (config.pay) {
+          console.log(`  Pay: ${config.payCost} sat/req (402 enabled)`);
+          if (config.payToken) console.log(`  Token: ${config.payToken} @ ${config.payRate} sat/token`);
+        }
         if (config.mongo) console.log(`  MongoDB: ${config.mongoUrl} (${config.mongoDatabase})`);
         if (config.readOnly) console.log('  Read-only: enabled (PUT/DELETE/PATCH disabled)');
         console.log('\n  Press Ctrl+C to stop\n');

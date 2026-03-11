@@ -88,6 +88,8 @@ export const defaults = {
   payCost: 1,
   payMempoolUrl: 'https://mempool.space/testnet4',
   payAddress: null,
+  payToken: null,
+  payRate: 1,
 
   // MongoDB-backed /db/ route
   mongo: false,
@@ -148,6 +150,8 @@ const envMap = {
   JSS_PAY_COST: 'payCost',
   JSS_PAY_MEMPOOL_URL: 'payMempoolUrl',
   JSS_PAY_ADDRESS: 'payAddress',
+  JSS_PAY_TOKEN: 'payToken',
+  JSS_PAY_RATE: 'payRate',
   JSS_MONGO: 'mongo',
   JSS_MONGO_URL: 'mongoUrl',
   JSS_MONGO_DATABASE: 'mongoDatabase',
@@ -177,7 +181,7 @@ function parseEnvValue(value, key) {
   if (value.toLowerCase() === 'false') return false;
 
   // Numeric values for known numeric keys
-  if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost') && !isNaN(value)) {
+  if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost' || key === 'payRate') && !isNaN(value)) {
     return parseInt(value, 10);
   }
 
@@ -315,7 +319,10 @@ export function printConfig(config) {
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
   console.log(`  Mashlib:       ${config.mashlibModule ? `module (${config.mashlibModule})` : config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
   console.log(`  SolidOS UI:    ${config.solidosUi ? 'enabled' : 'disabled'}`);
-  if (config.pay) console.log(`  Pay:           ${config.payCost} sat/req`);
+  if (config.pay) {
+    console.log(`  Pay:           ${config.payCost} sat/req`);
+    if (config.payToken) console.log(`  Token:         ${config.payToken} @ ${config.payRate} sat/token`);
+  }
   if (config.mongo) console.log(`  MongoDB:       ${config.mongoUrl} (${config.mongoDatabase})`);
   console.log('─'.repeat(40));
 }
