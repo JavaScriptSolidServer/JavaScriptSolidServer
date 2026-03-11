@@ -305,8 +305,12 @@ export function createPayHandler(options = {}) {
 
       // Parse buy request
       let body = request.body;
-      if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
-      if (typeof body === 'string') body = JSON.parse(body);
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
 
       const ticker = body?.ticker || payToken;
       if (ticker !== payToken) {
@@ -403,8 +407,12 @@ export function createPayHandler(options = {}) {
 
       // Parse withdraw request
       let body = request.body;
-      if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
-      if (typeof body === 'string') body = JSON.parse(body);
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
