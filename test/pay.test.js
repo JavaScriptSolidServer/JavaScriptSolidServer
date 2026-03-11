@@ -353,6 +353,19 @@ describe('HTTP 402 Pay Middleware', () => {
       assert.ok(body.error.includes('only sells TEST'));
     });
 
+    it('POST /pay/.buy should reject malformed JSON', async () => {
+      const url = `${tokenUrl}/pay/.buy`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: '{not valid json'
+      });
+      assertStatus(res, 400);
+    });
+
     it('POST /pay/.buy should reject missing amount', async () => {
       const url = `${tokenUrl}/pay/.buy`;
       const res = await fetch(url, {
@@ -396,6 +409,19 @@ describe('HTTP 402 Pay Middleware', () => {
       assertStatus(res, 402);
       const body = await res.json();
       assert.strictEqual(body.error, 'Insufficient balance');
+    });
+
+    it('POST /pay/.withdraw should reject malformed JSON', async () => {
+      const url = `${tokenUrl}/pay/.withdraw`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: '{bad json'
+      });
+      assertStatus(res, 400);
     });
 
     it('POST /pay/.withdraw should reject missing params', async () => {
