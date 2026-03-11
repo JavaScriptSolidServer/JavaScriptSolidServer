@@ -24,7 +24,7 @@ export async function startTestServer(options = {}) {
   // Clean up any existing test data
   await fs.emptyDir(TEST_DATA_DIR);
 
-  server = createServer({ logger: false, ...options });
+  server = createServer({ logger: false, forceCloseConnections: true, ...options });
   // Use port 0 to let OS assign available port
   await server.listen({ port: 0, host: '127.0.0.1' });
 
@@ -39,7 +39,6 @@ export async function startTestServer(options = {}) {
  */
 export async function stopTestServer() {
   if (server) {
-    // Force close all connections to avoid hanging
     await server.close();
     server = null;
   }
