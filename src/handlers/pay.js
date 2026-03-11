@@ -5,6 +5,7 @@
  * Authentication via NIP-98. Balance tracking via Web Ledgers spec.
  *
  * Routes:
+ *   GET  /pay/.info      — public endpoint: cost, token info, available routes
  *   GET  /pay/.balance   — check your balance
  *   POST /pay/.deposit   — deposit sats (TXO URI) or tokens (MRC20 state proof)
  *   POST /pay/.buy       — buy tokens with sat balance (primary market)
@@ -156,6 +157,30 @@ export function createPayHandler(options = {}) {
   return async function payHandler(request, reply) {
     const url = request.url.split('?')[0];
     if (!isPayRequest(request.url)) return;
+
+    // --- GET /pay/.info — public, no auth ---
+    if (url === '/pay/.info' && request.method === 'GET') {
+      const info = {
+        cost,
+        unit: 'sat',
+        deposit: '/pay/.deposit',
+        balance: '/pay/.balance'
+      };
+      if (payToken) {
+        const trail = await loadTrail(payToken);
+        info.token = {
+          ticker: payToken,
+          rate: payRate,
+          buy: '/pay/.buy',
+          withdraw: '/pay/.withdraw'
+        };
+        if (trail) {
+          info.token.supply = trail.latestState?.supply ?? null;
+          info.token.issuer = trail.pubkeyBase ?? null;
+        }
+      }
+      return reply.send(info);
+    }
 
     // --- GET /pay/.balance ---
     if (url === '/pay/.balance' && request.method === 'GET') {
