@@ -19,46 +19,9 @@
  */
 
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
-import * as storage from '../storage/filesystem.js';
+import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
 
-const LEDGER_PATH = '/.well-known/webledgers/webledgers.json';
 const DEFAULT_COST = 1; // satoshis per request
-
-// --- Webledger helpers (webledgers.org spec) ---
-
-async function readLedger() {
-  const buf = await storage.read(LEDGER_PATH);
-  if (!buf) {
-    return {
-      name: 'Pod Credits',
-      description: 'Paid API balance ledger',
-      entries: []
-    };
-  }
-  try {
-    return JSON.parse(buf.toString('utf8'));
-  } catch {
-    return { name: 'Pod Credits', description: 'Paid API balance ledger', entries: [] };
-  }
-}
-
-async function writeLedger(ledger) {
-  return storage.write(LEDGER_PATH, JSON.stringify(ledger, null, 2));
-}
-
-function getBalance(ledger, didUri) {
-  const entry = ledger.entries.find(e => e.url === didUri);
-  return entry ? parseInt(entry.amount, 10) || 0 : 0;
-}
-
-function setBalance(ledger, didUri, amount) {
-  const entry = ledger.entries.find(e => e.url === didUri);
-  if (entry) {
-    entry.amount = String(amount);
-  } else {
-    ledger.entries.push({ type: 'Entry', url: didUri, amount: String(amount) });
-  }
-}
 
 // --- Deposit verification via mempool API ---
 
@@ -149,14 +112,13 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const prev = getBalance(ledger, didUri);
-      setBalance(ledger, didUri, prev + result.amount);
+      const newBalance = credit(ledger, didUri, result.amount);
       await writeLedger(ledger);
 
       return reply.send({
         did: didUri,
         deposited: result.amount,
-        balance: prev + result.amount,
+        balance: newBalance,
         unit: 'sat'
       });
     }
@@ -173,9 +135,9 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const balance = getBalance(ledger, didUri);
+      const { success, balance } = debit(ledger, didUri, cost);
 
-      if (balance < cost) {
+      if (!success) {
         return reply.code(402).send({
           error: 'Payment Required',
           balance,
@@ -185,10 +147,8 @@ export function createPayHandler(options = {}) {
         });
       }
 
-      // Decrement balance and let request continue to resource handler
-      setBalance(ledger, didUri, balance - cost);
       await writeLedger(ledger);
-      reply.header('X-Balance', String(balance - cost));
+      reply.header('X-Balance', String(balance));
       reply.header('X-Cost', String(cost));
       return; // continue to normal resource handler
     }
