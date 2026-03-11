@@ -14,6 +14,7 @@ import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
+import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
@@ -42,6 +43,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {string} options.apSummary - ActivityPub bio/summary
  * @param {string} options.apNostrPubkey - Nostr pubkey for identity linking
  * @param {boolean} options.webidTls - Enable WebID-TLS client certificate auth (default false)
+ * @param {boolean} options.pay - Enable HTTP 402 paid /pay/* routes (default false)
+ * @param {number} options.payCost - Cost per request in satoshis (default 1)
+ * @param {string} options.payMempoolUrl - Mempool API base URL (default testnet4)
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -90,6 +94,10 @@ export function createServer(options = {}) {
   const mongoEnabled = options.mongo ?? false;
   const mongoUrl = options.mongoUrl ?? 'mongodb://localhost:27017';
   const mongoDatabase = options.mongoDatabase ?? 'solid';
+  // HTTP 402 paid /pay/ routes are OFF by default
+  const payEnabled = options.pay ?? false;
+  const payCost = options.payCost ?? 1;
+  const payMempoolUrl = options.payMempoolUrl ?? 'https://mempool.space/testnet4';
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -313,6 +321,11 @@ export function createServer(options = {}) {
       return;
     }
 
+    // Allow pay routes through when pay is enabled (.balance, .deposit)
+    if (payEnabled && isPayRequest(request.url)) {
+      return;
+    }
+
     const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
@@ -357,6 +370,11 @@ export function createServer(options = {}) {
     });
   }
 
+  // HTTP 402 Payment Required handler for /pay/* routes
+  if (payEnabled) {
+    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl }));
+  }
+
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
@@ -380,6 +398,7 @@ export function createServer(options = {}) {
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
         isProfileAP ||
         request.url.startsWith('/storage/') ||
+        (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
