@@ -438,6 +438,112 @@ describe('HTTP 402 Pay Middleware', () => {
       const body = await res.json();
       assert.ok(body.error.includes('Specify'));
     });
+
+    it('POST /pay/.sell should reject missing amount/price', async () => {
+      const url = `${tokenUrl}/pay/.sell`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Specify'));
+    });
+
+    it('POST /pay/.swap should reject missing offer id', async () => {
+      const url = `${tokenUrl}/pay/.swap`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Specify offer id'));
+    });
+
+    it('POST /pay/.swap should return 404 for unknown offer', async () => {
+      const url = `${tokenUrl}/pay/.swap`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': tokenNip98(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ id: 'nonexistent' })
+      });
+      assertStatus(res, 404);
+    });
+
+    it('GET /pay/.offers should return empty list', async () => {
+      const res = await fetch(`${tokenUrl}/pay/.offers`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.ok(Array.isArray(body));
+    });
+  });
+
+  describe('GET /pay/.offers', () => {
+    it('should return empty list without auth', async () => {
+      const res = await fetch(`${getBaseUrl()}/pay/.offers`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.ok(Array.isArray(body));
+      assert.strictEqual(body.length, 0);
+    });
+  });
+
+  describe('POST /pay/.sell', () => {
+    it('should return 401 without auth', async () => {
+      const url = `${getBaseUrl()}/pay/.sell`;
+      const res = await fetch(url, { method: 'POST', body: '{}' });
+      assertStatus(res, 401);
+    });
+
+    it('should return 400 when payToken not configured', async () => {
+      const url = `${getBaseUrl()}/pay/.sell`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ amount: 10, price: 100 })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('not configured'));
+    });
+  });
+
+  describe('POST /pay/.swap', () => {
+    it('should return 401 without auth', async () => {
+      const url = `${getBaseUrl()}/pay/.swap`;
+      const res = await fetch(url, { method: 'POST', body: '{}' });
+      assertStatus(res, 401);
+    });
+
+    it('should return 400 when payToken not configured', async () => {
+      const url = `${getBaseUrl()}/pay/.swap`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ id: 'test-id' })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('not configured'));
+    });
   });
 
   describe('Pay disabled', () => {

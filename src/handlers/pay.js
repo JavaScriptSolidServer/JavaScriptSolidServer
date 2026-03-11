@@ -10,6 +10,9 @@
  *   POST /pay/.deposit   — deposit sats (TXO URI) or tokens (MRC20 state proof)
  *   POST /pay/.buy       — buy tokens with sat balance (primary market)
  *   POST /pay/.withdraw  — withdraw balance as tokens (portable MRC20 proof)
+ *   GET  /pay/.offers    — list open sell orders (secondary market)
+ *   POST /pay/.sell      — create a sell order (NIP-69 kind 38383)
+ *   POST /pay/.swap      — execute a swap against a sell order
  *   GET  /pay/*          — paid resource access (requires balance >= cost)
  *   PUT  /pay/*          — upload resources (standard auth)
  *
@@ -22,6 +25,7 @@
  *   - MRC20 profile: https://blocktrails.org/
  */
 
+import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
 import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex } from '../mrc20.js';
@@ -52,6 +56,21 @@ async function checkAndRecordState(stateHash) {
   seen.add(stateHash);
   await saveReplaySet(seen);
   return true;
+}
+
+// --- Offers storage (secondary market) ---
+const offersFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/offers.json');
+
+async function loadOffers() {
+  try {
+    const data = await fs.readFile(offersFile(), 'utf8');
+    return JSON.parse(data);
+  } catch { return []; }
+}
+
+async function saveOffers(offers) {
+  await fs.ensureDir(path.dirname(offersFile()));
+  await fs.writeFile(offersFile(), JSON.stringify(offers, null, 2));
 }
 
 // --- Deposit verification via mempool API ---
@@ -481,6 +500,166 @@ export function createPayHandler(options = {}) {
         rate: payRate,
         balance: getBalance(ledger, didUri),
         unit: 'sat',
+        txid: result.txid,
+        proof: {
+          state: result.state,
+          prevState: result.prevState,
+          anchor: {
+            pubkey: result.trail.pubkeyBase,
+            stateStrings: result.trail.stateStrings,
+            network: result.trail.network
+          }
+        }
+      });
+    }
+
+    // --- GET /pay/.offers — list open sell orders ---
+    if (url === '/pay/.offers' && request.method === 'GET') {
+      const offers = await loadOffers();
+      return reply.send(offers.filter(o => o.status === 'pending'));
+    }
+
+    // --- POST /pay/.sell — create a sell order ---
+    if (url === '/pay/.sell' && request.method === 'POST') {
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      if (!payToken) {
+        return reply.code(400).send({ error: 'Secondary market not configured (no --pay-token set)' });
+      }
+
+      let body = request.body;
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
+
+      const amount = Math.floor(body?.amount || 0);
+      const price = Math.floor(body?.price || 0); // total sats for the lot
+      if (amount <= 0 || price <= 0) {
+        return reply.code(400).send({ error: 'Specify amount (tokens) and price (total sats)' });
+      }
+
+      // Verify seller has tokens on the trail
+      const trail = await loadTrail(payToken);
+      if (!trail) {
+        return reply.code(500).send({ error: `Token ${payToken} not minted on this pod` });
+      }
+      const currentState = trail.states[trail.states.length - 1];
+      const sellerBalance = currentState.balances[pubkey] || 0;
+      if (sellerBalance < amount) {
+        return reply.code(400).send({
+          error: 'Insufficient token balance on trail',
+          balance: sellerBalance,
+          amount
+        });
+      }
+
+      const offer = {
+        id: crypto.randomUUID(),
+        seller: pubkey,
+        ticker: payToken,
+        amount,
+        price,
+        rate: Math.round(price / amount * 100) / 100,
+        status: 'pending',
+        created: Date.now()
+      };
+
+      const offers = await loadOffers();
+      offers.push(offer);
+      await saveOffers(offers);
+
+      return reply.send(offer);
+    }
+
+    // --- POST /pay/.swap — execute a swap against a sell order ---
+    if (url === '/pay/.swap' && request.method === 'POST') {
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      if (!payToken) {
+        return reply.code(400).send({ error: 'Secondary market not configured (no --pay-token set)' });
+      }
+
+      let body = request.body;
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
+
+      const offerId = body?.id;
+      if (!offerId) {
+        return reply.code(400).send({ error: 'Specify offer id' });
+      }
+
+      // Find the offer
+      const offers = await loadOffers();
+      const offer = offers.find(o => o.id === offerId && o.status === 'pending');
+      if (!offer) {
+        return reply.code(404).send({ error: 'Offer not found or already filled' });
+      }
+
+      // Can't buy your own offer
+      if (offer.seller === pubkey) {
+        return reply.code(400).send({ error: 'Cannot swap with your own offer' });
+      }
+
+      // Check buyer's sat balance
+      const didUri = pubkeyToDidNostr(pubkey);
+      const sellerDid = pubkeyToDidNostr(offer.seller);
+      const ledger = await readLedger();
+      const balance = getBalance(ledger, didUri);
+      if (balance < offer.price) {
+        return reply.code(402).send({
+          error: 'Insufficient sat balance',
+          balance,
+          cost: offer.price,
+          deposit: '/pay/.deposit'
+        });
+      }
+
+      // Transfer tokens from seller to buyer on the trail
+      let result;
+      try {
+        result = await transferToken({
+          ticker: payToken,
+          from: offer.seller,
+          to: pubkey,
+          amount: offer.amount,
+          mempoolUrl
+        });
+      } catch (err) {
+        return reply.code(500).send({ error: `Transfer failed: ${err.message}` });
+      }
+
+      // Debit buyer, credit seller
+      debit(ledger, didUri, offer.price);
+      credit(ledger, sellerDid, offer.price);
+      await writeLedger(ledger);
+
+      // Mark offer as filled
+      offer.status = 'filled';
+      offer.buyer = pubkey;
+      offer.filledAt = Date.now();
+      offer.txid = result.txid;
+      await saveOffers(offers);
+
+      return reply.send({
+        swapped: offer.amount,
+        ticker: payToken,
+        cost: offer.price,
+        rate: offer.rate,
+        balance: getBalance(ledger, didUri),
+        sellerCredited: offer.price,
         txid: result.txid,
         proof: {
           state: result.state,

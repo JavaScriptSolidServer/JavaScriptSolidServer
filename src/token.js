@@ -306,7 +306,7 @@ export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'h
 }
 
 // --- Transfer: send tokens to an address ---
-export async function transferToken({ ticker, to, amount, mempoolUrl = 'https://mempool.space/testnet4' }) {
+export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'https://mempool.space/testnet4' }) {
   const trail = await loadTrail(ticker);
   if (!trail) throw new Error(`Token ${ticker} not found`);
 
@@ -317,15 +317,15 @@ export async function transferToken({ ticker, to, amount, mempoolUrl = 'https://
   const currentState = trail.states[trail.states.length - 1];
   const currentBalances = { ...currentState.balances };
 
-  // Check issuer balance
-  const issuerAddr = trail.pubkeyBase;
-  const issuerBalance = currentBalances[issuerAddr] || 0;
-  if (issuerBalance < amount) {
-    throw new Error(`Insufficient balance: ${issuerBalance} < ${amount}`);
+  // Check sender balance (default: issuer)
+  const senderAddr = from || trail.pubkeyBase;
+  const senderBalance = currentBalances[senderAddr] || 0;
+  if (senderBalance < amount) {
+    throw new Error(`Insufficient balance: ${senderBalance} < ${amount}`);
   }
 
   // Create transfer state
-  currentBalances[issuerAddr] = issuerBalance - amount;
+  currentBalances[senderAddr] = senderBalance - amount;
   currentBalances[to] = (currentBalances[to] || 0) + amount;
   // Remove zero balances
   for (const [k, v] of Object.entries(currentBalances)) {
@@ -342,7 +342,7 @@ export async function transferToken({ ticker, to, amount, mempoolUrl = 'https://
     decimals: 0,
     supply: trail.supply,
     balances: currentBalances,
-    ops: [{ op: 'urn:mono:op:transfer', from: issuerAddr, to, amt: amount }]
+    ops: [{ op: 'urn:mono:op:transfer', from: senderAddr, to, amt: amount }]
   };
   const newJcs = jcs(newState);
 
