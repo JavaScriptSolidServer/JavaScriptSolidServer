@@ -478,6 +478,128 @@ quotaCmd
   });
 
 /**
+ * Token command - manage MRC20 tokens
+ */
+const tokenCmd = program
+  .command('token')
+  .description('Manage MRC20 tokens anchored to Bitcoin');
+
+tokenCmd
+  .command('mint')
+  .description('Create a new MRC20 token')
+  .requiredOption('-t, --ticker <ticker>', 'Token ticker symbol')
+  .requiredOption('-s, --supply <n>', 'Total supply', parseInt)
+  .requiredOption('-v, --voucher <txo>', 'Funded TXO URI (txo:btc:txid:vout?amount=N&key=hex)')
+  .option('-n, --name <name>', 'Token name (defaults to ticker)')
+  .option('-r, --root <path>', 'Data directory')
+  .option('--mempool-url <url>', 'Mempool API URL', 'https://mempool.space/testnet4')
+  .option('--network <net>', 'Bitcoin network (testnet4 or mainnet)', 'testnet4')
+  .action(async (options) => {
+    try {
+      if (options.root) process.env.DATA_ROOT = path.resolve(options.root);
+      const { mintToken } = await import('../src/token.js');
+      console.log(`\nMinting ${options.supply} ${options.ticker}...`);
+      const result = await mintToken({
+        ticker: options.ticker,
+        name: options.name,
+        supply: options.supply,
+        voucher: options.voucher,
+        mempoolUrl: options.mempoolUrl,
+        network: options.network
+      });
+      console.log(`\nToken minted!`);
+      console.log(`  Ticker:  ${options.ticker}`);
+      console.log(`  Supply:  ${options.supply}`);
+      console.log(`  Issuer:  ${result.trail.pubkeyBase}`);
+      console.log(`  TX:      ${result.txid}`);
+      console.log(`  Address: ${result.address}`);
+      console.log('');
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+tokenCmd
+  .command('transfer')
+  .description('Transfer tokens to an address')
+  .requiredOption('-t, --ticker <ticker>', 'Token ticker symbol')
+  .requiredOption('--to <address>', 'Recipient address (pubkey hex)')
+  .requiredOption('-a, --amount <n>', 'Amount to transfer', parseInt)
+  .option('-r, --root <path>', 'Data directory')
+  .option('--mempool-url <url>', 'Mempool API URL', 'https://mempool.space/testnet4')
+  .action(async (options) => {
+    try {
+      if (options.root) process.env.DATA_ROOT = path.resolve(options.root);
+      const { transferToken } = await import('../src/token.js');
+      console.log(`\nTransferring ${options.amount} ${options.ticker} to ${options.to.slice(0, 16)}...`);
+      const result = await transferToken({
+        ticker: options.ticker,
+        to: options.to,
+        amount: options.amount,
+        mempoolUrl: options.mempoolUrl
+      });
+      console.log(`\nTransfer complete!`);
+      console.log(`  TX:      ${result.txid}`);
+      console.log(`  Address: ${result.address}`);
+      console.log(`  Balance: ${JSON.stringify(result.trail.states[result.trail.states.length - 1].balances)}`);
+      console.log('');
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+tokenCmd
+  .command('info [ticker]')
+  .description('Show token info (or list all tokens)')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (ticker, options) => {
+    try {
+      if (options.root) process.env.DATA_ROOT = path.resolve(options.root);
+      const { tokenInfo, listTrails } = await import('../src/token.js');
+
+      if (!ticker) {
+        // List all tokens
+        const trails = await listTrails();
+        if (trails.length === 0) {
+          console.log('\nNo tokens found.\n');
+          return;
+        }
+        console.log('\n  TICKER   SUPPLY   SEQ   SATS       CREATED');
+        console.log('  ' + '-'.repeat(55));
+        for (const t of trails) {
+          const state = t.states[t.states.length - 1];
+          console.log(`  ${t.ticker.padEnd(8)} ${String(t.supply).padEnd(8)} ${String(state.seq).padEnd(5)} ${String(t.currentAmount).padEnd(10)} ${t.dateCreated.split('T')[0]}`);
+        }
+        console.log('');
+        return;
+      }
+
+      const info = await tokenInfo(ticker);
+      console.log(`\n  ${info.ticker} — ${info.name}`);
+      console.log('  ' + '-'.repeat(40));
+      console.log(`  Supply:    ${info.supply}`);
+      console.log(`  Seq:       ${info.seq}`);
+      console.log(`  Issuer:    ${info.pubkeyBase}`);
+      console.log(`  Network:   ${info.network}`);
+      console.log(`  TX:        ${info.currentTxid}`);
+      console.log(`  Address:   ${info.currentAddress}`);
+      console.log(`  UTXO sats: ${info.currentAmount}`);
+      console.log(`  Created:   ${info.dateCreated}`);
+      console.log('  Balances:');
+      for (const [addr, bal] of Object.entries(info.balances)) {
+        const label = addr === info.pubkeyBase ? `${addr.slice(0, 16)}... (issuer)` : `${addr.slice(0, 16)}...`;
+        console.log(`    ${label}: ${bal}`);
+      }
+      console.log('');
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
  * Helper: Prompt for input
  */
 async function prompt(question, defaultValue) {
