@@ -1162,7 +1162,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **279 tests** (including 27 conformance tests)
+Currently passing: **289 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
