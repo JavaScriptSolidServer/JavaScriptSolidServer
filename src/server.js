@@ -100,6 +100,8 @@ export function createServer(options = {}) {
   const payCost = options.payCost ?? 1;
   const payMempoolUrl = options.payMempoolUrl ?? 'https://mempool.space/testnet4';
   const payAddress = options.payAddress ?? null; // Pod's MRC20 address for token deposits
+  const payToken = options.payToken ?? null; // Token ticker for primary market
+  const payRate = options.payRate ?? 1; // Sats per token
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -374,7 +376,7 @@ export function createServer(options = {}) {
 
   // HTTP 402 Payment Required handler for /pay/* routes
   if (payEnabled) {
-    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress }));
+    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress, payToken, payRate }));
   }
 
   // Authorization hook - check WAC permissions

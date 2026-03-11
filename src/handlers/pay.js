@@ -21,7 +21,8 @@
 
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
-import { verifyMrc20Deposit, verifyMrc20Anchor, jcs } from '../mrc20.js';
+import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex } from '../mrc20.js';
+import { loadTrail, transferToken } from '../token.js';
 import fs from 'fs-extra';
 import path from 'path';
 
@@ -147,6 +148,8 @@ export function createPayHandler(options = {}) {
   const cost = options.cost ?? DEFAULT_COST;
   const mempoolUrl = options.mempoolUrl ?? 'https://mempool.space/testnet4';
   const payAddress = options.payAddress ?? null;
+  const payToken = options.payToken ?? null;
+  const payRate = options.payRate ?? 1;
 
   return async function payHandler(request, reply) {
     const url = request.url.split('?')[0];
@@ -258,6 +261,104 @@ export function createPayHandler(options = {}) {
         formats: {
           sats: 'POST body: "<txid>:<vout>" or {"txo": "<txid>:<vout>"}',
           mrc20: 'POST body: {"type": "mrc20", "state": {...}, "prevState": {...}}'
+        }
+      });
+    }
+
+    // --- POST /pay/.buy — primary market: buy tokens with sats ---
+    if (url === '/pay/.buy' && request.method === 'POST') {
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      if (!payToken) {
+        return reply.code(400).send({ error: 'Primary market not configured (no --pay-token set)' });
+      }
+
+      // Parse buy request
+      let body = request.body;
+      if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+      if (typeof body === 'string') body = JSON.parse(body);
+
+      const ticker = body?.ticker || payToken;
+      if (ticker !== payToken) {
+        return reply.code(400).send({ error: `This pod only sells ${payToken}` });
+      }
+
+      // Calculate amount and cost
+      let tokenAmount, satCost;
+      if (body?.amount) {
+        tokenAmount = Math.floor(body.amount);
+        satCost = tokenAmount * payRate;
+      } else if (body?.sats) {
+        satCost = Math.floor(body.sats);
+        tokenAmount = Math.floor(satCost / payRate);
+      } else {
+        return reply.code(400).send({
+          error: 'Specify amount (tokens to buy) or sats (sats to spend)',
+          rate: payRate,
+          unit: 'sat/token'
+        });
+      }
+
+      if (tokenAmount <= 0) {
+        return reply.code(400).send({ error: 'Amount must be positive' });
+      }
+
+      // Check sat balance
+      const didUri = pubkeyToDidNostr(pubkey);
+      const ledger = await readLedger();
+      const balance = getBalance(ledger, didUri);
+      if (balance < satCost) {
+        return reply.code(402).send({
+          error: 'Insufficient sat balance',
+          balance,
+          cost: satCost,
+          rate: payRate,
+          deposit: '/pay/.deposit'
+        });
+      }
+
+      // Load token trail
+      const trail = await loadTrail(ticker);
+      if (!trail) {
+        return reply.code(500).send({ error: `Token ${ticker} not minted on this pod` });
+      }
+
+      // Transfer tokens to buyer
+      let result;
+      try {
+        result = await transferToken({
+          ticker,
+          to: pubkey,
+          amount: tokenAmount,
+          mempoolUrl
+        });
+      } catch (err) {
+        return reply.code(500).send({ error: `Transfer failed: ${err.message}` });
+      }
+
+      // Debit sats from buyer
+      debit(ledger, didUri, satCost);
+      await writeLedger(ledger);
+
+      return reply.send({
+        bought: tokenAmount,
+        ticker,
+        cost: satCost,
+        rate: payRate,
+        balance: getBalance(ledger, didUri),
+        unit: 'sat',
+        txid: result.txid,
+        proof: {
+          state: result.state,
+          prevState: result.prevState,
+          anchor: {
+            pubkey: result.trail.pubkeyBase,
+            stateStrings: result.trail.stateStrings,
+            network: result.trail.network
+          }
         }
       });
     }
