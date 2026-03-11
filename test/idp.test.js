@@ -13,8 +13,9 @@ import { createServer as createNetServer } from 'net';
 
 /** Get an available port by briefly binding to port 0 */
 async function getAvailablePort() {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const srv = createNetServer();
+    srv.on('error', (err) => reject(err));
     srv.listen(0, TEST_HOST, () => {
       const port = srv.address().port;
       srv.close(() => resolve(port));
