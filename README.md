@@ -156,6 +156,8 @@ jss --help             # Show help
 | `--pay-cost <n>` | Cost per request in satoshis | 1 |
 | `--pay-mempool-url <url>` | Mempool API URL for deposit verification | (testnet4) |
 | `--pay-address <addr>` | Address for receiving deposits | - |
+| `--pay-token <ticker>` | Token to sell (enables primary market + withdrawal) | - |
+| `--pay-rate <n>` | Sats per token for buy/withdraw | 1 |
 | `--mongo` | Enable MongoDB-backed /db/ route | false |
 | `--mongo-url <url>` | MongoDB connection URL | mongodb://localhost:27017 |
 | `--mongo-database <name>` | MongoDB database name | solid |
@@ -187,6 +189,8 @@ export JSS_SOLIDOS_UI=true
 export JSS_PAY=true
 export JSS_PAY_COST=10
 export JSS_PAY_ADDRESS=your-address
+export JSS_PAY_TOKEN=PODS
+export JSS_PAY_RATE=10
 export JSS_MONGO=true
 export JSS_MONGO_URL=mongodb://localhost:27017
 export JSS_MONGO_DATABASE=solid
@@ -823,7 +827,7 @@ Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
 Monetize API endpoints with per-request satoshi payments. Resources under `/pay/*` require NIP-98 authentication and a positive balance.
 
 ```bash
-jss start --pay --pay-cost 10 --pay-address your-address
+jss start --pay --pay-cost 10 --pay-address your-address --pay-token PODS --pay-rate 10
 ```
 
 ### Routes
@@ -831,7 +835,9 @@ jss start --pay --pay-cost 10 --pay-address your-address
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/pay/.balance` | Check your balance (NIP-98 auth) |
-| POST | `/pay/.deposit` | Deposit sats via TXO URI (`txid:vout`) |
+| POST | `/pay/.deposit` | Deposit sats via TXO URI or MRC20 state proof |
+| POST | `/pay/.buy` | Buy tokens with sat balance (requires `--pay-token`) |
+| POST | `/pay/.withdraw` | Withdraw balance as portable tokens (requires `--pay-token`) |
 | GET | `/pay/*` | Paid resource access (deducts balance) |
 
 ### How It Works
@@ -840,7 +846,8 @@ jss start --pay --pay-cost 10 --pay-address your-address
 2. Check balance at `/pay/.balance`
 3. Deposit sats by POSTing a TXO URI to `/pay/.deposit`
 4. Access paid resources — each request deducts the configured cost
-5. Balance tracked in a [Web Ledger](https://webledgers.org/) at `/.well-known/webledgers/webledgers.json`
+5. Optionally buy tokens (`/pay/.buy`) or withdraw as portable tokens (`/pay/.withdraw`)
+6. Balance tracked in a [Web Ledger](https://webledgers.org/) at `/.well-known/webledgers/webledgers.json`
 
 ### Example
 
@@ -855,9 +862,21 @@ curl -X POST -H "Authorization: Nostr <base64-event>" \
 
 # Access paid resource
 curl -H "Authorization: Nostr <base64-event>" http://localhost:3000/pay/my-resource
+
+# Buy tokens with sat balance
+curl -X POST -H "Authorization: Nostr <base64-event>" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/pay/.buy \
+  -d '{"amount": 100}'
+
+# Withdraw entire balance as portable tokens
+curl -X POST -H "Authorization: Nostr <base64-event>" \
+  -H "Content-Type: application/json" \
+  http://localhost:3000/pay/.withdraw \
+  -d '{"all": true}'
 ```
 
-Deposit verification uses the mempool API (default: testnet4). The `X-Balance` and `X-Cost` headers are returned on successful paid requests.
+Deposit verification uses the mempool API (default: testnet4). The `X-Balance` and `X-Cost` headers are returned on successful paid requests. Buy and withdraw return portable MRC20 proofs with Bitcoin anchor data for independent verification.
 
 ## Authentication
 
