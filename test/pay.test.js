@@ -12,6 +12,7 @@ import {
   getBaseUrl,
   assertStatus
 } from './helpers.js';
+import { jcs, sha256Hex } from '../src/mrc20.js';
 
 // Generate a test keypair for NIP-98 auth
 const privkey = crypto.randomBytes(32);
@@ -45,8 +46,10 @@ function createNip98Header(url, method = 'GET') {
 }
 
 describe('HTTP 402 Pay Middleware', () => {
+  const POD_ADDRESS = 'test-pod-address';
+
   before(async () => {
-    await startTestServer({ pay: true, payCost: 10 });
+    await startTestServer({ pay: true, payCost: 10, payAddress: POD_ADDRESS });
   });
 
   after(async () => {
@@ -119,6 +122,86 @@ describe('HTTP 402 Pay Middleware', () => {
       assertStatus(res, 400);
       const body = await res.json();
       assert.ok(body.error.includes('Invalid TXO URI'));
+    });
+  });
+
+  describe('POST /pay/.deposit (MRC20)', () => {
+    function makeStatePair(toAddress, amt = 100) {
+      const prevState = {
+        profile: 'mono.mrc20.v0.1',
+        prev: '0'.repeat(64),
+        seq: 0,
+        ticker: 'TEST',
+        name: 'Test Token',
+        decimals: 0,
+        supply: 1000,
+        balances: { creator: 1000 },
+        ops: []
+      };
+      const state = {
+        profile: 'mono.mrc20.v0.1',
+        prev: sha256Hex(jcs(prevState)),
+        seq: 1,
+        ticker: 'TEST',
+        name: 'Test Token',
+        decimals: 0,
+        supply: 1000,
+        balances: { creator: 1000 - amt, [toAddress]: amt },
+        ops: [{ op: 'urn:mono:op:transfer', from: 'creator', to: toAddress, amt }]
+      };
+      return { prevState, state };
+    }
+
+    it('should accept valid MRC20 deposit', async () => {
+      const { prevState, state } = makeStatePair(POD_ADDRESS, 500);
+      const url = `${getBaseUrl()}/pay/.deposit`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type: 'mrc20', state, prevState })
+      });
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.strictEqual(body.deposited, 500);
+      assert.strictEqual(body.ticker, 'TEST');
+      assert.strictEqual(body.unit, 'token');
+      assert.ok(body.balance >= 500);
+    });
+
+    it('should reject MRC20 deposit with broken chain', async () => {
+      const { prevState, state } = makeStatePair(POD_ADDRESS);
+      state.prev = 'tampered';
+      const url = `${getBaseUrl()}/pay/.deposit`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type: 'mrc20', state, prevState })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('State chain break'));
+    });
+
+    it('should reject MRC20 deposit to wrong address', async () => {
+      const { prevState, state } = makeStatePair('wrong-address');
+      const url = `${getBaseUrl()}/pay/.deposit`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': createNip98Header(url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ type: 'mrc20', state, prevState })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('No transfers'));
     });
   });
 
