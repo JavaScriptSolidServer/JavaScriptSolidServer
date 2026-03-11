@@ -834,6 +834,7 @@ jss start --pay --pay-cost 10 --pay-address your-address --pay-token PODS --pay-
 
 | Method | Path | Description |
 |--------|------|-------------|
+| GET | `/pay/.info` | Public: cost, token info, available routes |
 | GET | `/pay/.balance` | Check your balance (NIP-98 auth) |
 | POST | `/pay/.deposit` | Deposit sats via TXO URI or MRC20 state proof |
 | POST | `/pay/.buy` | Buy tokens with sat balance (requires `--pay-token`) |
