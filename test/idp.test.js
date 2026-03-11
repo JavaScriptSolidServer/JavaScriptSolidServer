@@ -9,6 +9,18 @@ import fs from 'fs-extra';
 import path from 'path';
 
 const TEST_HOST = 'localhost';
+import { createServer as createNetServer } from 'net';
+
+/** Get an available port by briefly binding to port 0 */
+async function getAvailablePort() {
+  return new Promise((resolve) => {
+    const srv = createNetServer();
+    srv.listen(0, TEST_HOST, () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
 describe('Identity Provider', () => {
   let server;
@@ -16,22 +28,21 @@ describe('Identity Provider', () => {
   const DATA_DIR = './test-data-idp';
 
   before(async () => {
-    // Clean up any existing test data
     await fs.remove(DATA_DIR);
     await fs.ensureDir(DATA_DIR);
 
-    // Create server with IdP enabled — use placeholder issuer, updated after listen
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
     server = createServer({
       logger: false,
       root: DATA_DIR,
       idp: true,
-      idpIssuer: 'http://localhost',
+      idpIssuer: baseUrl,
       forceCloseConnections: true,
     });
 
-    await server.listen({ port: 0, host: TEST_HOST });
-    const address = server.server.address();
-    baseUrl = `http://${TEST_HOST}:${address.port}`;
+    await server.listen({ port, host: TEST_HOST });
   });
 
   after(async () => {
@@ -45,6 +56,8 @@ describe('Identity Provider', () => {
       assert.strictEqual(res.status, 200);
 
       const config = await res.json();
+      // Issuer has trailing slash for CTH compatibility
+      assert.strictEqual(config.issuer, baseUrl + '/');
       assert.ok(config.authorization_endpoint);
       assert.ok(config.token_endpoint);
       assert.ok(config.jwks_uri);
@@ -172,17 +185,18 @@ describe('Identity Provider - Accounts', () => {
     await fs.remove(ACCOUNTS_DATA_DIR);
     await fs.ensureDir(ACCOUNTS_DATA_DIR);
 
+    const port = await getAvailablePort();
+    accountsUrl = `http://${TEST_HOST}:${port}`;
+
     server = createServer({
       logger: false,
       root: ACCOUNTS_DATA_DIR,
       idp: true,
-      idpIssuer: 'http://localhost',
+      idpIssuer: accountsUrl,
       forceCloseConnections: true,
     });
 
-    await server.listen({ port: 0, host: TEST_HOST });
-    const address = server.server.address();
-    accountsUrl = `http://${TEST_HOST}:${address.port}`;
+    await server.listen({ port, host: TEST_HOST });
   });
 
   after(async () => {
@@ -253,16 +267,17 @@ describe('Identity Provider - Credentials Endpoint', () => {
   before(async () => {
     await fs.emptyDir(CREDS_DATA_DIR);
 
+    const port = await getAvailablePort();
+    credsUrl = `http://${TEST_HOST}:${port}`;
+
     server = createServer({
       logger: false,
       idp: true,
-      idpIssuer: 'http://localhost',
+      idpIssuer: credsUrl,
       forceCloseConnections: true,
     });
 
-    await server.listen({ port: 0, host: TEST_HOST });
-    const address = server.server.address();
-    credsUrl = `http://${TEST_HOST}:${address.port}`;
+    await server.listen({ port, host: TEST_HOST });
 
     // Create a test user
     const res = await fetch(`${credsUrl}/.pods`, {

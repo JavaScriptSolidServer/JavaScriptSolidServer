@@ -102,6 +102,8 @@ export function createServer(options = {}) {
     logger: loggerEnabled ? { level: options.logLevel || 'info' } : false,
     disableRequestLogging: true,
     trustProxy: true,
+    // Force close connections on server.close() (useful for tests with WebSockets)
+    forceCloseConnections: options.forceCloseConnections ?? false,
     // Handle raw body for non-JSON content
     bodyLimit: 10 * 1024 * 1024, // 10MB
     // Gracefully handle client TCP errors (ECONNRESET, EPIPE, etc.)
