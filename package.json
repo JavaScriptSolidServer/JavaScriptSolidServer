@@ -24,6 +24,7 @@
     "benchmark": "node benchmark.js"
   },
   "dependencies": {
+    "@noble/curves": "^1.2.0",
     "@fastify/middie": "^8.3.3",
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/websocket": "^8.3.1",
