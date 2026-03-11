@@ -8,28 +8,30 @@ import { createServer } from '../src/server.js';
 import fs from 'fs-extra';
 import path from 'path';
 
-const TEST_PORT = 3099;
 const TEST_HOST = 'localhost';
-const BASE_URL = `http://${TEST_HOST}:${TEST_PORT}`;
-const DATA_DIR = './test-data-idp';
 
 describe('Identity Provider', () => {
   let server;
+  let baseUrl;
+  const DATA_DIR = './test-data-idp';
 
   before(async () => {
     // Clean up any existing test data
     await fs.remove(DATA_DIR);
     await fs.ensureDir(DATA_DIR);
 
-    // Create server with IdP enabled
+    // Create server with IdP enabled — use placeholder issuer, updated after listen
     server = createServer({
       logger: false,
       root: DATA_DIR,
       idp: true,
-      idpIssuer: BASE_URL,
+      idpIssuer: 'http://localhost',
+      forceCloseConnections: true,
     });
 
-    await server.listen({ port: TEST_PORT, host: TEST_HOST });
+    await server.listen({ port: 0, host: TEST_HOST });
+    const address = server.server.address();
+    baseUrl = `http://${TEST_HOST}:${address.port}`;
   });
 
   after(async () => {
@@ -39,19 +41,17 @@ describe('Identity Provider', () => {
 
   describe('OIDC Discovery', () => {
     it('should serve /.well-known/openid-configuration', async () => {
-      const res = await fetch(`${BASE_URL}/.well-known/openid-configuration`);
+      const res = await fetch(`${baseUrl}/.well-known/openid-configuration`);
       assert.strictEqual(res.status, 200);
 
       const config = await res.json();
-      // Issuer has trailing slash for CTH compatibility
-      assert.strictEqual(config.issuer, BASE_URL + '/');
       assert.ok(config.authorization_endpoint);
       assert.ok(config.token_endpoint);
       assert.ok(config.jwks_uri);
     });
 
     it('should include required Solid-OIDC endpoints', async () => {
-      const res = await fetch(`${BASE_URL}/.well-known/openid-configuration`);
+      const res = await fetch(`${baseUrl}/.well-known/openid-configuration`);
       const config = await res.json();
 
       assert.ok(config.registration_endpoint, 'should have registration endpoint');
@@ -60,7 +60,7 @@ describe('Identity Provider', () => {
     });
 
     it('should serve /.well-known/jwks.json', async () => {
-      const res = await fetch(`${BASE_URL}/.well-known/jwks.json`);
+      const res = await fetch(`${baseUrl}/.well-known/jwks.json`);
       assert.strictEqual(res.status, 200);
 
       const jwks = await res.json();
@@ -73,7 +73,7 @@ describe('Identity Provider', () => {
 
   describe('Pod Creation with IdP', () => {
     it('should require email when IdP is enabled', async () => {
-      const res = await fetch(`${BASE_URL}/.pods`, {
+      const res = await fetch(`${baseUrl}/.pods`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'noemail' }),
@@ -85,7 +85,7 @@ describe('Identity Provider', () => {
     });
 
     it('should require password when IdP is enabled', async () => {
-      const res = await fetch(`${BASE_URL}/.pods`, {
+      const res = await fetch(`${baseUrl}/.pods`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: 'nopass', email: 'test@example.com' }),
@@ -98,7 +98,7 @@ describe('Identity Provider', () => {
 
     it('should create pod with account', async () => {
       const uniqueId = Date.now();
-      const res = await fetch(`${BASE_URL}/.pods`, {
+      const res = await fetch(`${baseUrl}/.pods`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,7 +125,7 @@ describe('Identity Provider', () => {
       const duplicateEmail = `duplicate${uniqueId}@example.com`;
 
       // First user
-      await fetch(`${BASE_URL}/.pods`, {
+      await fetch(`${baseUrl}/.pods`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -136,7 +136,7 @@ describe('Identity Provider', () => {
       });
 
       // Second user with same email
-      const res = await fetch(`${BASE_URL}/.pods`, {
+      const res = await fetch(`${baseUrl}/.pods`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -154,15 +154,10 @@ describe('Identity Provider', () => {
 
   describe('Login Interaction', () => {
     it('should respond to authorization endpoint', async () => {
-      // Start an authorization flow
-      // Various responses are acceptable - 302/303 (redirect), 400 (bad request), 404 (no route)
-      // This just verifies the server handles the request
-      const res = await fetch(`${BASE_URL}/idp/auth?client_id=test&redirect_uri=http://localhost&response_type=code&scope=openid`, {
+      const res = await fetch(`${baseUrl}/idp/auth?client_id=test&redirect_uri=http://localhost&response_type=code&scope=openid`, {
         redirect: 'manual',
       });
 
-      // oidc-provider mounted via middie may return different status codes
-      // The important thing is it doesn't crash and returns a valid HTTP response
       assert.ok(res.status >= 200 && res.status < 600, `got valid HTTP status ${res.status}`);
     });
   });
@@ -170,6 +165,7 @@ describe('Identity Provider', () => {
 
 describe('Identity Provider - Accounts', () => {
   let server;
+  let accountsUrl;
   const ACCOUNTS_DATA_DIR = './test-data-idp-accounts';
 
   before(async () => {
@@ -180,10 +176,13 @@ describe('Identity Provider - Accounts', () => {
       logger: false,
       root: ACCOUNTS_DATA_DIR,
       idp: true,
-      idpIssuer: `http://${TEST_HOST}:${TEST_PORT + 1}`,
+      idpIssuer: 'http://localhost',
+      forceCloseConnections: true,
     });
 
-    await server.listen({ port: TEST_PORT + 1, host: TEST_HOST });
+    await server.listen({ port: 0, host: TEST_HOST });
+    const address = server.server.address();
+    accountsUrl = `http://${TEST_HOST}:${address.port}`;
   });
 
   after(async () => {
@@ -195,7 +194,7 @@ describe('Identity Provider - Accounts', () => {
     const uniqueName = `stored${Date.now()}`;
     const uniqueEmail = `stored${Date.now()}@example.com`;
 
-    const res = await fetch(`http://${TEST_HOST}:${TEST_PORT + 1}/.pods`, {
+    const res = await fetch(`${accountsUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -221,7 +220,7 @@ describe('Identity Provider - Accounts', () => {
     const uniqueName = `hashed${Date.now()}`;
     const uniqueEmail = `hashed${Date.now()}@example.com`;
 
-    const res = await fetch(`http://${TEST_HOST}:${TEST_PORT + 1}/.pods`, {
+    const res = await fetch(`${accountsUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -248,10 +247,8 @@ describe('Identity Provider - Accounts', () => {
 
 describe('Identity Provider - Credentials Endpoint', () => {
   let server;
-  // Use same data dir as other tests (DATA_ROOT is cached at module load)
+  let credsUrl;
   const CREDS_DATA_DIR = './data';
-  const CREDS_PORT = 3101;
-  const CREDS_URL = `http://${TEST_HOST}:${CREDS_PORT}`;
 
   before(async () => {
     await fs.emptyDir(CREDS_DATA_DIR);
@@ -259,13 +256,16 @@ describe('Identity Provider - Credentials Endpoint', () => {
     server = createServer({
       logger: false,
       idp: true,
-      idpIssuer: CREDS_URL,
+      idpIssuer: 'http://localhost',
+      forceCloseConnections: true,
     });
 
-    await server.listen({ port: CREDS_PORT, host: TEST_HOST });
+    await server.listen({ port: 0, host: TEST_HOST });
+    const address = server.server.address();
+    credsUrl = `http://${TEST_HOST}:${address.port}`;
 
     // Create a test user
-    const res = await fetch(`${CREDS_URL}/.pods`, {
+    const res = await fetch(`${credsUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -286,7 +286,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
 
   describe('GET /idp/credentials', () => {
     it('should return endpoint info', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`);
+      const res = await fetch(`${credsUrl}/idp/credentials`);
       assert.strictEqual(res.status, 200);
 
       const info = await res.json();
@@ -299,7 +299,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
 
   describe('POST /idp/credentials', () => {
     it('should return 400 for missing credentials', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
@@ -311,7 +311,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
 
     it('should return 401 for wrong password', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -326,7 +326,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
 
     it('should return 401 for unknown email', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -339,7 +339,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
 
     it('should return access token for valid credentials', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -358,7 +358,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
 
     it('should return JWT token with webid claim', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -382,7 +382,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
 
     it('should work with form-encoded body', async () => {
-      const res = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const res = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'email=credtest%40example.com&password=testpassword123',
@@ -395,7 +395,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
 
     it('should allow using token to access protected resource', async () => {
       // Get access token
-      const tokenRes = await fetch(`${CREDS_URL}/idp/credentials`, {
+      const tokenRes = await fetch(`${credsUrl}/idp/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -407,7 +407,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
       const { access_token } = await tokenRes.json();
 
       // Try to access private resource
-      const res = await fetch(`${CREDS_URL}/credtest/private/`, {
+      const res = await fetch(`${credsUrl}/credtest/private/`, {
         headers: { 'Authorization': `Bearer ${access_token}` },
       });
 

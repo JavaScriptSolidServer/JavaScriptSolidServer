@@ -255,6 +255,7 @@ async function runTests() {
     console.log('Test 2 result: PASSED');
 
     console.log('\n=== All tests passed ===');
+    process.exit(0);
   } catch (err) {
     console.error('\n=== Test FAILED ===');
     console.error(err.message);
