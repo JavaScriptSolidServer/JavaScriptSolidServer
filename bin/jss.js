@@ -80,6 +80,11 @@ program
   .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
   .option('--read-only', 'Disable PUT/DELETE/PATCH methods (read-only mode)')
   .option('--live-reload', 'Inject live reload script into HTML (auto-refresh on changes)')
+  .option('--pay', 'Enable HTTP 402 paid access for /pay/* routes')
+  .option('--no-pay', 'Disable HTTP 402 paid access')
+  .option('--pay-cost <n>', 'Cost per request in satoshis (default: 1)', parseInt)
+  .option('--pay-mempool-url <url>', 'Mempool API URL for deposit verification')
+  .option('--pay-address <addr>', 'Address for receiving deposits')
   .option('--mongo', 'Enable MongoDB-backed /db/ route')
   .option('--no-mongo', 'Disable MongoDB-backed /db/ route')
   .option('--mongo-url <url>', 'MongoDB connection URL (default: mongodb://localhost:27017)')
@@ -146,6 +151,10 @@ program
         public: config.public,
         readOnly: config.readOnly,
         liveReload: config.liveReload,
+        pay: config.pay,
+        payCost: config.payCost,
+        payMempoolUrl: config.payMempoolUrl,
+        payAddress: config.payAddress,
         mongo: config.mongo,
         mongoUrl: config.mongoUrl,
         mongoDatabase: config.mongoDatabase,
@@ -184,6 +193,7 @@ program
           }
           console.log('     Do not expose to the internet!');
         }
+        if (config.pay) console.log(`  Pay: ${config.payCost} sat/req (402 enabled)`);
         if (config.mongo) console.log(`  MongoDB: ${config.mongoUrl} (${config.mongoDatabase})`);
         if (config.readOnly) console.log('  Read-only: enabled (PUT/DELETE/PATCH disabled)');
         console.log('\n  Press Ctrl+C to stop\n');

@@ -46,6 +46,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Nostr Relay** - Integrated NIP-01/NIP-11/NIP-16 relay on the same port (`wss://your.pod/relay`)
 - **Invite-Only Registration** - CLI-managed invite codes for controlled signups
 - **Storage Quotas** - Per-user storage limits with CLI management
+- **HTTP 402 Paid Access** - Monetize API endpoints with per-request sat payments (`--pay`)
 - **Security** - Blocks access to dotfiles (`.git/`, `.env`, etc.) except Solid-specific ones
 
 ### HTTP Methods
@@ -151,6 +152,10 @@ jss --help             # Show help
 | `--public` | Allow unauthenticated access (skip WAC) | false |
 | `--read-only` | Disable PUT/DELETE/PATCH methods | false |
 | `--live-reload` | Auto-refresh browser on file changes | false |
+| `--pay` | Enable HTTP 402 paid access for /pay/* | false |
+| `--pay-cost <n>` | Cost per request in satoshis | 1 |
+| `--pay-mempool-url <url>` | Mempool API URL for deposit verification | (testnet4) |
+| `--pay-address <addr>` | Address for receiving deposits | - |
 | `--mongo` | Enable MongoDB-backed /db/ route | false |
 | `--mongo-url <url>` | MongoDB connection URL | mongodb://localhost:27017 |
 | `--mongo-database <name>` | MongoDB database name | solid |
@@ -179,6 +184,9 @@ export JSS_PUBLIC=true
 export JSS_READ_ONLY=true
 export JSS_LIVE_RELOAD=true
 export JSS_SOLIDOS_UI=true
+export JSS_PAY=true
+export JSS_PAY_COST=10
+export JSS_PAY_ADDRESS=your-address
 export JSS_MONGO=true
 export JSS_MONGO_URL=mongodb://localhost:27017
 export JSS_MONGO_DATABASE=solid
@@ -810,6 +818,47 @@ curl -X DELETE http://localhost:3000/db/alice/notes/1 \
 
 Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
 
+## HTTP 402 Paid Access
+
+Monetize API endpoints with per-request satoshi payments. Resources under `/pay/*` require NIP-98 authentication and a positive balance.
+
+```bash
+jss start --pay --pay-cost 10 --pay-address your-address
+```
+
+### Routes
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/pay/.balance` | Check your balance (NIP-98 auth) |
+| POST | `/pay/.deposit` | Deposit sats via TXO URI (`txid:vout`) |
+| GET | `/pay/*` | Paid resource access (deducts balance) |
+
+### How It Works
+
+1. Authenticate with NIP-98 (Nostr HTTP Auth)
+2. Check balance at `/pay/.balance`
+3. Deposit sats by POSTing a TXO URI to `/pay/.deposit`
+4. Access paid resources — each request deducts the configured cost
+5. Balance tracked in a [Web Ledger](https://webledgers.org/) at `/.well-known/webledgers/webledgers.json`
+
+### Example
+
+```bash
+# Check balance
+curl -H "Authorization: Nostr <base64-event>" http://localhost:3000/pay/.balance
+
+# Deposit (post a confirmed transaction output)
+curl -X POST -H "Authorization: Nostr <base64-event>" \
+  http://localhost:3000/pay/.deposit \
+  -d "txid:vout"
+
+# Access paid resource
+curl -H "Authorization: Nostr <base64-event>" http://localhost:3000/pay/my-resource
+```
+
+Deposit verification uses the mempool API (default: testnet4). The `X-Balance` and `X-Cost` headers are returned on successful paid requests.
+
 ## Authentication
 
 ### Simple Tokens (Development)
@@ -1113,7 +1162,7 @@ npm run benchmark
 npm test
 ```
 
-Currently passing: **229 tests** (including 27 conformance tests)
+Currently passing: **279 tests** (including 27 conformance tests)
 
 ### Conformance Test Harness (CTH)
 
@@ -1155,7 +1204,8 @@ src/
 ├── handlers/
 │   ├── resource.js       # GET, PUT, DELETE, HEAD, PATCH
 │   ├── container.js      # POST, pod creation
-│   └── git.js            # Git HTTP backend
+│   ├── git.js            # Git HTTP backend
+│   └── pay.js            # HTTP 402 paid access
 ├── storage/
 │   ├── filesystem.js     # File operations
 │   └── quota.js          # Storage quota management
@@ -1203,6 +1253,8 @@ src/
 │       ├── collections.js # Followers/following
 │       ├── mastodon.js  # Mastodon API (apps, instance, verify_credentials)
 │       └── oauth.js     # OAuth 2.0 authorize/token flow
+├── webledger.js          # Web Ledger balance tracking (webledgers.org)
+├── mrc20.js              # State chain verification
 ├── remotestorage.js      # remoteStorage protocol (draft-dejong-remotestorage-22)
 ├── rdf/
 │   ├── turtle.js         # Turtle <-> JSON-LD
