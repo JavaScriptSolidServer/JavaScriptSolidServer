@@ -21,9 +21,34 @@
 
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
-import { verifyMrc20Deposit } from '../mrc20.js';
+import { verifyMrc20Deposit, verifyMrc20Anchor, jcs } from '../mrc20.js';
+import fs from 'fs-extra';
+import path from 'path';
 
 const DEFAULT_COST = 1; // satoshis per request
+
+// --- Replay protection ---
+const replayFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/replay.json');
+
+async function loadReplaySet() {
+  try {
+    const data = await fs.readFile(replayFile(), 'utf8');
+    return new Set(JSON.parse(data));
+  } catch { return new Set(); }
+}
+
+async function saveReplaySet(set) {
+  await fs.ensureDir(path.dirname(replayFile()));
+  await fs.writeFile(replayFile(), JSON.stringify([...set]));
+}
+
+async function checkAndRecordState(stateHash) {
+  const seen = await loadReplaySet();
+  if (seen.has(stateHash)) return false; // replay!
+  seen.add(stateHash);
+  await saveReplaySet(seen);
+  return true;
+}
 
 // --- Deposit verification via mempool API ---
 
@@ -88,11 +113,11 @@ function parseDepositBody(body) {
 function classifyDepositObject(obj) {
   // Explicit type field
   if (obj.type === 'mrc20' && obj.state && obj.prevState) {
-    return { type: 'mrc20', state: obj.state, prevState: obj.prevState };
+    return { type: 'mrc20', state: obj.state, prevState: obj.prevState, anchor: obj.anchor };
   }
   // Auto-detect: if it has state + prevState with MRC20 profile
   if (obj.state?.profile === 'mono.mrc20.v0.1' && obj.prevState) {
-    return { type: 'mrc20', state: obj.state, prevState: obj.prevState };
+    return { type: 'mrc20', state: obj.state, prevState: obj.prevState, anchor: obj.anchor };
   }
   // Fall back to TXO URI in .txo field
   if (obj.txo) {
@@ -160,11 +185,34 @@ export function createPayHandler(options = {}) {
           });
         }
 
-        const result = verifyMrc20Deposit({
-          state: deposit.state,
-          prevState: deposit.prevState,
-          toAddress: payAddress
-        });
+        // Replay protection: reject duplicate state hashes
+        const stateHash = jcs(deposit.state);
+        const isNew = await checkAndRecordState(stateHash);
+        if (!isNew) {
+          return reply.code(400).send({ error: 'Replay: this state has already been used for a deposit' });
+        }
+
+        let result;
+
+        // Anchor verification (if anchor data provided)
+        if (deposit.anchor && deposit.anchor.pubkey && deposit.anchor.stateStrings) {
+          result = await verifyMrc20Anchor({
+            state: deposit.state,
+            prevState: deposit.prevState,
+            toAddress: payAddress,
+            pubkey: deposit.anchor.pubkey,
+            stateStrings: deposit.anchor.stateStrings,
+            mempoolUrl,
+            network: deposit.anchor.network || 'testnet4'
+          });
+        } else {
+          // Fallback: verify chain integrity only (no anchor check)
+          result = verifyMrc20Deposit({
+            state: deposit.state,
+            prevState: deposit.prevState,
+            toAddress: payAddress
+          });
+        }
 
         if (!result.valid) {
           return reply.code(400).send({ error: result.error });
@@ -180,7 +228,8 @@ export function createPayHandler(options = {}) {
           deposited: result.amount,
           ticker: result.ticker,
           balance: newBalance,
-          unit: 'token'
+          unit: 'token',
+          ...(result.address ? { anchor: result.address } : {})
         });
       }
 

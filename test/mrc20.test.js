@@ -11,8 +11,11 @@ import {
   validateMrc20State,
   extractTransfersTo,
   totalTransferredTo,
-  verifyMrc20Deposit
+  verifyMrc20Deposit,
+  btAddress,
+  verifyMrc20Anchor
 } from '../src/mrc20.js';
+import { secp256k1 } from '@noble/curves/secp256k1';
 
 const PROFILE = 'mono.mrc20.v0.1';
 
@@ -232,6 +235,109 @@ describe('MRC20 Verification', () => {
       const result = verifyMrc20Deposit({ state, prevState, toAddress: 'pod' });
       assert.strictEqual(result.valid, true);
       assert.strictEqual(result.amount, 150);
+    });
+  });
+
+  describe('btAddress', () => {
+    // Use a known keypair for deterministic tests
+    const testPriv = Buffer.alloc(32, 1); // 0x0101...01
+    const testPub = Buffer.from(secp256k1.getPublicKey(testPriv, true)).toString('hex');
+
+    it('should derive a valid testnet bech32m address', () => {
+      const addr = btAddress(testPub, ['state0'], 'testnet4');
+      assert.ok(addr.startsWith('tb1p'), `Expected tb1p prefix, got ${addr}`);
+      assert.ok(addr.length >= 62, `Address too short: ${addr.length}`);
+    });
+
+    it('should derive a valid mainnet bech32m address', () => {
+      const addr = btAddress(testPub, ['state0'], 'mainnet');
+      assert.ok(addr.startsWith('bc1p'), `Expected bc1p prefix, got ${addr}`);
+    });
+
+    it('should be deterministic', () => {
+      const a1 = btAddress(testPub, ['s1', 's2']);
+      const a2 = btAddress(testPub, ['s1', 's2']);
+      assert.strictEqual(a1, a2);
+    });
+
+    it('should produce different addresses for different states', () => {
+      const a1 = btAddress(testPub, ['state-a']);
+      const a2 = btAddress(testPub, ['state-b']);
+      assert.notStrictEqual(a1, a2);
+    });
+
+    it('should produce different addresses for different pubkeys', () => {
+      const priv2 = Buffer.alloc(32, 2);
+      const pub2 = Buffer.from(secp256k1.getPublicKey(priv2, true)).toString('hex');
+      const a1 = btAddress(testPub, ['state']);
+      const a2 = btAddress(pub2, ['state']);
+      assert.notStrictEqual(a1, a2);
+    });
+
+    it('should chain multiple states', () => {
+      const a1 = btAddress(testPub, ['s1']);
+      const a2 = btAddress(testPub, ['s1', 's2']);
+      assert.notStrictEqual(a1, a2);
+    });
+  });
+
+  describe('verifyMrc20Anchor', () => {
+    const testPriv = Buffer.alloc(32, 1);
+    const testPub = Buffer.from(secp256k1.getPublicKey(testPriv, true)).toString('hex');
+
+    it('should reject missing stateStrings', async () => {
+      const { prevState, state } = createStatePair(
+        [{ op: 'urn:mono:op:transfer', from: 'user', to: 'pod', amt: 100 }],
+        'pod'
+      );
+      const result = await verifyMrc20Anchor({
+        state, prevState, toAddress: 'pod',
+        pubkey: testPub, stateStrings: []
+      });
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.error.includes('stateStrings'));
+    });
+
+    it('should reject bad pubkey', async () => {
+      const { prevState, state } = createStatePair(
+        [{ op: 'urn:mono:op:transfer', from: 'user', to: 'pod', amt: 100 }],
+        'pod'
+      );
+      const result = await verifyMrc20Anchor({
+        state, prevState, toAddress: 'pod',
+        pubkey: 'short', stateStrings: [jcs(state)]
+      });
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.error.includes('pubkey'));
+    });
+
+    it('should reject mismatched last stateString', async () => {
+      const { prevState, state } = createStatePair(
+        [{ op: 'urn:mono:op:transfer', from: 'user', to: 'pod', amt: 100 }],
+        'pod'
+      );
+      const result = await verifyMrc20Anchor({
+        state, prevState, toAddress: 'pod',
+        pubkey: testPub, stateStrings: ['wrong-jcs']
+      });
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.error.includes('Last stateString'));
+    });
+
+    it('should reject when no UTXO exists (mempool returns empty)', async () => {
+      const { prevState, state } = createStatePair(
+        [{ op: 'urn:mono:op:transfer', from: 'user', to: 'pod', amt: 100 }],
+        'pod'
+      );
+      // Use a fake mempool URL that will fail
+      const result = await verifyMrc20Anchor({
+        state, prevState, toAddress: 'pod',
+        pubkey: testPub,
+        stateStrings: [jcs(prevState), jcs(state)],
+        mempoolUrl: 'http://127.0.0.1:1' // will fail to connect
+      });
+      assert.strictEqual(result.valid, false);
+      assert.ok(result.error.includes('Mempool') || result.error.includes('failed'));
     });
   });
 });
