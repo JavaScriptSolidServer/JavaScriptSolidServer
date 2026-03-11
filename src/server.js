@@ -46,6 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {boolean} options.pay - Enable HTTP 402 paid /pay/* routes (default false)
  * @param {number} options.payCost - Cost per request in satoshis (default 1)
  * @param {string} options.payMempoolUrl - Mempool API base URL (default testnet4)
+ * @param {string} options.payAddress - Pod's MRC20 address for receiving token transfers
  */
 export function createServer(options = {}) {
   // Content negotiation is OFF by default - we're a JSON-LD native server
@@ -98,6 +99,7 @@ export function createServer(options = {}) {
   const payEnabled = options.pay ?? false;
   const payCost = options.payCost ?? 1;
   const payMempoolUrl = options.payMempoolUrl ?? 'https://mempool.space/testnet4';
+  const payAddress = options.payAddress ?? null; // Pod's MRC20 address for token deposits
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -372,7 +374,7 @@ export function createServer(options = {}) {
 
   // HTTP 402 Payment Required handler for /pay/* routes
   if (payEnabled) {
-    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl }));
+    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress }));
   }
 
   // Authorization hook - check WAC permissions
