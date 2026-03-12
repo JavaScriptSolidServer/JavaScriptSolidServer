@@ -152,6 +152,68 @@ describe('Web Ledger', () => {
     });
   });
 
+  describe('multi-currency', () => {
+    it('should credit and debit with specific currency', () => {
+      const ledger = createLedger();
+      const bal = credit(ledger, 'did:nostr:user1', 1000, 'tbtc3');
+      assert.strictEqual(bal, 1000);
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1', 'tbtc3'), 1000);
+      // Default balance should be 0 (no satoshi credits)
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1'), 0);
+    });
+
+    it('should track multiple currencies independently', () => {
+      const ledger = createLedger();
+      credit(ledger, 'did:nostr:user1', 1000, 'tbtc3');
+      credit(ledger, 'did:nostr:user1', 5000, 'tbtc4');
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1', 'tbtc3'), 1000);
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1', 'tbtc4'), 5000);
+    });
+
+    it('should debit specific currency', () => {
+      const ledger = createLedger();
+      credit(ledger, 'did:nostr:user1', 1000, 'tbtc3');
+      credit(ledger, 'did:nostr:user1', 5000, 'tbtc4');
+      const result = debit(ledger, 'did:nostr:user1', 300, 'tbtc3');
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.balance, 700);
+      // tbtc4 unchanged
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1', 'tbtc4'), 5000);
+    });
+
+    it('should fail debit when currency balance insufficient', () => {
+      const ledger = createLedger();
+      credit(ledger, 'did:nostr:user1', 100, 'tbtc3');
+      const result = debit(ledger, 'did:nostr:user1', 200, 'tbtc3');
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.balance, 100);
+    });
+
+    it('should migrate simple string to array on currency credit', () => {
+      const ledger = createLedger();
+      // First set a simple balance
+      setBalance(ledger, 'did:nostr:user1', 500);
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1'), 500);
+      // Now add a currency-specific balance — should migrate to array
+      credit(ledger, 'did:nostr:user1', 1000, 'tbtc3');
+      assert.strictEqual(getBalance(ledger, 'did:nostr:user1', 'tbtc3'), 1000);
+      // Old satoshi balance should be preserved in array
+      const entry = ledger.entries.find(e => e.url === 'did:nostr:user1');
+      assert.ok(Array.isArray(entry.amount));
+      const satEntry = entry.amount.find(a => a.currency === 'satoshi');
+      assert.strictEqual(parseInt(satEntry.value), 500);
+    });
+
+    it('should use array format in entries', () => {
+      const ledger = createLedger();
+      credit(ledger, 'did:nostr:user1', 1000, 'tbtc3');
+      const entry = ledger.entries.find(e => e.url === 'did:nostr:user1');
+      assert.ok(Array.isArray(entry.amount));
+      assert.strictEqual(entry.amount[0].currency, 'tbtc3');
+      assert.strictEqual(entry.amount[0].value, '1000');
+    });
+  });
+
   describe('URI format support', () => {
     it('should work with did:nostr URIs', () => {
       const ledger = createLedger();
