@@ -90,6 +90,7 @@ export const defaults = {
   payAddress: null,
   payToken: null,
   payRate: 1,
+  payChains: null,  // comma-separated chain IDs, e.g. "tbtc3,tbtc4"
 
   // MongoDB-backed /db/ route
   mongo: false,
@@ -152,6 +153,7 @@ const envMap = {
   JSS_PAY_ADDRESS: 'payAddress',
   JSS_PAY_TOKEN: 'payToken',
   JSS_PAY_RATE: 'payRate',
+  JSS_PAY_CHAINS: 'payChains',
   JSS_MONGO: 'mongo',
   JSS_MONGO_URL: 'mongoUrl',
   JSS_MONGO_DATABASE: 'mongoDatabase',

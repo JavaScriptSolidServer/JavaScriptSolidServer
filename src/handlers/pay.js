@@ -35,6 +35,40 @@ import path from 'path';
 
 const DEFAULT_COST = 1; // satoshis per request
 
+// --- Chain registry for multi-chain deposits ---
+const CHAIN_REGISTRY = {
+  tbtc3: { explorer: 'https://mempool.space/testnet/api', unit: 'tbtc3', name: 'Bitcoin Testnet3' },
+  tbtc4: { explorer: 'https://mempool.space/testnet4/api', unit: 'tbtc4', name: 'Bitcoin Testnet4' },
+  btc:   { explorer: 'https://mempool.space/api', unit: 'sat', name: 'Bitcoin' },
+  ltc:   { explorer: 'https://litecoinspace.org/api', unit: 'ltc', name: 'Litecoin' },
+  signet:{ explorer: 'https://mempool.space/signet/api', unit: 'signet', name: 'Bitcoin Signet' },
+};
+
+/**
+ * Parse chain ID from a TXO URI body string.
+ * Supports: "txo:tbtc3:txid:vout", "txo:btc:txid:vout", or bare "txid:vout" (returns null).
+ */
+function parseTxoChain(body) {
+  const str = typeof body === 'string' ? body.trim() : '';
+  const match = str.match(/^txo:([a-z0-9]+):/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+// --- AMM pool storage ---
+const poolFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/pool.json');
+
+async function loadPool() {
+  try {
+    const data = await fs.readFile(poolFile(), 'utf8');
+    return JSON.parse(data);
+  } catch { return null; }
+}
+
+async function savePool(pool) {
+  await fs.ensureDir(path.dirname(poolFile()));
+  await fs.writeFile(poolFile(), JSON.stringify(pool, null, 2));
+}
+
 // --- Replay protection ---
 const replayFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/replay.json');
 
@@ -173,6 +207,11 @@ export function createPayHandler(options = {}) {
   const payToken = options.payToken ?? null;
   const payRate = options.payRate ?? 1;
 
+  // Parse multi-chain config: "tbtc3,tbtc4" → ['tbtc3', 'tbtc4']
+  const payChains = options.payChains
+    ? options.payChains.split(',').map(c => c.trim()).filter(c => CHAIN_REGISTRY[c])
+    : null;
+
   return async function payHandler(request, reply) {
     const url = request.url.split('?')[0];
     if (!isPayRequest(request.url)) return;
@@ -198,6 +237,10 @@ export function createPayHandler(options = {}) {
           info.token.issuer = trail.pubkeyBase ?? null;
         }
       }
+      if (payChains) {
+        info.chains = payChains.map(id => ({ id, unit: CHAIN_REGISTRY[id].unit, name: CHAIN_REGISTRY[id].name }));
+        info.pool = '/pay/.pool';
+      }
       return reply.send(info);
     }
 
@@ -209,12 +252,21 @@ export function createPayHandler(options = {}) {
       }
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      return reply.send({
+      const response = {
         did: didUri,
         balance: getBalance(ledger, didUri),
         cost,
         unit: 'sat'
-      });
+      };
+      // Include per-chain balances when multi-chain is enabled
+      if (payChains) {
+        response.balances = {};
+        for (const chainId of payChains) {
+          const unit = CHAIN_REGISTRY[chainId].unit;
+          response.balances[unit] = getBalance(ledger, didUri, unit);
+        }
+      }
+      return reply.send(response);
     }
 
     // --- POST /pay/.deposit ---
@@ -284,21 +336,37 @@ export function createPayHandler(options = {}) {
 
       // --- Sats deposit (TXO URI) ---
       if (deposit.type === 'sats') {
-        const result = await verifySatsDeposit(deposit.txo, mempoolUrl);
+        // Detect chain from TXO URI prefix (e.g. "txo:tbtc3:txid:vout")
+        const chainId = parseTxoChain(deposit.txo);
+        let depositMempoolUrl = mempoolUrl;
+        let currency = null; // null = default (simple string format)
+
+        if (chainId && payChains && payChains.includes(chainId)) {
+          const chain = CHAIN_REGISTRY[chainId];
+          depositMempoolUrl = chain.explorer.replace(/\/api$/, '');
+          currency = chain.unit;
+        } else if (chainId && payChains) {
+          return reply.code(400).send({
+            error: `Chain '${chainId}' not enabled. Enabled chains: ${payChains.join(', ')}`,
+          });
+        }
+
+        const result = await verifySatsDeposit(deposit.txo, depositMempoolUrl);
         if (!result.valid) {
           return reply.code(400).send({ error: result.error });
         }
 
         const didUri = pubkeyToDidNostr(pubkey);
         const ledger = await readLedger();
-        const newBalance = credit(ledger, didUri, result.amount);
+        const newBalance = credit(ledger, didUri, result.amount, currency);
         await writeLedger(ledger);
 
         return reply.send({
           did: didUri,
           deposited: result.amount,
           balance: newBalance,
-          unit: 'sat'
+          unit: currency || 'sat',
+          ...(chainId ? { chain: chainId } : {})
         });
       }
 
@@ -671,6 +739,237 @@ export function createPayHandler(options = {}) {
           }
         }
       });
+    }
+
+    // --- GET /pay/.pool — AMM pool state (public) ---
+    if (url === '/pay/.pool' && request.method === 'GET') {
+      if (!payChains || payChains.length < 2) {
+        return reply.code(400).send({ error: 'AMM not configured (requires --pay-chains with 2 chains)' });
+      }
+      const pool = await loadPool();
+      if (!pool) {
+        return reply.send({
+          pair: [CHAIN_REGISTRY[payChains[0]].unit, CHAIN_REGISTRY[payChains[1]].unit],
+          reserves: { [CHAIN_REGISTRY[payChains[0]].unit]: 0, [CHAIN_REGISTRY[payChains[1]].unit]: 0 },
+          k: 0,
+          fee: 0.003,
+          totalShares: 0,
+          lpShares: {}
+        });
+      }
+      return reply.send(pool);
+    }
+
+    // --- POST /pay/.pool — AMM operations (swap, add-liquidity, remove-liquidity) ---
+    if (url === '/pay/.pool' && request.method === 'POST') {
+      if (!payChains || payChains.length < 2) {
+        return reply.code(400).send({ error: 'AMM not configured (requires --pay-chains with 2 chains)' });
+      }
+
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      let body = request.body;
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
+
+      const didUri = pubkeyToDidNostr(pubkey);
+      const unitA = CHAIN_REGISTRY[payChains[0]].unit;
+      const unitB = CHAIN_REGISTRY[payChains[1]].unit;
+      const action = body?.action;
+
+      // --- ADD LIQUIDITY ---
+      if (action === 'add-liquidity') {
+        const amountA = Math.floor(body?.[unitA] || 0);
+        const amountB = Math.floor(body?.[unitB] || 0);
+        if (amountA <= 0 || amountB <= 0) {
+          return reply.code(400).send({ error: `Specify ${unitA} and ${unitB} amounts` });
+        }
+
+        const ledger = await readLedger();
+        const balA = getBalance(ledger, didUri, unitA);
+        const balB = getBalance(ledger, didUri, unitB);
+        if (balA < amountA) {
+          return reply.code(402).send({ error: `Insufficient ${unitA} balance`, balance: balA, required: amountA });
+        }
+        if (balB < amountB) {
+          return reply.code(402).send({ error: `Insufficient ${unitB} balance`, balance: balB, required: amountB });
+        }
+
+        let pool = await loadPool();
+        if (!pool) {
+          pool = {
+            pair: [unitA, unitB],
+            reserves: { [unitA]: 0, [unitB]: 0 },
+            k: 0,
+            fee: 0.003,
+            totalShares: 0,
+            lpShares: {}
+          };
+        }
+
+        // Calculate LP shares (initial: shares = sqrt(amountA * amountB))
+        let newShares;
+        if (pool.totalShares === 0) {
+          newShares = Math.floor(Math.sqrt(amountA * amountB));
+        } else {
+          // Proportional: min(amountA/reserveA, amountB/reserveB) * totalShares
+          const ratioA = amountA / pool.reserves[unitA];
+          const ratioB = amountB / pool.reserves[unitB];
+          newShares = Math.floor(Math.min(ratioA, ratioB) * pool.totalShares);
+        }
+        if (newShares <= 0) {
+          return reply.code(400).send({ error: 'Amounts too small to mint LP shares' });
+        }
+
+        // Debit user balances
+        debit(ledger, didUri, amountA, unitA);
+        debit(ledger, didUri, amountB, unitB);
+        await writeLedger(ledger);
+
+        // Update pool
+        pool.reserves[unitA] += amountA;
+        pool.reserves[unitB] += amountB;
+        pool.k = pool.reserves[unitA] * pool.reserves[unitB];
+        pool.totalShares += newShares;
+        pool.lpShares[didUri] = (pool.lpShares[didUri] || 0) + newShares;
+        await savePool(pool);
+
+        return reply.send({
+          action: 'add-liquidity',
+          deposited: { [unitA]: amountA, [unitB]: amountB },
+          shares: newShares,
+          totalShares: pool.totalShares,
+          reserves: pool.reserves,
+          k: pool.k
+        });
+      }
+
+      // --- REMOVE LIQUIDITY ---
+      if (action === 'remove-liquidity') {
+        const shares = Math.floor(body?.shares || 0);
+        const pool = await loadPool();
+        if (!pool || pool.totalShares === 0) {
+          return reply.code(400).send({ error: 'Pool has no liquidity' });
+        }
+
+        const userShares = pool.lpShares[didUri] || 0;
+        const toRemove = body?.all ? userShares : shares;
+        if (toRemove <= 0 || toRemove > userShares) {
+          return reply.code(400).send({ error: 'Invalid shares', yours: userShares });
+        }
+
+        // Calculate proportional withdrawal
+        const fraction = toRemove / pool.totalShares;
+        const outA = Math.floor(pool.reserves[unitA] * fraction);
+        const outB = Math.floor(pool.reserves[unitB] * fraction);
+
+        // Credit user
+        const ledger = await readLedger();
+        credit(ledger, didUri, outA, unitA);
+        credit(ledger, didUri, outB, unitB);
+        await writeLedger(ledger);
+
+        // Update pool
+        pool.reserves[unitA] -= outA;
+        pool.reserves[unitB] -= outB;
+        pool.k = pool.reserves[unitA] * pool.reserves[unitB];
+        pool.totalShares -= toRemove;
+        pool.lpShares[didUri] -= toRemove;
+        if (pool.lpShares[didUri] <= 0) delete pool.lpShares[didUri];
+        await savePool(pool);
+
+        return reply.send({
+          action: 'remove-liquidity',
+          withdrawn: { [unitA]: outA, [unitB]: outB },
+          sharesRemoved: toRemove,
+          totalShares: pool.totalShares,
+          reserves: pool.reserves
+        });
+      }
+
+      // --- SWAP ---
+      if (action === 'swap') {
+        const sellUnit = body?.sell;
+        const amount = Math.floor(body?.amount || 0);
+        if (!sellUnit || ![unitA, unitB].includes(sellUnit)) {
+          return reply.code(400).send({ error: `Specify sell: "${unitA}" or "${unitB}"` });
+        }
+        if (amount <= 0) {
+          return reply.code(400).send({ error: 'Amount must be positive' });
+        }
+
+        const pool = await loadPool();
+        if (!pool || pool.k === 0) {
+          return reply.code(400).send({ error: 'Pool has no liquidity' });
+        }
+
+        const buyUnit = sellUnit === unitA ? unitB : unitA;
+
+        // Check user balance
+        const ledger = await readLedger();
+        const userBal = getBalance(ledger, didUri, sellUnit);
+        if (userBal < amount) {
+          return reply.code(402).send({
+            error: `Insufficient ${sellUnit} balance`,
+            balance: userBal,
+            required: amount,
+            deposit: '/pay/.deposit'
+          });
+        }
+
+        // Constant product: (reserveIn + amountIn * (1-fee)) * (reserveOut - amountOut) = k
+        const reserveIn = pool.reserves[sellUnit];
+        const reserveOut = pool.reserves[buyUnit];
+        const amountInAfterFee = amount * (1 - pool.fee);
+        const amountOut = Math.floor((reserveOut * amountInAfterFee) / (reserveIn + amountInAfterFee));
+
+        if (amountOut <= 0) {
+          return reply.code(400).send({ error: 'Trade too small' });
+        }
+
+        // Slippage protection
+        if (body?.minReceived && amountOut < body.minReceived) {
+          return reply.code(400).send({
+            error: 'Slippage exceeded',
+            wouldReceive: amountOut,
+            minReceived: body.minReceived
+          });
+        }
+
+        // Execute: debit sellUnit, credit buyUnit
+        debit(ledger, didUri, amount, sellUnit);
+        credit(ledger, didUri, amountOut, buyUnit);
+        await writeLedger(ledger);
+
+        // Update pool reserves
+        pool.reserves[sellUnit] += amount;
+        pool.reserves[buyUnit] -= amountOut;
+        pool.k = pool.reserves[unitA] * pool.reserves[unitB];
+        await savePool(pool);
+
+        const price = amount / amountOut;
+        return reply.send({
+          action: 'swap',
+          sold: { unit: sellUnit, amount },
+          bought: { unit: buyUnit, amount: amountOut },
+          price: Math.round(price * 10000) / 10000,
+          fee: Math.floor(amount * pool.fee),
+          reserves: pool.reserves,
+          balances: {
+            [sellUnit]: getBalance(ledger, didUri, sellUnit),
+            [buyUnit]: getBalance(ledger, didUri, buyUnit)
+          }
+        });
+      }
+
+      return reply.code(400).send({ error: 'Unknown action. Use: swap, add-liquidity, remove-liquidity' });
     }
 
     // --- GET/HEAD /pay/* — paid resource access ---

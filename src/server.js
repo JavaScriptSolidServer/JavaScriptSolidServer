@@ -102,6 +102,7 @@ export function createServer(options = {}) {
   const payAddress = options.payAddress ?? null; // Pod's MRC20 address for token deposits
   const payToken = options.payToken ?? null; // Token ticker for primary market
   const payRate = options.payRate ?? 1; // Sats per token
+  const payChains = options.payChains ?? null; // Multi-chain IDs (e.g. "tbtc3,tbtc4")
 
   // Set data root via environment variable if provided
   if (options.root) {
@@ -376,7 +377,7 @@ export function createServer(options = {}) {
 
   // HTTP 402 Payment Required handler for /pay/* routes
   if (payEnabled) {
-    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress, payToken, payRate }));
+    fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress, payToken, payRate, payChains }));
   }
 
   // Authorization hook - check WAC permissions

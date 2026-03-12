@@ -87,6 +87,7 @@ program
   .option('--pay-address <addr>', 'Address for receiving deposits')
   .option('--pay-token <ticker>', 'Token to sell (enables primary market)')
   .option('--pay-rate <n>', 'Sats per token for primary market (default: 1)', parseInt)
+  .option('--pay-chains <chains>', 'Comma-separated chain IDs for multi-chain deposits/AMM (e.g. "tbtc3,tbtc4")')
   .option('--mongo', 'Enable MongoDB-backed /db/ route')
   .option('--no-mongo', 'Disable MongoDB-backed /db/ route')
   .option('--mongo-url <url>', 'MongoDB connection URL (default: mongodb://localhost:27017)')
@@ -159,6 +160,7 @@ program
         payAddress: config.payAddress,
         payToken: config.payToken,
         payRate: config.payRate,
+        payChains: config.payChains,
         mongo: config.mongo,
         mongoUrl: config.mongoUrl,
         mongoDatabase: config.mongoDatabase,

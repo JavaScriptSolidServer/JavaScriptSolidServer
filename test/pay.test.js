@@ -546,6 +546,151 @@ describe('HTTP 402 Pay Middleware', () => {
     });
   });
 
+  describe('AMM with multi-chain', () => {
+    let ammServer;
+    let ammUrl;
+    const ammPrivkey = crypto.randomBytes(32);
+    const ammPubkey = Buffer.from(schnorr.getPublicKey(ammPrivkey)).toString('hex');
+    const ammPrivkey2 = crypto.randomBytes(32);
+    const ammPubkey2 = Buffer.from(schnorr.getPublicKey(ammPrivkey2)).toString('hex');
+
+    function ammNip98(pk, url, method = 'GET') {
+      const event = {
+        pubkey: Buffer.from(schnorr.getPublicKey(pk)).toString('hex'),
+        created_at: Math.floor(Date.now() / 1000),
+        kind: 27235,
+        tags: [['u', url], ['method', method]],
+        content: ''
+      };
+      const serialized = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+      event.id = crypto.createHash('sha256').update(serialized).digest('hex');
+      event.sig = Buffer.from(schnorr.sign(event.id, pk)).toString('hex');
+      return `Nostr ${Buffer.from(JSON.stringify(event)).toString('base64')}`;
+    }
+
+    before(async () => {
+      const { createServer } = await import('../src/server.js');
+      ammServer = createServer({
+        logger: false,
+        forceCloseConnections: true,
+        pay: true,
+        payCost: 1,
+        payChains: 'tbtc3,tbtc4'
+      });
+      await ammServer.listen({ port: 0, host: '127.0.0.1' });
+      const addr = ammServer.server.address();
+      ammUrl = `http://127.0.0.1:${addr.port}`;
+    });
+
+    after(async () => {
+      if (ammServer) await ammServer.close();
+    });
+
+    it('GET /pay/.info should include chains and pool', async () => {
+      const res = await fetch(`${ammUrl}/pay/.info`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.ok(body.chains);
+      assert.strictEqual(body.chains.length, 2);
+      assert.strictEqual(body.chains[0].id, 'tbtc3');
+      assert.strictEqual(body.chains[1].id, 'tbtc4');
+      assert.strictEqual(body.pool, '/pay/.pool');
+    });
+
+    it('GET /pay/.pool should return empty pool', async () => {
+      const res = await fetch(`${ammUrl}/pay/.pool`);
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.strictEqual(body.reserves.tbtc3, 0);
+      assert.strictEqual(body.reserves.tbtc4, 0);
+      assert.strictEqual(body.k, 0);
+      assert.strictEqual(body.totalShares, 0);
+    });
+
+    it('GET /pay/.balance should include per-chain balances', async () => {
+      const url = `${ammUrl}/pay/.balance`;
+      const res = await fetch(url, {
+        headers: { 'Authorization': ammNip98(ammPrivkey, url) }
+      });
+      assertStatus(res, 200);
+      const body = await res.json();
+      assert.ok(body.balances);
+      assert.strictEqual(body.balances.tbtc3, 0);
+      assert.strictEqual(body.balances.tbtc4, 0);
+    });
+
+    it('POST /pay/.pool swap should fail with no liquidity', async () => {
+      const url = `${ammUrl}/pay/.pool`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': ammNip98(ammPrivkey, url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'swap', sell: 'tbtc3', amount: 100 })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('no liquidity'));
+    });
+
+    it('POST /pay/.pool add-liquidity should fail with zero balance', async () => {
+      const url = `${ammUrl}/pay/.pool`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': ammNip98(ammPrivkey, url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'add-liquidity', tbtc3: 1000, tbtc4: 5000 })
+      });
+      assertStatus(res, 402);
+    });
+
+    it('POST /pay/.pool should reject unknown action', async () => {
+      const url = `${ammUrl}/pay/.pool`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': ammNip98(ammPrivkey, url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'invalid' })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('Unknown action'));
+    });
+
+    it('POST /pay/.pool swap should reject invalid sell unit', async () => {
+      const url = `${ammUrl}/pay/.pool`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': ammNip98(ammPrivkey, url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'swap', sell: 'invalid', amount: 100 })
+      });
+      assertStatus(res, 400);
+    });
+
+    it('POST /pay/.pool remove-liquidity should fail with no pool', async () => {
+      const url = `${ammUrl}/pay/.pool`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': ammNip98(ammPrivkey, url, 'POST'),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ action: 'remove-liquidity', shares: 10 })
+      });
+      assertStatus(res, 400);
+      const body = await res.json();
+      assert.ok(body.error.includes('no liquidity'));
+    });
+  });
+
   describe('Pay disabled', () => {
     let noPayServer;
     let noPayUrl;

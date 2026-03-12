@@ -77,16 +77,21 @@ export async function writeLedger(ledger, ledgerPath = DEFAULT_PATH) {
  * Get balance for a URI
  * @param {object} ledger - WebLedger object
  * @param {string} uri - Agent URI (e.g. did:nostr:...)
+ * @param {string} [currency] - Currency code (e.g. 'tbtc3', 'tbtc4'). If omitted, reads default/simple amount.
  * @returns {number} Balance as integer
  */
-export function getBalance(ledger, uri) {
+export function getBalance(ledger, uri, currency) {
   const entry = ledger.entries.find(e => e.url === uri);
   if (!entry) return 0;
-  // Handle both simple string and array amount formats
+  // Handle array amount format
   if (Array.isArray(entry.amount)) {
-    const sat = entry.amount.find(a => a.currency === 'satoshi' || a.currency === 'sat');
-    return sat ? parseInt(sat.value, 10) || 0 : 0;
+    const target = currency
+      ? entry.amount.find(a => a.currency === currency)
+      : entry.amount.find(a => a.currency === 'satoshi' || a.currency === 'sat');
+    return target ? parseInt(target.value, 10) || 0 : 0;
   }
+  // Simple string format — only if no specific currency requested, or currency matches default
+  if (currency) return 0;
   return parseInt(entry.amount, 10) || 0;
 }
 
@@ -95,13 +100,34 @@ export function getBalance(ledger, uri) {
  * @param {object} ledger - WebLedger object
  * @param {string} uri - Agent URI
  * @param {number} amount - New balance
+ * @param {string} [currency] - Currency code. If provided, uses array amount format.
  */
-export function setBalance(ledger, uri, amount) {
-  const entry = ledger.entries.find(e => e.url === uri);
-  if (entry) {
-    entry.amount = String(amount);
+export function setBalance(ledger, uri, amount, currency) {
+  let entry = ledger.entries.find(e => e.url === uri);
+  if (!currency) {
+    // Simple string format (backward compatible)
+    if (entry) {
+      entry.amount = String(amount);
+    } else {
+      ledger.entries.push({ type: 'Entry', url: uri, amount: String(amount) });
+    }
+    return;
+  }
+  // Multi-currency: use array format
+  if (!entry) {
+    entry = { type: 'Entry', url: uri, amount: [] };
+    ledger.entries.push(entry);
+  }
+  // Migrate simple string to array if needed
+  if (!Array.isArray(entry.amount)) {
+    const oldVal = parseInt(entry.amount, 10) || 0;
+    entry.amount = oldVal > 0 ? [{ currency: 'satoshi', value: String(oldVal) }] : [];
+  }
+  const existing = entry.amount.find(a => a.currency === currency);
+  if (existing) {
+    existing.value = String(amount);
   } else {
-    ledger.entries.push({ type: 'Entry', url: uri, amount: String(amount) });
+    entry.amount.push({ currency, value: String(amount) });
   }
 }
 
@@ -110,12 +136,13 @@ export function setBalance(ledger, uri, amount) {
  * @param {object} ledger - WebLedger object
  * @param {string} uri - Agent URI
  * @param {number} amount - Amount to add
+ * @param {string} [currency] - Currency code
  * @returns {number} New balance
  */
-export function credit(ledger, uri, amount) {
-  const current = getBalance(ledger, uri);
+export function credit(ledger, uri, amount, currency) {
+  const current = getBalance(ledger, uri, currency);
   const newBalance = current + amount;
-  setBalance(ledger, uri, newBalance);
+  setBalance(ledger, uri, newBalance, currency);
   return newBalance;
 }
 
@@ -124,15 +151,16 @@ export function credit(ledger, uri, amount) {
  * @param {object} ledger - WebLedger object
  * @param {string} uri - Agent URI
  * @param {number} amount - Amount to subtract
+ * @param {string} [currency] - Currency code
  * @returns {{success: boolean, balance: number}} Result
  */
-export function debit(ledger, uri, amount) {
-  const current = getBalance(ledger, uri);
+export function debit(ledger, uri, amount, currency) {
+  const current = getBalance(ledger, uri, currency);
   if (current < amount) {
     return { success: false, balance: current };
   }
   const newBalance = current - amount;
-  setBalance(ledger, uri, newBalance);
+  setBalance(ledger, uri, newBalance, currency);
   return { success: true, balance: newBalance };
 }
 
