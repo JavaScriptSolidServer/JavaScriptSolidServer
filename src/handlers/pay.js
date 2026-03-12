@@ -424,13 +424,17 @@ export function createPayHandler(options = {}) {
         return reply.code(400).send({ error: 'Amount must be positive' });
       }
 
-      // Check sat balance
+      // Determine payment currency — chain-specific (e.g. "tbtc4") or generic "sat"
+      const currency = (body?.currency && payChains && payChains.includes(body.currency))
+        ? body.currency : null;
+
+      // Check balance
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const balance = getBalance(ledger, didUri);
+      const balance = getBalance(ledger, didUri, currency);
       if (balance < satCost) {
         return reply.code(402).send({
-          error: 'Insufficient sat balance',
+          error: `Insufficient ${currency || 'sat'} balance`,
           balance,
           cost: satCost,
           rate: payRate,
@@ -457,8 +461,8 @@ export function createPayHandler(options = {}) {
         return reply.code(500).send({ error: `Transfer failed: ${err.message}` });
       }
 
-      // Debit sats from buyer
-      debit(ledger, didUri, satCost);
+      // Debit from buyer
+      debit(ledger, didUri, satCost, currency);
       await writeLedger(ledger);
 
       return reply.send({
@@ -466,8 +470,8 @@ export function createPayHandler(options = {}) {
         ticker,
         cost: satCost,
         rate: payRate,
-        balance: getBalance(ledger, didUri),
-        unit: 'sat',
+        balance: getBalance(ledger, didUri, currency),
+        unit: currency || 'sat',
         txid: result.txid,
         proof: {
           state: result.state,
