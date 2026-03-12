@@ -9,13 +9,15 @@ JSS has a built-in payment system. Resources under `/pay/*` cost satoshis to acc
 ```
 User (Nostr keypair)
   │
-  ├── POST /pay/.deposit   → credit sat balance
-  ├── GET  /pay/.balance   → check balance
+  ├── POST /pay/.deposit   → credit sat balance (multi-chain: txo:tbtc3:, txo:tbtc4:, etc.)
+  ├── GET  /pay/.balance   → check balance (includes per-chain balances)
   ├── GET  /pay/*          → spend 1 sat, get resource
   ├── POST /pay/.buy       → spend sats, get tokens (Bitcoin TX)
   ├── POST /pay/.withdraw  → spend balance, get tokens back
   ├── POST /pay/.sell      → list tokens for sale
-  └── POST /pay/.swap      → buy someone's sell order
+  ├── POST /pay/.swap      → buy someone's sell order
+  ├── GET  /pay/.pool      → AMM pool state (multi-chain)
+  └── POST /pay/.pool      → AMM: swap, add-liquidity, remove-liquidity
 ```
 
 All state lives in two places:
@@ -58,6 +60,17 @@ Response:
 ```
 
 The `token` field is only present when `--pay-token` is configured. `rate` is sats per token.
+
+When `--pay-chains` is configured, the response also includes:
+```json
+{
+  "chains": [
+    { "id": "tbtc3", "unit": "tbtc3", "name": "Bitcoin Testnet3" },
+    { "id": "tbtc4", "unit": "tbtc4", "name": "Bitcoin Testnet4" }
+  ],
+  "pool": "/pay/.pool"
+}
+```
 
 ### GET /pay/.balance
 **Requires NIP-98 auth.**
@@ -280,9 +293,10 @@ jss token info PODS
 
 | File | Contents |
 |------|----------|
-| `/.well-known/webledgers/webledgers.json` | Sat balances per DID (webledgers.org spec) |
+| `/.well-known/webledgers/webledgers.json` | Balances per DID — multi-currency array format (webledgers.org spec) |
 | `/.well-known/webledgers/replay.json` | Seen MRC20 state hashes (replay protection) |
 | `/.well-known/webledgers/offers.json` | Open sell orders (secondary market) |
+| `/.well-known/webledgers/pool.json` | AMM pool state (reserves, LP shares, k) |
 | `/.well-known/token/<ticker>.json` | MRC20 token trail (state chain, keys, UTXO) |
 
 ## Source Files
@@ -328,6 +342,18 @@ jss token info PODS
 4. (another user)
 5. GET  /pay/.offers         → sees the sell order
 6. POST /pay/.swap           → buys the 50 PODS, seller gets 750 sats credited
+```
+
+### Cross-chain AMM trading
+```
+1. Configure pod:  jss start --pay --pay-chains "tbtc3,tbtc4"
+2. User A deposits: POST /pay/.deposit "txo:tbtc3:<txid>:<vout>" → gets tbtc3 balance
+3. User B deposits: POST /pay/.deposit "txo:tbtc4:<txid>:<vout>" → gets tbtc4 balance
+4. User A adds liquidity: POST /pay/.pool { "action": "add-liquidity", "tbtc3": 1000, "tbtc4": 5000 }
+5. User B swaps: POST /pay/.pool { "action": "swap", "sell": "tbtc4", "amount": 500 }
+   → receives ~90 tbtc3 (constant product formula, 0.3% fee)
+6. User A removes liquidity: POST /pay/.pool { "action": "remove-liquidity", "all": true }
+   → gets back proportional share of both currencies + earned fees
 ```
 
 ### Full exit
