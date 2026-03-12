@@ -988,21 +988,41 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const { success, balance } = debit(ledger, didUri, cost);
 
-      if (!success) {
-        return reply.code(402).send({
+      // Try generic sat balance first, then fall back to chain balances
+      const currency = request.headers['x-pay-currency'] || null;
+      let payUnit = currency && payChains && payChains.includes(currency) ? currency : null;
+      let result = debit(ledger, didUri, cost, payUnit);
+
+      // If generic sat failed and no explicit currency, try each chain balance
+      if (!result.success && !payUnit && payChains) {
+        for (const chainId of payChains) {
+          result = debit(ledger, didUri, cost, chainId);
+          if (result.success) { payUnit = chainId; break; }
+        }
+      }
+
+      if (!result.success) {
+        const response = {
           error: 'Payment Required',
-          balance,
+          balance: result.balance,
           cost,
           unit: 'sat',
           deposit: '/pay/.deposit'
-        });
+        };
+        if (payChains) {
+          response.balances = {};
+          for (const chainId of payChains) {
+            response.balances[chainId] = getBalance(ledger, didUri, chainId);
+          }
+        }
+        return reply.code(402).send(response);
       }
 
       await writeLedger(ledger);
-      reply.header('X-Balance', String(balance));
+      reply.header('X-Balance', String(result.balance));
       reply.header('X-Cost', String(cost));
+      if (payUnit) reply.header('X-Pay-Currency', payUnit);
       return; // continue to normal resource handler
     }
 
