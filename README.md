@@ -164,6 +164,8 @@ jss --help             # Show help
 | `--mongo-database <name>` | MongoDB database name | solid |
 | `--webrtc` | Enable WebRTC signaling server | false |
 | `--webrtc-path <path>` | WebRTC signaling WebSocket path | /.webrtc |
+| `--tunnel` | Enable tunnel proxy (decentralized ngrok) | false |
+| `--tunnel-path <path>` | Tunnel WebSocket path | /.tunnel |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -861,6 +863,36 @@ Messages are JSON over WebSocket:
 ```
 
 On connect, peers receive a list of online users and get notified when others join or leave.
+
+## Tunnel Proxy (Decentralized ngrok)
+
+Expose a local dev server to the internet through your JSS pod. A tunnel client connects via WebSocket, registers a name, and receives proxied HTTP requests.
+
+```bash
+jss start --tunnel
+```
+
+### How It Works
+
+1. Tunnel client connects to `wss://your.pod/.tunnel` (WebID auth required)
+2. Client registers a name: `{ "type": "register", "name": "myapp" }`
+3. Public URL becomes available at `https://your.pod/tunnel/myapp/`
+4. HTTP requests to that URL are serialized and sent to the tunnel client over WebSocket
+5. Tunnel client forwards to localhost, returns the response
+
+### Tunnel Client Protocol
+
+```js
+// 1. Register a tunnel
+→ { "type": "register", "name": "myapp" }
+← { "type": "registered", "name": "myapp", "url": "/tunnel/myapp/" }
+
+// 2. Receive proxied HTTP requests
+← { "type": "request", "id": "uuid", "method": "GET", "path": "/api/hello", "headers": {...} }
+
+// 3. Return the response
+→ { "type": "response", "id": "uuid", "status": 200, "headers": {...}, "body": "..." }
+```
 
 ## HTTP 402 Paid Access
 

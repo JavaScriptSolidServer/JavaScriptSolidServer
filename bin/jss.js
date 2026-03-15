@@ -68,6 +68,9 @@ program
   .option('--webrtc', 'Enable WebRTC signaling server')
   .option('--no-webrtc', 'Disable WebRTC signaling server')
   .option('--webrtc-path <path>', 'WebRTC signaling WebSocket path (default: /.webrtc)')
+  .option('--tunnel', 'Enable tunnel proxy (decentralized ngrok)')
+  .option('--no-tunnel', 'Disable tunnel proxy')
+  .option('--tunnel-path <path>', 'Tunnel WebSocket path (default: /.tunnel)')
   .option('--activitypub', 'Enable ActivityPub federation')
   .option('--no-activitypub', 'Disable ActivityPub federation')
   .option('--ap-username <name>', 'ActivityPub username (default: me)')
@@ -147,6 +150,8 @@ program
         nostrMaxEvents: config.nostrMaxEvents,
         webrtc: config.webrtc,
         webrtcPath: config.webrtcPath,
+        tunnel: config.tunnel,
+        tunnelPath: config.tunnelPath,
         activitypub: config.activitypub,
         apUsername: config.apUsername,
         apDisplayName: config.apDisplayName,
@@ -192,6 +197,7 @@ program
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
+        if (config.tunnel) console.log(`  Tunnel: enabled (${config.tunnelPath || '/.tunnel'})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
         else if (config.inviteOnly) console.log('  Registration: invite-only');

@@ -19,6 +19,7 @@ import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
 import { webrtcPlugin } from './webrtc/index.js';
+import { tunnelPlugin } from './tunnel/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +79,9 @@ export function createServer(options = {}) {
   // WebRTC signaling is OFF by default
   const webrtcEnabled = options.webrtc ?? false;
   const webrtcPath = options.webrtcPath ?? '/.webrtc';
+  // Tunnel proxy is OFF by default
+  const tunnelEnabled = options.tunnel ?? false;
+  const tunnelPath = options.tunnelPath ?? '/.tunnel';
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -249,6 +253,11 @@ export function createServer(options = {}) {
     fastify.register(webrtcPlugin, { path: webrtcPath });
   }
 
+  // Register tunnel proxy if enabled
+  if (tunnelEnabled) {
+    fastify.register(tunnelPlugin, { path: tunnelPath });
+  }
+
   // Register ActivityPub plugin if enabled
   if (activitypubEnabled) {
     fastify.register(activityPubPlugin, {
@@ -340,8 +349,11 @@ export function createServer(options = {}) {
       return;
     }
 
-    // Allow WebRTC signaling endpoint through when enabled
+    // Allow WebRTC and tunnel endpoints through when enabled
     const urlNoQuery = request.url.split('?')[0];
+    if (tunnelEnabled && (urlNoQuery === tunnelPath || urlNoQuery.startsWith('/tunnel/'))) {
+      return;
+    }
     if (webrtcEnabled && urlNoQuery === webrtcPath) {
       return;
     }
@@ -421,6 +433,7 @@ export function createServer(options = {}) {
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
+        (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
