@@ -115,7 +115,8 @@ export async function tunnelPlugin(fastify, options = {}) {
           p.resolve({
             status: msg.status || 502,
             headers: msg.headers || {},
-            body: msg.body || ''
+            body: msg.body || '',
+            bodyEncoding: msg.bodyEncoding
           });
         }
       }
@@ -124,6 +125,12 @@ export async function tunnelPlugin(fastify, options = {}) {
     socket.on('close', () => {
       if (tunnelName && tunnels.get(tunnelName)?.socket === socket) {
         tunnels.delete(tunnelName);
+        // Resolve any pending requests for this tunnel with 502
+        for (const [id, p] of pending) {
+          clearTimeout(p.timer);
+          pending.delete(id);
+          p.resolve({ status: 502, headers: {}, body: 'Tunnel disconnected' });
+        }
       }
     });
 
@@ -177,7 +184,8 @@ export async function tunnelPlugin(fastify, options = {}) {
     try {
       tunnel.socket.send(JSON.stringify(tunnelReq));
     } catch {
-      pending.delete(id);
+      const p = pending.get(id);
+      if (p) { clearTimeout(p.timer); pending.delete(id); }
       return reply.code(502).send({ error: 'Bad Gateway', message: 'Failed to reach tunnel client' });
     }
 
@@ -209,7 +217,7 @@ export async function tunnelPlugin(fastify, options = {}) {
       return reply.code(502).send({ error: 'Bad Gateway', message: 'Tunnel not connected' });
     }
 
-    return reply.redirect(`/tunnel/${name}/`);
+    return reply.redirect(308, `/tunnel/${name}/`);
   });
 }
 
