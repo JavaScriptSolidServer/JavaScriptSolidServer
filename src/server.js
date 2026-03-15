@@ -328,7 +328,7 @@ export function createServer(options = {}) {
   // Security: Block access to dotfiles except allowed Solid-specific ones
   // This prevents exposure of .git/, .env, .htpasswd, etc.
   // Git protocol requests bypass this check when git is enabled
-  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account'];
+  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account', '.webrtc'];
   fastify.addHook('onRequest', async (request, reply) => {
     // Allow git protocol requests through when git is enabled
     if (gitEnabled && isGitRequest(request.url)) {
@@ -414,6 +414,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
+        (webrtcEnabled && request.url.startsWith(webrtcPath)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }

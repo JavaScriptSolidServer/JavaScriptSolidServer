@@ -50,9 +50,10 @@ export async function webrtcPlugin(fastify, options = {}) {
       return;
     }
 
-    // Register this peer
+    // Register this peer (close old connection if reconnecting)
     const existing = peers.get(webId);
     if (existing) {
+      peers.delete(webId);
       existing.close();
     }
     peers.set(webId, socket);
@@ -95,12 +96,17 @@ export async function webrtcPlugin(fastify, options = {}) {
     });
 
     socket.on('close', () => {
-      peers.delete(webId);
-      broadcast(webId, { type: 'peer-left', webId });
+      // Only remove if this socket is still the registered one (not replaced by reconnect)
+      if (peers.get(webId) === socket) {
+        peers.delete(webId);
+        broadcast(webId, { type: 'peer-left', webId });
+      }
     });
 
     socket.on('error', () => {
-      peers.delete(webId);
+      if (peers.get(webId) === socket) {
+        peers.delete(webId);
+      }
     });
   });
 }

@@ -1,0 +1,200 @@
+/**
+ * WebRTC Signaling Server Tests
+ */
+
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert';
+import { WebSocket } from 'ws';
+import {
+  startTestServer,
+  stopTestServer,
+  createTestPod,
+  getBaseUrl,
+  getPodToken
+} from './helpers.js';
+
+describe('WebRTC Signaling', () => {
+  let wsUrl;
+
+  before(async () => {
+    await startTestServer({ webrtc: true });
+    await createTestPod('alice');
+    await createTestPod('bob');
+    const base = getBaseUrl();
+    wsUrl = base.replace('http', 'ws') + '/.webrtc';
+  });
+
+  after(async () => {
+    await stopTestServer();
+  });
+
+  /** Connect an authenticated WebSocket for a pod user, waits for open */
+  function connectPeer(podName) {
+    const token = getPodToken(podName);
+    const ws = new WebSocket(wsUrl, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    return ws;
+  }
+
+  /** Connect and wait for the 'peers' welcome message */
+  async function connectAndWait(podName) {
+    const ws = connectPeer(podName);
+    const msg = await waitForMessage(ws, 'peers');
+    return { ws, ...msg };
+  }
+
+  /** Wait for a specific message type from a WebSocket */
+  function waitForMessage(ws, type, timeout = 3000) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`Timeout waiting for "${type}"`)), timeout);
+      ws.on('message', function handler(data) {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === type) {
+          clearTimeout(timer);
+          ws.removeListener('message', handler);
+          resolve(msg);
+        }
+      });
+    });
+  }
+
+  /** Collect messages from a WebSocket for a duration */
+  function collectMessages(ws, duration = 500) {
+    return new Promise((resolve) => {
+      const msgs = [];
+      const handler = (data) => msgs.push(JSON.parse(data.toString()));
+      ws.on('message', handler);
+      setTimeout(() => {
+        ws.removeListener('message', handler);
+        resolve(msgs);
+      }, duration);
+    });
+  }
+
+  describe('Authentication', () => {
+    it('should reject unauthenticated connections', async () => {
+      const ws = new WebSocket(wsUrl);
+
+      const msg = await waitForMessage(ws, 'error');
+      assert.strictEqual(msg.type, 'error');
+      assert.ok(msg.message.includes('Authentication'));
+      ws.close();
+    });
+
+    it('should accept authenticated connections', async () => {
+      const ws = connectPeer('alice');
+
+      const msg = await waitForMessage(ws, 'peers');
+      assert.strictEqual(msg.type, 'peers');
+      assert.ok(msg.you, 'Should include own WebID');
+      assert.ok(Array.isArray(msg.peers), 'Should include peers list');
+      ws.close();
+    });
+  });
+
+  describe('Peer Presence and Signaling Relay', () => {
+    it('should handle full signaling lifecycle', async () => {
+      // Alice connects first — should see no peers
+      const { ws: alice, you: aliceId } = await connectAndWait('alice');
+
+      // Bob joins — set up listener for peer-joined before bob connects
+      const joinPromise = waitForMessage(alice, 'peer-joined');
+      const { ws: bob, you: bobId, peers: bobPeerList } = await connectAndWait('bob');
+
+      // Bob should see alice in the peer list
+      assert.strictEqual(bobPeerList.length, 1, 'Bob should see Alice');
+
+      // Alice should get peer-joined notification
+      const joinMsg = await joinPromise;
+      assert.strictEqual(joinMsg.type, 'peer-joined');
+
+      // 1. Alice sends offer to Bob
+      const offerPromise = waitForMessage(bob, 'offer');
+      alice.send(JSON.stringify({ type: 'offer', to: bobId, sdp: 'v=0\r\n' }));
+
+      const offer = await offerPromise;
+      assert.strictEqual(offer.type, 'offer');
+      assert.strictEqual(offer.from, aliceId);
+      assert.ok(offer.sdp, 'Should include SDP');
+      assert.strictEqual(offer.to, undefined, 'Should strip "to" field');
+
+      // 2. Bob sends answer to Alice
+      const answerPromise = waitForMessage(alice, 'answer');
+      bob.send(JSON.stringify({ type: 'answer', to: aliceId, sdp: 'v=0\r\n' }));
+
+      const answer = await answerPromise;
+      assert.strictEqual(answer.type, 'answer');
+      assert.strictEqual(answer.from, bobId);
+
+      // 3. Alice sends ICE candidate to Bob
+      const candidatePromise = waitForMessage(bob, 'candidate');
+      alice.send(JSON.stringify({
+        type: 'candidate', to: bobId,
+        candidate: { candidate: 'candidate:1 1 UDP 2122252543 192.168.1.1 12345 typ host', sdpMid: '0' }
+      }));
+
+      const candidate = await candidatePromise;
+      assert.strictEqual(candidate.type, 'candidate');
+      assert.ok(candidate.candidate.candidate);
+
+      // 4. Alice sends hangup to Bob
+      const hangupPromise = waitForMessage(bob, 'hangup');
+      alice.send(JSON.stringify({ type: 'hangup', to: bobId }));
+
+      const hangup = await hangupPromise;
+      assert.strictEqual(hangup.type, 'hangup');
+      assert.strictEqual(hangup.from, aliceId);
+
+      // 5. Bob leaves — alice should get notified
+      const leavePromise = waitForMessage(alice, 'peer-left');
+      bob.close();
+
+      const leaveMsg = await leavePromise;
+      assert.strictEqual(leaveMsg.type, 'peer-left');
+
+      alice.close();
+      await new Promise(r => setTimeout(r, 100));
+    });
+  });
+
+  describe('Error Handling', () => {
+    it('should reject invalid JSON', async () => {
+      const alice = connectPeer('alice');
+      await waitForMessage(alice, 'peers');
+
+      alice.send('not json');
+      const err = await waitForMessage(alice, 'error');
+      assert.strictEqual(err.message, 'Invalid JSON');
+
+      alice.close();
+    });
+
+    it('should reject messages without "to" field', async () => {
+      const alice = connectPeer('alice');
+      await waitForMessage(alice, 'peers');
+
+      alice.send(JSON.stringify({ type: 'offer', sdp: '...' }));
+      const err = await waitForMessage(alice, 'error');
+      assert.ok(err.message.includes('Missing'));
+
+      alice.close();
+    });
+
+    it('should error when target peer is not online', async () => {
+      const alice = connectPeer('alice');
+      await waitForMessage(alice, 'peers');
+
+      alice.send(JSON.stringify({
+        type: 'offer',
+        to: 'https://nobody.example/profile/card#me',
+        sdp: '...'
+      }));
+      const err = await waitForMessage(alice, 'error');
+      assert.ok(err.message.includes('not online'));
+
+      alice.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+  });
+});
