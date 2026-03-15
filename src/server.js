@@ -328,7 +328,8 @@ export function createServer(options = {}) {
   // Security: Block access to dotfiles except allowed Solid-specific ones
   // This prevents exposure of .git/, .env, .htpasswd, etc.
   // Git protocol requests bypass this check when git is enabled
-  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account', '.webrtc'];
+  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account'];
+  if (webrtcEnabled) ALLOWED_DOTFILES.push(webrtcPath.split('/').pop());
   fastify.addHook('onRequest', async (request, reply) => {
     // Allow git protocol requests through when git is enabled
     if (gitEnabled && isGitRequest(request.url)) {

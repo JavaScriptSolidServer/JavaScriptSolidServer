@@ -47,15 +47,27 @@ describe('WebRTC Signaling', () => {
   /** Wait for a specific message type from a WebSocket */
   function waitForMessage(ws, type, timeout = 3000) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`Timeout waiting for "${type}"`)), timeout);
-      ws.on('message', function handler(data) {
+      function handler(data) {
         const msg = JSON.parse(data.toString());
         if (msg.type === type) {
           clearTimeout(timer);
           ws.removeListener('message', handler);
+          ws.removeListener('close', onClose);
           resolve(msg);
         }
-      });
+      }
+      function onClose() {
+        clearTimeout(timer);
+        ws.removeListener('message', handler);
+        reject(new Error(`WebSocket closed while waiting for "${type}"`));
+      }
+      const timer = setTimeout(() => {
+        ws.removeListener('message', handler);
+        ws.removeListener('close', onClose);
+        reject(new Error(`Timeout waiting for "${type}"`));
+      }, timeout);
+      ws.on('message', handler);
+      ws.on('close', onClose);
     });
   }
 

@@ -24,8 +24,8 @@
 import websocket from '@fastify/websocket';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 
-// Connected peers: webId → WebSocket
-const peers = new Map();
+const ALLOWED_TYPES = new Set(['offer', 'answer', 'candidate', 'hangup']);
+const MAX_MESSAGE_SIZE = 64 * 1024; // 64KB
 
 /**
  * Register WebRTC signaling routes on Fastify instance
@@ -37,7 +37,30 @@ const peers = new Map();
 export async function webrtcPlugin(fastify, options = {}) {
   const path = options.path || '/.webrtc';
 
-  await fastify.register(websocket);
+  // Instance-scoped peer state
+  const peers = new Map();
+
+  // Only register @fastify/websocket if not already registered
+  if (!fastify.websocketServer) {
+    await fastify.register(websocket);
+  }
+
+  // Clean up all connections on server close
+  fastify.addHook('onClose', async () => {
+    for (const [, socket] of peers) {
+      socket.close();
+    }
+    peers.clear();
+  });
+
+  function broadcast(senderWebId, msg) {
+    const data = JSON.stringify(msg);
+    for (const [id, socket] of peers) {
+      if (id !== senderWebId && socket.readyState === 1) {
+        socket.send(data);
+      }
+    }
+  }
 
   fastify.get(path, { websocket: true }, async (connection, request) => {
     const socket = connection.socket;
@@ -70,6 +93,12 @@ export async function webrtcPlugin(fastify, options = {}) {
     broadcast(webId, { type: 'peer-joined', webId });
 
     socket.on('message', (data) => {
+      // Enforce max message size
+      if (data.length > MAX_MESSAGE_SIZE) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
+        return;
+      }
+
       let msg;
       try {
         msg = JSON.parse(data.toString());
@@ -80,6 +109,12 @@ export async function webrtcPlugin(fastify, options = {}) {
 
       if (!msg.to || !msg.type) {
         socket.send(JSON.stringify({ type: 'error', message: 'Missing "to" or "type" field' }));
+        return;
+      }
+
+      // Only relay known signaling types
+      if (!ALLOWED_TYPES.has(msg.type)) {
+        socket.send(JSON.stringify({ type: 'error', message: `Unknown type "${msg.type}"` }));
         return;
       }
 
@@ -109,18 +144,6 @@ export async function webrtcPlugin(fastify, options = {}) {
       }
     });
   });
-}
-
-/**
- * Send a message to all connected peers except the sender
- */
-function broadcast(senderWebId, msg) {
-  const data = JSON.stringify(msg);
-  for (const [id, socket] of peers) {
-    if (id !== senderWebId && socket.readyState === 1) {
-      socket.send(data);
-    }
-  }
 }
 
 export default webrtcPlugin;
