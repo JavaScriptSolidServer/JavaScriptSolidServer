@@ -18,6 +18,7 @@ import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
+import { webrtcPlugin } from './webrtc/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,9 @@ export function createServer(options = {}) {
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
   const nostrMaxEvents = options.nostrMaxEvents ?? 1000;
+  // WebRTC signaling is OFF by default
+  const webrtcEnabled = options.webrtc ?? false;
+  const webrtcPath = options.webrtcPath ?? '/.webrtc';
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -240,6 +244,11 @@ export function createServer(options = {}) {
     });
   }
 
+  // Register WebRTC signaling if enabled
+  if (webrtcEnabled) {
+    fastify.register(webrtcPlugin, { path: webrtcPath });
+  }
+
   // Register ActivityPub plugin if enabled
   if (activitypubEnabled) {
     fastify.register(activityPubPlugin, {
@@ -331,6 +340,12 @@ export function createServer(options = {}) {
       return;
     }
 
+    // Allow WebRTC signaling endpoint through when enabled
+    const urlNoQuery = request.url.split('?')[0];
+    if (webrtcEnabled && urlNoQuery === webrtcPath) {
+      return;
+    }
+
     const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
@@ -405,6 +420,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
+        (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }

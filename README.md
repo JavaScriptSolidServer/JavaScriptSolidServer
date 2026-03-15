@@ -162,6 +162,8 @@ jss --help             # Show help
 | `--mongo` | Enable MongoDB-backed /db/ route | false |
 | `--mongo-url <url>` | MongoDB connection URL | mongodb://localhost:27017 |
 | `--mongo-database <name>` | MongoDB database name | solid |
+| `--webrtc` | Enable WebRTC signaling server | false |
+| `--webrtc-path <path>` | WebRTC signaling WebSocket path | /.webrtc |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
@@ -195,6 +197,7 @@ export JSS_PAY_RATE=10
 export JSS_MONGO=true
 export JSS_MONGO_URL=mongodb://localhost:27017
 export JSS_MONGO_DATABASE=solid
+export JSS_WEBRTC=true
 jss start
 ```
 
@@ -822,6 +825,42 @@ curl -X DELETE http://localhost:3000/db/alice/notes/1 \
 ### Size Formats
 
 Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
+
+## WebRTC Signaling
+
+Peer-to-peer communication via WebRTC, using JSS as the signaling server. Once peers are connected, all media and data flows directly between them.
+
+```bash
+jss start --webrtc
+```
+
+### How It Works
+
+1. Both peers connect to `wss://your.pod/.webrtc` (WebID auth required)
+2. Caller sends an SDP offer targeting the callee's WebID
+3. JSS relays the offer/answer and ICE candidates between peers
+4. Once a direct path is found, the peer-to-peer connection is established
+5. JSS steps out — video, audio, files, and data flow directly between peers
+
+### Protocol
+
+Messages are JSON over WebSocket:
+
+```js
+// Send an offer to another user
+{ "type": "offer", "to": "https://bob.example/profile/card#me", "sdp": "..." }
+
+// Receive an offer from another user
+{ "type": "offer", "from": "https://alice.example/profile/card#me", "sdp": "..." }
+
+// ICE candidate exchange
+{ "type": "candidate", "to": "https://bob.example/profile/card#me", "candidate": {...} }
+
+// Hang up
+{ "type": "hangup", "to": "https://bob.example/profile/card#me" }
+```
+
+On connect, peers receive a list of online users and get notified when others join or leave.
 
 ## HTTP 402 Paid Access
 

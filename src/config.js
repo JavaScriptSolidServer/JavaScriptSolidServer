@@ -54,6 +54,10 @@ export const defaults = {
   nostrPath: '/relay',
   nostrMaxEvents: 1000,
 
+  // WebRTC signaling
+  webrtc: false,
+  webrtcPath: '/.webrtc',
+
   // ActivityPub federation
   activitypub: false,
   apUsername: 'me',
@@ -134,6 +138,8 @@ const envMap = {
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
+  JSS_WEBRTC: 'webrtc',
+  JSS_WEBRTC_PATH: 'webrtcPath',
   JSS_ACTIVITYPUB: 'activitypub',
   JSS_AP_USERNAME: 'apUsername',
   JSS_AP_DISPLAY_NAME: 'apDisplayName',
