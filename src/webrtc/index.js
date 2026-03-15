@@ -59,7 +59,7 @@ export async function webrtcPlugin(fastify, options = {}) {
     const data = JSON.stringify(msg);
     for (const [id, socket] of peers) {
       if (id !== senderWebId && socket.readyState === 1) {
-        socket.send(data);
+        try { socket.send(data); } catch { /* socket closed between check and send */ }
       }
     }
   }
@@ -138,7 +138,9 @@ export async function webrtcPlugin(fastify, options = {}) {
       if (msg.candidate != null && typeof msg.candidate === 'object' && !Array.isArray(msg.candidate)) {
         relay.candidate = msg.candidate;
       }
-      target.send(JSON.stringify(relay));
+      try { target.send(JSON.stringify(relay)); } catch {
+        socket.send(JSON.stringify({ type: 'error', message: 'Peer not online', peer: msg.to }));
+      }
     });
 
     socket.on('close', () => {
