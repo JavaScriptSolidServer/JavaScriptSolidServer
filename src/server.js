@@ -329,7 +329,6 @@ export function createServer(options = {}) {
   // This prevents exposure of .git/, .env, .htpasswd, etc.
   // Git protocol requests bypass this check when git is enabled
   const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account'];
-  if (webrtcEnabled) ALLOWED_DOTFILES.push(webrtcPath.split('/').pop());
   fastify.addHook('onRequest', async (request, reply) => {
     // Allow git protocol requests through when git is enabled
     if (gitEnabled && isGitRequest(request.url)) {
@@ -338,6 +337,12 @@ export function createServer(options = {}) {
 
     // Allow pay routes through when pay is enabled (.balance, .deposit)
     if (payEnabled && isPayRequest(request.url)) {
+      return;
+    }
+
+    // Allow WebRTC signaling endpoint through when enabled
+    const urlNoQuery = request.url.split('?')[0];
+    if (webrtcEnabled && urlNoQuery === webrtcPath) {
       return;
     }
 
@@ -415,7 +420,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
-        (webrtcEnabled && request.url.startsWith(webrtcPath)) ||
+        (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }

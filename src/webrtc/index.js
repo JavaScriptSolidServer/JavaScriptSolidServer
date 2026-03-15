@@ -93,15 +93,16 @@ export async function webrtcPlugin(fastify, options = {}) {
     broadcast(webId, { type: 'peer-joined', webId });
 
     socket.on('message', (data) => {
-      // Enforce max message size
-      if (data.length > MAX_MESSAGE_SIZE) {
+      // Enforce max message size (Buffer.byteLength for reliable byte count)
+      const raw = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (raw.byteLength > MAX_MESSAGE_SIZE) {
         socket.send(JSON.stringify({ type: 'error', message: 'Message too large' }));
         return;
       }
 
       let msg;
       try {
-        msg = JSON.parse(data.toString());
+        msg = JSON.parse(raw.toString());
       } catch {
         socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
         return;
@@ -124,9 +125,14 @@ export async function webrtcPlugin(fastify, options = {}) {
         return;
       }
 
-      // Relay the message, replacing 'to' with 'from'
-      const relay = { ...msg, from: webId };
-      delete relay.to;
+      // Build relay payload with whitelisted fields only (prevent prototype pollution)
+      const relay = Object.create(null);
+      relay.type = msg.type;
+      relay.from = webId;
+      if (typeof msg.sdp === 'string') relay.sdp = msg.sdp;
+      if (msg.candidate != null && typeof msg.candidate === 'object' && !Array.isArray(msg.candidate)) {
+        relay.candidate = msg.candidate;
+      }
       target.send(JSON.stringify(relay));
     });
 
