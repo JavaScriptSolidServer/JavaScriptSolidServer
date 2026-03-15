@@ -58,6 +58,10 @@ export const defaults = {
   webrtc: false,
   webrtcPath: '/.webrtc',
 
+  // Tunnel (decentralized ngrok)
+  tunnel: false,
+  tunnelPath: '/.tunnel',
+
   // ActivityPub federation
   activitypub: false,
   apUsername: 'me',
@@ -140,6 +144,8 @@ const envMap = {
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
   JSS_WEBRTC: 'webrtc',
   JSS_WEBRTC_PATH: 'webrtcPath',
+  JSS_TUNNEL: 'tunnel',
+  JSS_TUNNEL_PATH: 'tunnelPath',
   JSS_ACTIVITYPUB: 'activitypub',
   JSS_AP_USERNAME: 'apUsername',
   JSS_AP_DISPLAY_NAME: 'apDisplayName',
