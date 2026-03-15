@@ -125,11 +125,13 @@ export async function tunnelPlugin(fastify, options = {}) {
     socket.on('close', () => {
       if (tunnelName && tunnels.get(tunnelName)?.socket === socket) {
         tunnels.delete(tunnelName);
-        // Resolve any pending requests for this tunnel with 502
+        // Resolve pending requests for this tunnel only with 502
         for (const [id, p] of pending) {
-          clearTimeout(p.timer);
-          pending.delete(id);
-          p.resolve({ status: 502, headers: {}, body: 'Tunnel disconnected' });
+          if (p.tunnelName === tunnelName) {
+            clearTimeout(p.timer);
+            pending.delete(id);
+            p.resolve({ status: 502, headers: {}, body: 'Tunnel disconnected' });
+          }
         }
       }
     });
@@ -158,7 +160,7 @@ export async function tunnelPlugin(fastify, options = {}) {
     tunnelReq.path = fullPath;
     tunnelReq.headers = Object.create(null);
     // Forward relevant headers (skip hop-by-hop)
-    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding']);
+    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'cookie', 'authorization', 'proxy-authorization']);
     for (const [k, v] of Object.entries(request.headers)) {
       if (!skipHeaders.has(k.toLowerCase())) {
         tunnelReq.headers[k] = v;
@@ -178,7 +180,7 @@ export async function tunnelPlugin(fastify, options = {}) {
         pending.delete(id);
         resolve({ status: 504, headers: {}, body: 'Gateway Timeout' });
       }, REQUEST_TIMEOUT);
-      pending.set(id, { resolve, timer });
+      pending.set(id, { resolve, timer, tunnelName: name });
     });
 
     try {
@@ -192,7 +194,7 @@ export async function tunnelPlugin(fastify, options = {}) {
     const res = await responsePromise;
 
     // Set response headers
-    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive']);
+    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive', 'set-cookie']);
     for (const [k, v] of Object.entries(res.headers)) {
       if (!hopHeaders.has(k.toLowerCase())) {
         reply.header(k, v);
