@@ -65,6 +65,9 @@ program
   .option('--no-nostr', 'Disable Nostr relay')
   .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
   .option('--nostr-max-events <n>', 'Max events in relay memory (default: 1000)', parseInt)
+  .option('--webrtc', 'Enable WebRTC signaling server')
+  .option('--no-webrtc', 'Disable WebRTC signaling server')
+  .option('--webrtc-path <path>', 'WebRTC signaling WebSocket path (default: /.webrtc)')
   .option('--activitypub', 'Enable ActivityPub federation')
   .option('--no-activitypub', 'Disable ActivityPub federation')
   .option('--ap-username <name>', 'ActivityPub username (default: me)')
@@ -142,6 +145,8 @@ program
         nostr: config.nostr,
         nostrPath: config.nostrPath,
         nostrMaxEvents: config.nostrMaxEvents,
+        webrtc: config.webrtc,
+        webrtcPath: config.webrtcPath,
         activitypub: config.activitypub,
         apUsername: config.apUsername,
         apDisplayName: config.apDisplayName,
@@ -186,6 +191,7 @@ program
         if (config.solidosUi) console.log('  SolidOS UI: enabled (modern interface)');
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
+        if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
         else if (config.inviteOnly) console.log('  Registration: invite-only');

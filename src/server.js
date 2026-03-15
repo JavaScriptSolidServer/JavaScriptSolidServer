@@ -18,6 +18,7 @@ import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
+import { webrtcPlugin } from './webrtc/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,9 @@ export function createServer(options = {}) {
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
   const nostrMaxEvents = options.nostrMaxEvents ?? 1000;
+  // WebRTC signaling is OFF by default
+  const webrtcEnabled = options.webrtc ?? false;
+  const webrtcPath = options.webrtcPath ?? '/.webrtc';
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -238,6 +242,11 @@ export function createServer(options = {}) {
         maxEvents: nostrMaxEvents
       });
     });
+  }
+
+  // Register WebRTC signaling if enabled
+  if (webrtcEnabled) {
+    fastify.register(webrtcPlugin, { path: webrtcPath });
   }
 
   // Register ActivityPub plugin if enabled
