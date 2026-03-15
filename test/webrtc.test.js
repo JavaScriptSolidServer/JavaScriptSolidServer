@@ -28,7 +28,7 @@ describe('WebRTC Signaling', () => {
     await stopTestServer();
   });
 
-  /** Connect an authenticated WebSocket for a pod user, waits for open */
+  /** Create an authenticated WebSocket for a pod user */
   function connectPeer(podName) {
     const token = getPodToken(podName);
     const ws = new WebSocket(wsUrl, {
@@ -37,7 +37,7 @@ describe('WebRTC Signaling', () => {
     return ws;
   }
 
-  /** Connect and wait for the 'peers' welcome message */
+  /** Connect a peer and wait for the 'peers' welcome message */
   async function connectAndWait(podName) {
     const ws = connectPeer(podName);
     const msg = await waitForMessage(ws, 'peers');

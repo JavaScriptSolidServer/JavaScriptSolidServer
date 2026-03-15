@@ -3,7 +3,7 @@
  *
  * Lightweight signaling server for WebRTC peer-to-peer connections.
  * Relays SDP offers/answers and ICE candidates between authenticated users.
- * The actual media/data flows directly between peers — JSS just introduces them.
+ * The actual media/data flow directly between peers — JSS just introduces them.
  *
  * Usage: jss start --webrtc
  * Endpoint: wss://your.pod/.webrtc
@@ -18,7 +18,9 @@
  *   ← { type: "candidate", from: "<webid>", candidate: {...} }
  *   ← { type: "hangup",    from: "<webid>" }
  *   ← { type: "error",     message: "..." }
- *   ← { type: "peers",     peers: ["<webid>", ...] }
+ *   ← { type: "peers",     you: "<webid>", peers: ["<webid>", ...] }
+ *   ← { type: "peer-joined", webId: "<webid>" }
+ *   ← { type: "peer-left",   webId: "<webid>" }
  */
 
 import websocket from '@fastify/websocket';
@@ -75,6 +77,7 @@ export async function webrtcPlugin(fastify, options = {}) {
 
     // Register this peer (close old connection if reconnecting)
     const existing = peers.get(webId);
+    const isReconnect = !!existing;
     if (existing) {
       peers.delete(webId);
       existing.close();
@@ -89,8 +92,10 @@ export async function webrtcPlugin(fastify, options = {}) {
       peers: [...peers.keys()].filter(id => id !== webId)
     }));
 
-    // Notify other peers that someone came online
-    broadcast(webId, { type: 'peer-joined', webId });
+    // Only broadcast peer-joined for new connections, not reconnects
+    if (!isReconnect) {
+      broadcast(webId, { type: 'peer-joined', webId });
+    }
 
     socket.on('message', (data) => {
       // Enforce max message size (Buffer.byteLength for reliable byte count)
@@ -144,11 +149,8 @@ export async function webrtcPlugin(fastify, options = {}) {
       }
     });
 
-    socket.on('error', () => {
-      if (peers.get(webId) === socket) {
-        peers.delete(webId);
-      }
-    });
+    // Error handler: close event will follow and handle cleanup
+    socket.on('error', () => {});
   });
 }
 
