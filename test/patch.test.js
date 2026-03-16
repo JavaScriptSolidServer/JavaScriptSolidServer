@@ -185,6 +185,52 @@ describe('PATCH Operations', () => {
       assert.ok(data['@graph'], 'Should have @graph');
       assert.strictEqual(data['@graph'].length, 2, 'Should have 2 nodes');
     });
+
+    it('should handle semicolon shorthand and rdf:type "a" keyword', async () => {
+      // Create initial resource with @graph
+      const initial = {
+        '@context': { 'solid': 'http://www.w3.org/ns/solid/terms#' },
+        '@graph': []
+      };
+
+      await request('/patchtest/public/patch-semicolon.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(initial),
+        auth: 'patchtest'
+      });
+
+      // Use semicolons and 'a' keyword (Turtle shorthand)
+      const patch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix wf: <http://www.w3.org/2005/01/wf/flow#>.
+        _:patch a solid:InsertDeletePatch;
+          solid:inserts {
+            <#reg1> a solid:TypeRegistration;
+              solid:forClass wf:Tracker;
+              solid:instance <https://example.com/todo/data.jsonld#this>.
+          }.
+      `;
+
+      const res = await request('/patchtest/public/patch-semicolon.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/n3' },
+        body: patch,
+        auth: 'patchtest'
+      });
+
+      assertStatus(res, 204);
+
+      // Verify all three triples were inserted
+      const verify = await request('/patchtest/public/patch-semicolon.json');
+      const data = await verify.json();
+      const node = data['@graph'].find(n => n['@id'] && n['@id'].includes('#reg1'));
+      assert.ok(node, 'Should have the reg1 node');
+      assert.ok(node['rdf:type'] || node['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'],
+        'Should have rdf:type (from "a" keyword)');
+      assert.ok(node['solid:forClass'], 'Should have solid:forClass');
+      assert.ok(node['solid:instance'], 'Should have solid:instance');
+    });
   });
 
   describe('PATCH Error Handling', () => {

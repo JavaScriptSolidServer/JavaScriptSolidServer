@@ -57,6 +57,7 @@ export function parseN3Patch(patchText, baseUri) {
 
 /**
  * Parse triples from N3 block content
+ * Handles Turtle semicolon shorthand (same subject, different predicate-object)
  */
 function parseTriples(content, prefixes, baseUri) {
   const triples = [];
@@ -68,11 +69,37 @@ function parseTriples(content, prefixes, baseUri) {
   // Split by '.' but be careful with strings containing '.'
   const statements = splitStatements(content);
 
+  let lastSubject = null;
   for (const stmt of statements) {
-    const triple = parseStatement(stmt.trim(), prefixes, baseUri);
-    if (triple) {
-      triples.push(triple);
+    const trimmed = stmt.trim();
+    if (!trimmed) continue;
+
+    const tokens = tokenize(trimmed);
+    if (tokens.length < 2) continue;
+
+    let subject, predicate, object;
+
+    if (tokens.length >= 3) {
+      // Full triple: subject predicate object
+      subject = resolveValue(tokens[0], prefixes, baseUri);
+      predicate = resolveValue(tokens[1], prefixes, baseUri);
+      object = resolveValue(tokens.slice(2).join(' '), prefixes, baseUri);
+      lastSubject = subject;
+    } else if (tokens.length === 2 && lastSubject) {
+      // Semicolon continuation: predicate object (reuse last subject)
+      subject = lastSubject;
+      predicate = resolveValue(tokens[0], prefixes, baseUri);
+      object = resolveValue(tokens[1], prefixes, baseUri);
+    } else {
+      continue;
     }
+
+    // Handle 'a' as rdf:type
+    if (predicate === 'a') {
+      predicate = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
+    }
+
+    triples.push({ subject, predicate, object });
   }
 
   return triples;
@@ -119,23 +146,6 @@ function splitStatements(content) {
   }
 
   return statements;
-}
-
-/**
- * Parse a single N3 statement into a triple
- */
-function parseStatement(stmt, prefixes, baseUri) {
-  if (!stmt) return null;
-
-  // Tokenize - split by whitespace but respect quotes
-  const tokens = tokenize(stmt);
-  if (tokens.length < 3) return null;
-
-  const subject = resolveValue(tokens[0], prefixes, baseUri);
-  const predicate = resolveValue(tokens[1], prefixes, baseUri);
-  const object = resolveValue(tokens.slice(2).join(' '), prefixes, baseUri);
-
-  return { subject, predicate, object };
 }
 
 /**
@@ -430,6 +440,7 @@ function convertToJsonLd(object) {
  * Expand a potentially prefixed predicate to full URI
  */
 function expandPredicate(predicate) {
+  if (predicate === 'a') return 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
   const commonPrefixes = {
     'solid': SOLID_NS,
     'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
