@@ -226,10 +226,25 @@ describe('PATCH Operations', () => {
       const data = await verify.json();
       const node = data['@graph'].find(n => n['@id'] && n['@id'].includes('#reg1'));
       assert.ok(node, 'Should have the reg1 node');
-      assert.ok(node['rdf:type'] || node['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'],
-        'Should have rdf:type (from "a" keyword)');
-      assert.ok(node['solid:forClass'], 'Should have solid:forClass');
-      assert.ok(node['solid:instance'], 'Should have solid:instance');
+
+      // Check rdf:type value (from 'a' keyword)
+      const rdfType = node['rdf:type'] || node['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'];
+      assert.ok(rdfType, 'Should have rdf:type (from "a" keyword)');
+      const typeId = rdfType['@id'] || rdfType;
+      assert.ok(String(typeId).includes('TypeRegistration'), `rdf:type should be TypeRegistration, got ${typeId}`);
+
+      // Check solid:forClass value
+      const forClass = node['solid:forClass'];
+      assert.ok(forClass, 'Should have solid:forClass');
+      const forClassId = forClass['@id'] || forClass;
+      assert.ok(String(forClassId).includes('Tracker'), `solid:forClass should be Tracker, got ${forClassId}`);
+
+      // Check solid:instance value (contains a dot in the IRI - tests IRI splitting)
+      const instance = node['solid:instance'];
+      assert.ok(instance, 'Should have solid:instance');
+      const instanceId = instance['@id'] || instance;
+      assert.strictEqual(instanceId, 'https://example.com/todo/data.jsonld#this',
+        'solid:instance should have full IRI preserved');
     });
   });
 

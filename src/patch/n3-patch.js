@@ -113,11 +113,18 @@ function splitStatements(content) {
   let current = '';
   let inString = false;
   let stringChar = null;
+  let inIri = false;
 
   for (let i = 0; i < content.length; i++) {
     const char = content[i];
 
-    if (!inString && (char === '"' || char === "'")) {
+    if (!inString && !inIri && char === '<') {
+      inIri = true;
+      current += char;
+    } else if (inIri && char === '>') {
+      inIri = false;
+      current += char;
+    } else if (!inIri && !inString && (char === '"' || char === "'")) {
       inString = true;
       stringChar = char;
       current += char;
@@ -125,12 +132,12 @@ function splitStatements(content) {
       inString = false;
       stringChar = null;
       current += char;
-    } else if (!inString && char === '.') {
+    } else if (!inString && !inIri && char === '.') {
       if (current.trim()) {
         statements.push(current);
       }
       current = '';
-    } else if (!inString && char === ';') {
+    } else if (!inString && !inIri && char === ';') {
       // Turtle shorthand - same subject, different predicate
       if (current.trim()) {
         statements.push(current);
@@ -440,7 +447,6 @@ function convertToJsonLd(object) {
  * Expand a potentially prefixed predicate to full URI
  */
 function expandPredicate(predicate) {
-  if (predicate === 'a') return 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type';
   const commonPrefixes = {
     'solid': SOLID_NS,
     'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
