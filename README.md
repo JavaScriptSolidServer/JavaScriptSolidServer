@@ -107,12 +107,12 @@ Full options: [docs/configuration.md](docs/configuration.md)
 
 ## Comparison
 
-| Server | Size | Deps | Notes |
-|--------|------|------|-------|
-| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~18K LoC | 15 | Minimal, JSON-LD native |
-| [NSS](https://github.com/nodeSolidServer/node-solid-server) | ~25K LoC | 58 | Original Solid server |
-| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | ~65K LoC | 70 | Modular, configurable |
-| [Pivot](https://github.com/solid-contrib/pivot) | ~70K LoC | 70+ | Built on CSS |
+| Server | Package | Deps | Packages | node_modules |
+|--------|---------|------|----------|-------------|
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~1 MB | 15 | ~191 | ~77 MB |
+| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | ~6 MB | 68 | ~311 | ~152 MB |
+| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | ~311+ | ~152 MB |
+| [NSS](https://github.com/nodeSolidServer/node-solid-server) | ~7 MB | 62 | ~670 | ~539 MB |
 
 ## Performance
 
