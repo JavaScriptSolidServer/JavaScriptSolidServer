@@ -107,12 +107,12 @@ Full options: [docs/configuration.md](docs/configuration.md)
 
 ## Comparison
 
-| Server | Package | Deps | Packages | node_modules |
-|--------|---------|------|----------|-------------|
-| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~1 MB | 15 | ~191 | ~77 MB |
-| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | ~6 MB | 68 | ~311 | ~152 MB |
-| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | ~311+ | ~152 MB |
-| [NSS](https://github.com/nodeSolidServer/node-solid-server) | ~7 MB | 62 | ~670 | ~539 MB |
+| Server | Package | Packages | node_modules |
+|--------|---------|----------|-------------|
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~1 MB | ~191 | ~77 MB |
+| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | ~6 MB | ~311 | ~152 MB |
+| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | ~311+ | ~152 MB |
+| [NSS](https://github.com/nodeSolidServer/node-solid-server) | ~7 MB | ~670 | ~539 MB |
 
 ## Performance
 
