@@ -53,12 +53,10 @@ program
   .option('--subdomains', 'Enable subdomain-based pods (XSS protection)')
   .option('--no-subdomains', 'Disable subdomain-based pods')
   .option('--base-domain <domain>', 'Base domain for subdomain pods (e.g., "example.com")')
-  .option('--mashlib', 'Enable Mashlib data browser (local mode, requires mashlib in node_modules)')
-  .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode, no local files needed)')
+  .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode)')
   .option('--mashlib-module <url>', 'Enable ES module data browser from a URL')
   .option('--no-mashlib', 'Disable Mashlib data browser')
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
-  .option('--solidos-ui', 'Enable modern Nextcloud-style UI (requires --mashlib)')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
   .option('--nostr', 'Enable Nostr relay')
@@ -143,7 +141,6 @@ program
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
         mashlibModule: config.mashlibModule,
-        solidosUi: config.solidosUi,
         git: config.git,
         nostr: config.nostr,
         nostrPath: config.nostrPath,
@@ -193,7 +190,6 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
-        if (config.solidosUi) console.log('  SolidOS UI: enabled (modern interface)');
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
