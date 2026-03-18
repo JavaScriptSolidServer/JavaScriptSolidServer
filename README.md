@@ -91,13 +91,18 @@ Full options: [docs/configuration.md](docs/configuration.md)
 |-------|------|
 | Configuration & Options | [docs/configuration.md](docs/configuration.md) |
 | Authentication | [docs/authentication.md](docs/authentication.md) |
+| Mashlib / SolidOS UI | [docs/mashlib.md](docs/mashlib.md) |
+| WebSocket Notifications | [docs/notifications.md](docs/notifications.md) |
 | Git Support | [docs/git-support.md](docs/git-support.md) |
+| Nostr Relay | [docs/nostr.md](docs/nostr.md) |
 | ActivityPub & Mastodon API | [docs/activitypub.md](docs/activitypub.md) |
 | remoteStorage | [docs/remotestorage.md](docs/remotestorage.md) |
-| Security & Subdomain Mode | [docs/security.md](docs/security.md) |
-| HTTP 402 Payments | [docs/payments.md](docs/payments.md) |
 | WebRTC & Tunnel | [docs/webrtc.md](docs/webrtc.md) |
 | MongoDB `/db/` Route | [docs/mongodb.md](docs/mongodb.md) |
+| HTTP 402 Payments | [docs/payments.md](docs/payments.md) |
+| Storage Quotas | [docs/quotas.md](docs/quotas.md) |
+| Invite-Only Registration | [docs/invites.md](docs/invites.md) |
+| Security & Subdomain Mode | [docs/security.md](docs/security.md) |
 | Architecture & Structure | [docs/architecture.md](docs/architecture.md) |
 
 ## Comparison
