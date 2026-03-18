@@ -15,7 +15,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, generateSolidosUiHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -230,12 +230,9 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
-      // Use SolidOS UI if enabled, ES module if configured, otherwise classic mashlib
-      const html = request.solidosUiEnabled
-        ? generateSolidosUiHtml()
-        : request.mashlibModule
-          ? generateModuleDatabrowserHtml(request.mashlibModule)
-          : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+      const html = request.mashlibModule
+        ? generateModuleDatabrowserHtml(request.mashlibModule)
+        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -309,12 +306,9 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
-    // Use SolidOS UI if enabled, ES module if configured, otherwise classic mashlib
-    const html = request.solidosUiEnabled
-      ? generateSolidosUiHtml()
-      : request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule)
-        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+    const html = request.mashlibModule
+      ? generateModuleDatabrowserHtml(request.mashlibModule)
+      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,

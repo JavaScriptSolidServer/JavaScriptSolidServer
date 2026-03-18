@@ -62,14 +62,11 @@ export function createServer(options = {}) {
   const subdomainsEnabled = options.subdomains ?? false;
   const baseDomain = options.baseDomain || null;
   // Mashlib data browser is OFF by default
-  // mashlibCdn: if true, load from CDN; if false, serve locally
-  // mashlibModule: URL to ES module entry point (alternative to classic mashlib)
+  // mashlibCdn: load from CDN; mashlibModule: URL to ES module entry point
   const mashlibModule = options.mashlibModule ?? false;
-  const mashlibEnabled = options.mashlib || !!mashlibModule;
   const mashlibCdn = options.mashlibCdn ?? false;
+  const mashlibEnabled = mashlibCdn || !!mashlibModule;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
-  // SolidOS UI (modern Nextcloud-style interface) - requires mashlib
-  const solidosUiEnabled = options.solidosUi ?? false;
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
   // Nostr relay is OFF by default
@@ -179,7 +176,6 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
   fastify.decorateRequest('mashlibModule', null);
-  fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('config', null);
   fastify.decorateRequest('liveReloadEnabled', null);
@@ -193,7 +189,6 @@ export function createServer(options = {}) {
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
     request.mashlibModule = mashlibModule;
-    request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
     request.config = { public: options.public, readOnly: options.readOnly };
     request.liveReloadEnabled = liveReloadEnabled;
@@ -410,7 +405,7 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, solidos-ui, well-known, notifications, nostr, git, and AP
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
     const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following',
       '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials',
@@ -424,7 +419,6 @@ export function createServer(options = {}) {
         request.method === 'OPTIONS' ||
         request.url.startsWith('/idp/') ||
         request.url.startsWith('/.well-known/') ||
-        request.url.startsWith('/solidos-ui/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
@@ -464,72 +458,15 @@ export function createServer(options = {}) {
     }
   }, handleCreatePod);
 
-  // Mashlib static files (served from root like NSS does)
-  if (mashlibEnabled) {
-    if (mashlibCdn) {
-      // CDN mode: redirect chunk requests to CDN
-      // Mashlib uses code splitting, so it loads chunks like 789.mashlib.min.js
-      const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
-      const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
+  // Mashlib CDN mode: redirect chunk requests to CDN
+  if (mashlibEnabled && mashlibCdn) {
+    const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
+    const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
 
-      fastify.addHook('onRequest', async (request, reply) => {
-        if (chunkPattern.test(request.url)) {
-          const filename = request.url.split('/').pop();
-          return reply.redirect(302, `${cdnBase}/${filename}`);
-        }
-      });
-    } else {
-      // Local mode: serve from local files
-      const mashlibDir = join(__dirname, 'mashlib-local', 'dist');
-      const mashlibFiles = {
-        '/mashlib.min.js': { file: 'mashlib.min.js', type: 'application/javascript' },
-        '/mashlib.min.js.map': { file: 'mashlib.min.js.map', type: 'application/json' },
-        '/mash.css': { file: 'mash.css', type: 'text/css' },
-        '/mash.css.map': { file: 'mash.css.map', type: 'application/json' },
-        '/841.mashlib.min.js': { file: '841.mashlib.min.js', type: 'application/javascript' },
-        '/841.mashlib.min.js.map': { file: '841.mashlib.min.js.map', type: 'application/json' }
-      };
-
-      for (const [path, config] of Object.entries(mashlibFiles)) {
-        fastify.get(path, async (request, reply) => {
-          try {
-            const content = await readFile(join(mashlibDir, config.file));
-            return reply.type(config.type).send(content);
-          } catch {
-            return reply.code(404).send({ error: 'Not Found' });
-          }
-        });
-      }
-    }
-  }
-
-  // SolidOS UI static files (modern Nextcloud-style interface)
-  // Serves from /solidos-ui/* - requires mashlib to be enabled as well
-  if (solidosUiEnabled && mashlibEnabled) {
-    const solidosUiDir = join(__dirname, 'mashlib-local', 'dist', 'solidos-ui');
-
-    // Serve all files under /solidos-ui/* path
-    fastify.get('/solidos-ui/*', async (request, reply) => {
-      try {
-        // Get the path after /solidos-ui/
-        const filePath = request.url.replace('/solidos-ui/', '').split('?')[0];
-        const fullPath = join(solidosUiDir, filePath);
-
-        // Determine content type based on extension
-        const ext = filePath.split('.').pop()?.toLowerCase();
-        const contentTypes = {
-          'js': 'application/javascript',
-          'css': 'text/css',
-          'map': 'application/json',
-          'html': 'text/html'
-        };
-        const contentType = contentTypes[ext] || 'application/octet-stream';
-
-        const content = await readFile(fullPath);
-        return reply.type(contentType).send(content);
-      } catch (err) {
-        request.log.error(err, 'Failed to serve solidos-ui file');
-        return reply.code(404).send({ error: 'Not Found' });
+    fastify.addHook('onRequest', async (request, reply) => {
+      if (chunkPattern.test(request.url)) {
+        const filename = request.url.split('/').pop();
+        return reply.redirect(302, `${cdnBase}/${filename}`);
       }
     });
   }
