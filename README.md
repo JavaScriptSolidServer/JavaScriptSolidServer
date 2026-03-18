@@ -104,10 +104,10 @@ Full options: [docs/configuration.md](docs/configuration.md)
 
 | Server | Size | Deps | Notes |
 |--------|------|------|-------|
-| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~14K LoC | 14 | Minimal, JSON-LD native |
-| [NSS](https://github.com/nodeSolidServer/node-solid-server) | 777 KB | 58 | Original Solid server |
-| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | 5.8 MB | 70 | Modular, configurable |
-| [Pivot](https://github.com/solid-contrib/pivot) | ~6 MB | 70+ | Built on CSS |
+| [JSS](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer) | ~18K LoC | 15 | Minimal, JSON-LD native |
+| [NSS](https://github.com/nodeSolidServer/node-solid-server) | ~25K LoC | 58 | Original Solid server |
+| [CSS](https://github.com/CommunitySolidServer/CommunitySolidServer) | ~65K LoC | 70 | Modular, configurable |
+| [Pivot](https://github.com/solid-contrib/pivot) | ~70K LoC | 70+ | Built on CSS |
 
 ## Performance
 
