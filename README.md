@@ -222,6 +222,22 @@ Then: `jss start --config config.json`
 
 ### Creating a Pod
 
+```bash
+curl -X POST http://localhost:3000/.pods \
+  -H "Content-Type: application/json" \
+  -d '{"name": "alice"}'
+```
+
+Response:
+```json
+{
+  "name": "alice",
+  "webId": "http://localhost:3000/alice/#me",
+  "podUri": "http://localhost:3000/alice/",
+  "token": "eyJ..."
+}
+```
+
 ### Single-User Mode
 
 For personal pod servers where only one user needs access:
@@ -241,27 +257,10 @@ JSS_SINGLE_USER=true jss start --idp
 ```
 
 **Features:**
-- Pod auto-created on first startup with full structure (inbox, public, private, profile, Settings)
+- Pod auto-created on first startup with full structure (inbox, public, private, profile)
 - Registration endpoint disabled (returns 403)
 - Login still works for the single user
 - Proper ACLs generated automatically
-
-
-```bash
-curl -X POST http://localhost:3000/.pods \
-  -H "Content-Type: application/json" \
-  -d '{"name": "alice"}'
-```
-
-Response:
-```json
-{
-  "name": "alice",
-  "webId": "http://localhost:3000/alice/#me",
-  "podUri": "http://localhost:3000/alice/",
-  "token": "eyJ..."
-}
-```
 
 ### Using the Pod
 
@@ -774,6 +773,17 @@ jss quota show alice
 jss quota reconcile alice
 ```
 
+### How It Works
+
+- Quotas are tracked incrementally on PUT, POST, and DELETE operations
+- When quota is exceeded, the server returns HTTP 507 Insufficient Storage
+- Each pod stores its quota in `/{pod}/.quota.json`
+- Use `reconcile` to fix quota drift from manual file changes
+
+### Size Formats
+
+Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
+
 ## MongoDB Storage (`/db/` Route)
 
 Optional MongoDB-backed route for JSON-LD documents that need scale (social feeds, posts, follows). All other routes continue using the filesystem unchanged.
@@ -816,17 +826,6 @@ curl -X DELETE http://localhost:3000/db/alice/notes/1 \
 - Container listings are computed from URI prefix queries — no directory management needed
 - Auth: pod owner can write (`/db/{podName}/...`), reads are public
 - MongoDB is an optional dependency — the server runs without it
-
-### How It Works
-
-- Quotas are tracked incrementally on PUT, POST, and DELETE operations
-- When quota is exceeded, the server returns HTTP 507 Insufficient Storage
-- Each pod stores its quota in `/{pod}/.quota.json`
-- Use `reconcile` to fix quota drift from manual file changes
-
-### Size Formats
-
-Supported formats: `50MB`, `1GB`, `500KB`, `1TB`
 
 ## WebRTC Signaling
 
