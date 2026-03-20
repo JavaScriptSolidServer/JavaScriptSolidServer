@@ -220,7 +220,11 @@ export async function webrtcPlugin(fastify, options = {}) {
   fastify.get(path, { websocket: true }, async (connection, request) => {
     const socket = connection.socket;
 
-    // Authenticate the connection
+    // Authenticate the connection (support query param for browser WebSocket which can't set headers)
+    const queryToken = request.query?.token;
+    if (queryToken && !request.headers.authorization) {
+      request.headers.authorization = `Bearer ${queryToken}`;
+    }
     const { webId } = await getWebIdFromRequestAsync(request);
     if (!webId) {
       socket.send(JSON.stringify({ type: 'error', message: 'Authentication required' }));
