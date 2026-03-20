@@ -45,6 +45,10 @@ const MAX_OFFERS_PER_ANNOUNCE = 10;
 const MAX_RESOURCES_PER_PEER = 50;
 const RESOURCE_HASH_RE = /^[a-fA-F0-9]{8,128}$/;
 
+// WebTorrent tracker uses 20-byte binary strings for info_hash and peer_id
+function bin2hex(s) { return Buffer.from(s, 'binary').toString('hex'); }
+function hex2bin(s) { return Buffer.from(s, 'hex').toString('binary'); }
+
 /**
  * Register WebRTC signaling routes on Fastify instance
  *
@@ -215,50 +219,120 @@ export async function webrtcPlugin(fastify, options = {}) {
     removePeerFromResource(peerId, hash);
   }
 
+  // --- WebTorrent tracker protocol handler ---
+
+  function handleWebtorrentAnnounce(socket, peerId, msg) {
+    const infoHash = typeof msg.info_hash === 'string' && msg.info_hash.length === 20
+      ? bin2hex(msg.info_hash) : msg.info_hash;
+    const msgPeerId = typeof msg.peer_id === 'string' && msg.peer_id.length === 20
+      ? bin2hex(msg.peer_id) : msg.peer_id;
+
+    if (!infoHash || typeof infoHash !== 'string') {
+      socket.send(JSON.stringify({ action: 'announce', 'failure reason': 'invalid info_hash' }));
+      return;
+    }
+
+    // Use info_hash as resource hash for our swarm infrastructure
+    const group = getResourcePeers(infoHash);
+    addPeerToResource(peerId, socket, infoHash);
+    socket._wtPeerId = msgPeerId || peerId;
+
+    // Handle answer relay
+    if (msg.answer && msg.to_peer_id) {
+      const toPeerId = typeof msg.to_peer_id === 'string' && msg.to_peer_id.length === 20
+        ? bin2hex(msg.to_peer_id) : msg.to_peer_id;
+
+      // Find the target peer by their WebTorrent peer_id
+      for (const [id, peerSocket] of group) {
+        if (peerSocket._wtPeerId === toPeerId && peerSocket.readyState === 1) {
+          try {
+            peerSocket.send(JSON.stringify({
+              action: 'announce',
+              answer: msg.answer,
+              offer_id: msg.offer_id,
+              peer_id: typeof msg.peer_id === 'string' && msg.peer_id.length === 20
+                ? msg.peer_id : hex2bin(msgPeerId || peerId),
+              info_hash: typeof msg.info_hash === 'string' && msg.info_hash.length === 20
+                ? msg.info_hash : hex2bin(infoHash)
+            }));
+          } catch { /* peer gone */ }
+          break;
+        }
+      }
+      return; // Don't send response for answers
+    }
+
+    // Relay offers to existing peers in the group
+    if (Array.isArray(msg.offers) && msg.offers.length > 0) {
+      const existingPeers = [...group.entries()].filter(([id]) => id !== peerId);
+      for (let i = 0; i < msg.offers.length && i < existingPeers.length; i++) {
+        const [, targetSocket] = existingPeers[i];
+        if (targetSocket.readyState !== 1) continue;
+        try {
+          targetSocket.send(JSON.stringify({
+            action: 'announce',
+            offer: msg.offers[i].offer,
+            offer_id: msg.offers[i].offer_id,
+            peer_id: typeof msg.peer_id === 'string' && msg.peer_id.length === 20
+              ? msg.peer_id : hex2bin(msgPeerId || peerId),
+            info_hash: typeof msg.info_hash === 'string' && msg.info_hash.length === 20
+              ? msg.info_hash : hex2bin(infoHash)
+          }));
+        } catch { /* peer gone */ }
+      }
+    }
+
+    // Send announce response
+    const response = {
+      action: 'announce',
+      info_hash: typeof msg.info_hash === 'string' && msg.info_hash.length === 20
+        ? msg.info_hash : hex2bin(infoHash),
+      complete: 0,
+      incomplete: group.size,
+      interval: 120
+    };
+    socket.send(JSON.stringify(response));
+  }
+
   // --- WebSocket handler ---
 
   fastify.get(path, { websocket: true }, async (connection, request) => {
     const socket = connection.socket;
 
     // Authenticate the connection (support query param for browser WebSocket which can't set headers)
+    // Auth is optional — unauthenticated clients can use the tracker protocol but not identity-based signaling
     const queryToken = request.query?.token;
     if (queryToken && !request.headers.authorization) {
       request.headers.authorization = `Bearer ${queryToken}`;
     }
     const { webId } = await getWebIdFromRequestAsync(request);
-    if (!webId) {
-      socket.send(JSON.stringify({ type: 'error', message: 'Authentication required' }));
-      socket.close();
-      return;
-    }
 
-    // Assign a stable peer ID for content-addressed mode
+    // Assign a stable peer ID for content-addressed/tracker mode
     const peerId = String(nextPeerId++);
     socket._peerId = peerId;
 
-    // Register this peer (close old connection if reconnecting)
-    const existing = peers.get(webId);
-    const isReconnect = !!existing;
-    if (existing) {
-      // Clean up old connection's resource memberships
-      if (existing._peerId) removePeerFromAllResources(existing._peerId);
-      peers.delete(webId);
-      existing.close();
-    }
-    peers.set(webId, socket);
-    socket.webId = webId;
+    if (webId) {
+      // Authenticated: register for identity-based signaling
+      const existing = peers.get(webId);
+      const isReconnect = !!existing;
+      if (existing) {
+        if (existing._peerId) removePeerFromAllResources(existing._peerId);
+        peers.delete(webId);
+        existing.close();
+      }
+      peers.set(webId, socket);
+      socket.webId = webId;
 
-    // Notify the peer of their identity and online peers
-    socket.send(JSON.stringify({
-      type: 'peers',
-      you: webId,
-      peerId: peerId,
-      peers: [...peers.keys()].filter(id => id !== webId)
-    }));
+      socket.send(JSON.stringify({
+        type: 'peers',
+        you: webId,
+        peerId: peerId,
+        peers: [...peers.keys()].filter(id => id !== webId)
+      }));
 
-    // Only broadcast peer-joined for new connections, not reconnects
-    if (!isReconnect) {
-      broadcast(webId, { type: 'peer-joined', webId });
+      if (!isReconnect) {
+        broadcast(webId, { type: 'peer-joined', webId });
+      }
     }
 
     socket.on('message', (data) => {
@@ -274,6 +348,12 @@ export async function webrtcPlugin(fastify, options = {}) {
         msg = JSON.parse(raw.toString());
       } catch {
         socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+        return;
+      }
+
+      // WebTorrent tracker protocol (uses 'action' instead of 'type')
+      if (msg.action === 'announce') {
+        handleWebtorrentAnnounce(socket, peerId, msg);
         return;
       }
 
@@ -296,7 +376,11 @@ export async function webrtcPlugin(fastify, options = {}) {
         return;
       }
 
-      // Identity-based messages require "to" field
+      // Identity-based messages require authentication and "to" field
+      if (!webId) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Authentication required for identity-based signaling' }));
+        return;
+      }
       if (!msg.to) {
         socket.send(JSON.stringify({ type: 'error', message: 'Missing "to" field' }));
         return;

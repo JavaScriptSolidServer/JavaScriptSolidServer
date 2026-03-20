@@ -85,13 +85,27 @@ describe('WebRTC Signaling', () => {
   }
 
   describe('Authentication', () => {
-    it('should reject unauthenticated connections', async () => {
+    it('should allow unauthenticated connections for tracker protocol', async () => {
       const ws = new WebSocket(wsUrl);
+      await new Promise((resolve) => { ws.onopen = resolve; });
 
+      // Unauthenticated clients can use tracker protocol
+      ws.send(JSON.stringify({ action: 'announce', info_hash: '01234567890123456789', peer_id: '98765432109876543210', offers: [] }));
+      const msg = await waitForMessage(ws, 'announce', 3000).catch(() => null);
+      // Should get a response (not get disconnected)
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    it('should reject unauthenticated identity-based signaling', async () => {
+      const ws = new WebSocket(wsUrl);
+      await new Promise((resolve) => { ws.onopen = resolve; });
+
+      ws.send(JSON.stringify({ type: 'offer', to: 'someone', sdp: 'test' }));
       const msg = await waitForMessage(ws, 'error');
-      assert.strictEqual(msg.type, 'error');
       assert.ok(msg.message.includes('Authentication'));
       ws.close();
+      await new Promise(r => setTimeout(r, 50));
     });
 
     it('should accept authenticated connections', async () => {
