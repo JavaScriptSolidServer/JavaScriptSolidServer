@@ -126,19 +126,28 @@ export async function createContainer(urlPath) {
 }
 
 /**
- * List container contents
+ * List container contents with stat metadata
  * @param {string} urlPath
- * @returns {Promise<Array<{name: string, isDirectory: boolean}> | null>}
+ * @returns {Promise<Array<{name: string, isDirectory: boolean, size?: number, modified?: string}> | null>}
  */
 export async function listContainer(urlPath) {
   const filePath = urlToPath(urlPath);
 
   try {
     const entries = await fs.readdir(filePath, { withFileTypes: true });
-    return entries.map(entry => ({
-      name: entry.name,
-      isDirectory: entry.isDirectory()
+    const results = await Promise.all(entries.map(async (entry) => {
+      const result = {
+        name: entry.name,
+        isDirectory: entry.isDirectory()
+      };
+      try {
+        const stat = await fs.stat(path.join(filePath, entry.name));
+        result.size = stat.size;
+        result.modified = stat.mtime.toISOString();
+      } catch { /* stat failed, skip metadata */ }
+      return result;
     }));
+    return results;
   } catch {
     return null;
   }
