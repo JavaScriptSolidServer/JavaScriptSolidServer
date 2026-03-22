@@ -210,7 +210,8 @@ export function getContentType(filePath) {
     '.nt': 'application/n-triples',
     '.rdf': 'application/rdf+xml',
     '.nq': 'application/n-quads',
-    '.trig': 'application/trig'
+    '.trig': 'application/trig',
+    '.md': 'text/markdown'
   };
   return types[ext] || 'application/octet-stream';
 }
