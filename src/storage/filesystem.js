@@ -128,7 +128,7 @@ export async function createContainer(urlPath) {
 /**
  * List container contents with stat metadata
  * @param {string} urlPath
- * @returns {Promise<Array<{name: string, isDirectory: boolean, size: number, modified: string}> | null>}
+ * @returns {Promise<Array<{name: string, isDirectory: boolean, size?: number, modified?: string}> | null>}
  */
 export async function listContainer(urlPath) {
   const filePath = urlToPath(urlPath);
