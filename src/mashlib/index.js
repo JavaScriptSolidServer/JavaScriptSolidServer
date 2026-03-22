@@ -105,7 +105,10 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     'text/n3',
     'application/n-triples',
     'application/rdf+xml',
-    'text/markdown'
+    'text/markdown',
+    'audio/mpegurl',
+    'application/vnd.apple.mpegurl',
+    'audio/x-scpls'
   ];
 
   const baseType = contentType.split(';')[0].trim().toLowerCase();

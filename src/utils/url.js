@@ -211,7 +211,10 @@ export function getContentType(filePath) {
     '.rdf': 'application/rdf+xml',
     '.nq': 'application/n-quads',
     '.trig': 'application/trig',
-    '.md': 'text/markdown'
+    '.md': 'text/markdown',
+    '.m3u': 'audio/mpegurl',
+    '.m3u8': 'application/vnd.apple.mpegurl',
+    '.pls': 'audio/x-scpls'
   };
   return types[ext] || 'application/octet-stream';
 }
