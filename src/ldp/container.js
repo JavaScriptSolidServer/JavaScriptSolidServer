@@ -16,15 +16,20 @@ export function generateContainerJsonLd(containerUrl, entries) {
 
   const contains = entries.map(entry => {
     const childUrl = baseUrl + entry.name + (entry.isDirectory ? '/' : '');
-    return {
+    const item = {
       '@id': childUrl,
       '@type': entry.isDirectory ? [`${LDP}Container`, `${LDP}BasicContainer`, `${LDP}Resource`] : [`${LDP}Resource`]
     };
+    if (entry.size != null) item['stat:size'] = entry.size;
+    if (entry.modified) item['dcterms:modified'] = entry.modified;
+    return item;
   });
 
   return {
     '@context': {
       'ldp': LDP,
+      'stat': 'http://www.w3.org/ns/posix/stat#',
+      'dcterms': 'http://purl.org/dc/terms/',
       'contains': { '@id': 'ldp:contains', '@type': '@id' }
     },
     '@id': baseUrl,
