@@ -48,7 +48,7 @@ export async function terminalPlugin(fastify, options = {}) {
   });
 
   fastify.get(wsPath, { websocket: true }, async (connection, request) => {
-    const socket = connection.socket;
+    const socket = connection.socket || connection;
 
     // Authenticate — query param token support for browser WebSocket
     const queryToken = request.query?.token;
@@ -57,14 +57,15 @@ export async function terminalPlugin(fastify, options = {}) {
     }
     const { webId } = await getWebIdFromRequestAsync(request);
 
-    if (!webId) {
+    if (!webId && !options.public) {
       socket.send(JSON.stringify({ type: 'error', message: 'Authentication required' }));
       socket.close();
       return;
     }
 
     // Spawn shell
-    const shell = spawn('/bin/sh', [], {
+    const shellCommand = process.env.SHELL || 'bash';
+    const shell = spawn(shellCommand, ['-i'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, TERM: 'xterm-256color' },
     });
@@ -74,14 +75,14 @@ export async function terminalPlugin(fastify, options = {}) {
     // Pipe shell stdout to WebSocket
     shell.stdout.on('data', (data) => {
       if (socket.readyState === 1) {
-        try { socket.send(data); } catch { /* socket closed */ }
+        try { socket.send(data.toString().replace(/\r?\n/g, '\r\n')); } catch { /* socket closed */ }
       }
     });
 
     // Pipe shell stderr to WebSocket
     shell.stderr.on('data', (data) => {
       if (socket.readyState === 1) {
-        try { socket.send(data); } catch { /* socket closed */ }
+        try { socket.send(data.toString().replace(/\r?\n/g, '\r\n')); } catch { /* socket closed */ }
       }
     });
 

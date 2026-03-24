@@ -253,7 +253,7 @@ export function createServer(options = {}) {
 
   // Register terminal (WebSocket shell) if enabled
   if (terminalEnabled) {
-    fastify.register(terminalPlugin, { path: '/.terminal' });
+    fastify.register(terminalPlugin, { path: '/.terminal', public: options.public || false });
   }
 
   // Register tunnel proxy if enabled
