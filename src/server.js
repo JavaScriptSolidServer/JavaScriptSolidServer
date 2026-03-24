@@ -20,6 +20,7 @@ import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
 import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
+import { terminalPlugin } from './terminal/index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -76,6 +77,8 @@ export function createServer(options = {}) {
   // WebRTC signaling is OFF by default
   const webrtcEnabled = options.webrtc ?? false;
   const webrtcPath = options.webrtcPath ?? '/.webrtc';
+  // Terminal (WebSocket shell) is OFF by default
+  const terminalEnabled = options.terminal ?? false;
   // Tunnel proxy is OFF by default
   const tunnelEnabled = options.tunnel ?? false;
   const tunnelPath = options.tunnelPath ?? '/.tunnel';
@@ -248,6 +251,11 @@ export function createServer(options = {}) {
     fastify.register(webrtcPlugin, { path: webrtcPath });
   }
 
+  // Register terminal (WebSocket shell) if enabled
+  if (terminalEnabled) {
+    fastify.register(terminalPlugin, { path: '/.terminal' });
+  }
+
   // Register tunnel proxy if enabled
   if (tunnelEnabled) {
     fastify.register(tunnelPlugin, { path: tunnelPath });
@@ -352,6 +360,9 @@ export function createServer(options = {}) {
     if (webrtcEnabled && urlNoQuery === webrtcPath) {
       return;
     }
+    if (terminalEnabled && urlNoQuery === '/.terminal') {
+      return;
+    }
 
     const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
     const hasForbiddenDotfile = segments.some(seg =>
@@ -427,6 +438,7 @@ export function createServer(options = {}) {
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
         (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
+        (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;

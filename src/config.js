@@ -55,6 +55,9 @@ export const defaults = {
   webrtc: false,
   webrtcPath: '/.webrtc',
 
+  // Terminal (WebSocket shell access)
+  terminal: false,
+
   // Tunnel (decentralized ngrok)
   tunnel: false,
   tunnelPath: '/.tunnel',
@@ -140,6 +143,7 @@ const envMap = {
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
   JSS_WEBRTC: 'webrtc',
   JSS_WEBRTC_PATH: 'webrtcPath',
+  JSS_TERMINAL: 'terminal',
   JSS_TUNNEL: 'tunnel',
   JSS_TUNNEL_PATH: 'tunnelPath',
   JSS_ACTIVITYPUB: 'activitypub',
