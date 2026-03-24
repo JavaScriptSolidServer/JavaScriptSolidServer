@@ -64,7 +64,8 @@ export async function terminalPlugin(fastify, options = {}) {
     }
 
     // Spawn shell
-    const shell = spawn('/bin/bash', ['-i'], {
+    const shellCommand = process.env.SHELL || 'bash';
+    const shell = spawn(shellCommand, ['-i'], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, TERM: 'xterm-256color' },
     });
@@ -74,14 +75,14 @@ export async function terminalPlugin(fastify, options = {}) {
     // Pipe shell stdout to WebSocket
     shell.stdout.on('data', (data) => {
       if (socket.readyState === 1) {
-        try { socket.send(data.toString().replace(/\n/g, '\r\n')); } catch { /* socket closed */ }
+        try { socket.send(data.toString().replace(/\r?\n/g, '\r\n')); } catch { /* socket closed */ }
       }
     });
 
     // Pipe shell stderr to WebSocket
     shell.stderr.on('data', (data) => {
       if (socket.readyState === 1) {
-        try { socket.send(data.toString().replace(/\n/g, '\r\n')); } catch { /* socket closed */ }
+        try { socket.send(data.toString().replace(/\r?\n/g, '\r\n')); } catch { /* socket closed */ }
       }
     });
 
