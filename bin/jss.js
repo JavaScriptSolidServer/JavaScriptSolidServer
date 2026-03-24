@@ -6,6 +6,7 @@
  * Usage:
  *   jss start [options]    Start the server
  *   jss init               Initialize configuration
+ *   jss passwd <username>  Change user password
  */
 
 import { Command } from 'commander';
@@ -14,6 +15,7 @@ import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js'
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
 import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
 import { parseSize } from '../src/config.js';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -66,6 +68,8 @@ program
   .option('--webrtc', 'Enable WebRTC signaling server')
   .option('--no-webrtc', 'Disable WebRTC signaling server')
   .option('--webrtc-path <path>', 'WebRTC signaling WebSocket path (default: /.webrtc)')
+  .option('--terminal', 'Enable WebSocket terminal (shell access)')
+  .option('--no-terminal', 'Disable WebSocket terminal')
   .option('--tunnel', 'Enable tunnel proxy (decentralized ngrok)')
   .option('--no-tunnel', 'Disable tunnel proxy')
   .option('--tunnel-path <path>', 'Tunnel WebSocket path (default: /.tunnel)')
@@ -147,6 +151,7 @@ program
         nostrMaxEvents: config.nostrMaxEvents,
         webrtc: config.webrtc,
         webrtcPath: config.webrtcPath,
+        terminal: config.terminal,
         tunnel: config.tunnel,
         tunnelPath: config.tunnelPath,
         activitypub: config.activitypub,
@@ -193,6 +198,7 @@ program
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
+        if (config.terminal) console.log('  Terminal: enabled (/.terminal)');
         if (config.tunnel) console.log(`  Tunnel: enabled (${config.tunnelPath || '/.tunnel'})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
@@ -615,6 +621,134 @@ tokenCmd
       process.exit(1);
     }
   });
+
+/**
+ * Passwd command - change a user's password
+ */
+program
+  .command('passwd <username>')
+  .description('Change password for a user account')
+  .option('-p, --password <password>', 'New password (non-interactive)')
+  .option('-g, --generate', 'Generate a random password')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      // Load account by username
+      const dataRoot = process.env.DATA_ROOT || './data';
+      const accountsDir = path.join(dataRoot, '.idp', 'accounts');
+      const indexPath = path.join(accountsDir, '_username_index.json');
+
+      let usernameIndex;
+      try {
+        usernameIndex = await fs.readJson(indexPath);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          console.error(`Error: No accounts found (missing ${indexPath})`);
+          process.exit(1);
+        }
+        throw err;
+      }
+
+      const normalizedUsername = username.toLowerCase().trim();
+      const accountId = usernameIndex[normalizedUsername];
+      if (!accountId) {
+        console.error(`Error: User not found: ${username}`);
+        process.exit(1);
+      }
+
+      const accountPath = path.join(accountsDir, `${accountId}.json`);
+      const account = await fs.readJson(accountPath);
+
+      // Determine new password
+      let newPassword;
+
+      if (options.generate) {
+        newPassword = crypto.randomBytes(16).toString('base64url');
+      } else if (options.password) {
+        newPassword = options.password;
+      } else {
+        // Interactive prompt
+        newPassword = await promptPassword('New password: ');
+        const confirm = await promptPassword('Confirm password: ');
+        if (newPassword !== confirm) {
+          console.error('Error: Passwords do not match');
+          process.exit(1);
+        }
+      }
+
+      if (!newPassword) {
+        console.error('Error: Password cannot be empty');
+        process.exit(1);
+      }
+
+      // Hash and save
+      const bcrypt = await import('bcryptjs').then(m => m.default);
+      account.passwordHash = await bcrypt.hash(newPassword, 10);
+      account.passwordChangedAt = new Date().toISOString();
+      await fs.writeJson(accountPath, account, { spaces: 2 });
+
+      if (options.generate) {
+        console.log(`\nPassword updated for ${normalizedUsername}`);
+        console.log(`Generated password: ${newPassword}\n`);
+      } else {
+        console.log(`\nPassword updated for ${normalizedUsername}\n`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Helper: Prompt for a password (hidden input)
+ */
+async function promptPassword(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolve) => {
+    // Disable echo for password input
+    if (process.stdin.isTTY) {
+      process.stdout.write(`  ${question}`);
+      const stdin = process.openStdin();
+      process.stdin.setRawMode(true);
+      let password = '';
+      const onData = (ch) => {
+        const c = ch.toString('utf8');
+        if (c === '\n' || c === '\r' || c === '\u0004') {
+          process.stdin.setRawMode(false);
+          process.stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          rl.close();
+          resolve(password);
+        } else if (c === '\u0003') {
+          // Ctrl+C
+          process.exit(0);
+        } else if (c === '\u007f' || c === '\b') {
+          // Backspace
+          if (password.length > 0) {
+            password = password.slice(0, -1);
+          }
+        } else {
+          password += c;
+        }
+      };
+      process.stdin.on('data', onData);
+    } else {
+      // Non-TTY: read line normally (piped input)
+      rl.question(`  ${question}`, (answer) => {
+        rl.close();
+        resolve(answer.trim());
+      });
+    }
+  });
+}
 
 /**
  * Helper: Prompt for input
