@@ -24,6 +24,8 @@ A minimal, fast, JSON-LD native Solid server.
 - **MongoDB Storage** — Optional `/db/` route for JSON-LD at scale
 - **WebRTC Signaling** — Peer-to-peer connections via WebID-authenticated signaling
 - **Tunnel Proxy** — Decentralized ngrok through your pod
+- **Terminal** — WebSocket shell access via `--terminal`
+- **Password CLI** — `jss passwd` for user password management
 - **HTTP 402 Payments** — Monetize endpoints with per-request sat payments
 - **Mashlib / SolidOS UI** — Optional data browser (CDN, local, or ES module)
 - **Storage Quotas** — Per-user limits with CLI management
@@ -79,9 +81,10 @@ jss start [options]    # Start the server
 jss init [options]     # Initialize configuration
 jss invite <cmd>       # Manage invite codes
 jss quota <cmd>        # Manage storage quotas
+jss passwd <username>  # Manage user passwords
 ```
 
-Key options: `--port`, `--idp`, `--conneg`, `--mashlib`, `--git`, `--nostr`, `--activitypub`, `--webrtc`, `--tunnel`, `--mongo`, `--pay`, `--public`, `--single-user`
+Key options: `--port`, `--idp`, `--conneg`, `--mashlib`, `--git`, `--nostr`, `--activitypub`, `--webrtc`, `--tunnel`, `--terminal`, `--mongo`, `--pay`, `--public`, `--single-user`
 
 Full options: [docs/configuration.md](docs/configuration.md)
 
@@ -98,6 +101,7 @@ Full options: [docs/configuration.md](docs/configuration.md)
 | ActivityPub & Mastodon API | [docs/activitypub.md](docs/activitypub.md) |
 | remoteStorage | [docs/remotestorage.md](docs/remotestorage.md) |
 | WebRTC & Tunnel | [docs/webrtc.md](docs/webrtc.md) |
+| Terminal & Password CLI | [docs/terminal.md](docs/terminal.md) |
 | MongoDB `/db/` Route | [docs/mongodb.md](docs/mongodb.md) |
 | HTTP 402 Payments | [docs/payments.md](docs/payments.md) |
 | Storage Quotas | [docs/quotas.md](docs/quotas.md) |

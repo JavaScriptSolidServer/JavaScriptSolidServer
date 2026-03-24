@@ -177,6 +177,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 | `--webrtc-path <path>` | WebRTC signaling WebSocket path | /.webrtc |
 | `--tunnel` | Enable tunnel proxy (decentralized ngrok) | false |
 | `--tunnel-path <path>` | Tunnel WebSocket path | /.tunnel |
+| `--terminal` | Enable WebSocket shell at `/.terminal` | false |
 | `-q, --quiet` | Suppress logs | false |
 
 ### Environment Variables
