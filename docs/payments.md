@@ -1,5 +1,42 @@
 ## HTTP 402 Paid Access
 
+JSS supports two approaches to paid content:
+
+1. **ACL Conditions** — any resource at any URL can require payment via `acl:condition` in its ACL file
+2. **Pay Route** — the `/pay/*` prefix provides a full payment backend with deposits, balances, and token trading
+
+### ACL-Based Payments (Generic)
+
+Any resource can be payment-gated by adding a `PaymentCondition` to its ACL:
+
+```json
+{
+  "@context": { "acl": "http://www.w3.org/ns/auth/acl#" },
+  "@graph": [{
+    "@type": "acl:Authorization",
+    "acl:agentClass": { "@id": "acl:AuthenticatedAgent" },
+    "acl:accessTo": { "@id": "/premium/article.jsonld" },
+    "acl:mode": [{ "@id": "acl:Read" }],
+    "acl:condition": {
+      "@type": "PaymentCondition",
+      "amount": "1000",
+      "currency": "sats"
+    }
+  }]
+}
+```
+
+When a client requests the resource:
+
+1. Server evaluates the ACL and finds the `PaymentCondition`
+2. Server responds with `402 Payment Required` and payment details in the body
+3. Client completes payment and retries with proof
+4. Server verifies and grants access
+
+**Design: fail-closed** — if the server encounters a condition type it doesn't support, access is denied. Unsupported conditions are never silently ignored.
+
+### Pay Route (Full Backend)
+
 Monetize API endpoints with per-request satoshi payments. Resources under `/pay/*` require NIP-98 authentication and a positive balance.
 
 ```bash
