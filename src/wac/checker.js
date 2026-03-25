@@ -37,7 +37,7 @@ export async function checkAccess({
 
   // Check authorizations
   // Note: For default ACLs, we check if the ACL's default rules apply to the actual resource URL
-  const allowed = checkAuthorizations(
+  const result = checkAuthorizations(
     authorizations,
     resourceUrl,  // Use actual resource URL, not the ACL container URL
     agentWebId,
@@ -48,7 +48,7 @@ export async function checkAccess({
   // Calculate WAC-Allow header
   const wacAllow = calculateWacAllow(authorizations, resourceUrl, agentWebId, isDefault);
 
-  return { allowed, wacAllow };
+  return { allowed: result.allowed, wacAllow, paymentRequired: result.paymentRequired || null };
 }
 
 /**
@@ -125,6 +125,9 @@ function getParentPath(path) {
 /**
  * Check if any authorization grants the required mode
  */
+// Supported condition types
+const SUPPORTED_CONDITIONS = ['PaymentCondition', 'https://webacl.org/ns#PaymentCondition'];
+
 function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode, isDefault) {
   for (const auth of authorizations) {
     // For default ACLs, check if auth has default rules and matches target
@@ -144,17 +147,29 @@ function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode
     if (!agentAuthorized) continue;
 
     // Check if mode is granted
-    if (auth.modes.includes(requiredMode)) {
-      return true;
+    const modeGranted = auth.modes.includes(requiredMode) ||
+      (requiredMode === AccessMode.APPEND && auth.modes.includes(AccessMode.WRITE));
+    if (!modeGranted) continue;
+
+    // Check conditions (fail-closed)
+    if (auth.conditions && auth.conditions.length > 0) {
+      // Fail-closed: skip this auth if any condition type is unsupported
+      const unsupported = auth.conditions.find(c => !SUPPORTED_CONDITIONS.includes(c.type));
+      if (unsupported) continue;
+
+      // Check payment condition
+      const paymentCondition = auth.conditions.find(c =>
+        c.type === 'PaymentCondition' || c.type === 'https://webacl.org/ns#PaymentCondition'
+      );
+      if (paymentCondition) {
+        return { allowed: false, paymentRequired: paymentCondition };
+      }
     }
 
-    // Write implies Append
-    if (requiredMode === AccessMode.APPEND && auth.modes.includes(AccessMode.WRITE)) {
-      return true;
-    }
+    return { allowed: true };
   }
 
-  return false;
+  return { allowed: false };
 }
 
 /**
