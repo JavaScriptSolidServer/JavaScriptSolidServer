@@ -133,7 +133,8 @@ function parseAuthorization(node, aclUrl) {
     agents: [],        // Specific WebIDs
     agentClasses: [],  // Agent classes (public, authenticated)
     agentGroups: [],   // Groups
-    modes: []          // Access modes
+    modes: [],         // Access modes
+    conditions: []     // Access conditions (e.g. PaymentCondition)
   };
 
   // Parse accessTo - resolve relative URLs
@@ -157,7 +158,24 @@ function parseAuthorization(node, aclUrl) {
   // Parse modes
   auth.modes = parseUriArray(node['acl:mode'] || node['mode']).map(normalizeMode);
 
+  // Parse conditions
+  auth.conditions = parseConditions(node['acl:condition'] || node['condition']);
+
   return auth;
+}
+
+/**
+ * Parse conditions from an authorization node
+ */
+function parseConditions(value) {
+  if (!value) return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.map(v => {
+    if (typeof v !== 'object' || v === null) return null;
+    const type = v['@type'] || v.type;
+    if (!type) return null;
+    return { ...v, type };
+  }).filter(Boolean);
 }
 
 /**

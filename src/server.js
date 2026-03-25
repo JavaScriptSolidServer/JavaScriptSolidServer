@@ -389,9 +389,13 @@ export function createServer(options = {}) {
       const requiredMode = needsWrite ? AccessMode.WRITE : AccessMode.READ;
 
       // Run WAC authorization with the correct mode for git operations
-      const { authorized, webId, wacAllow, authError } = await authorize(request, reply, { requiredMode });
+      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply, { requiredMode });
       request.webId = webId;
       request.wacAllow = wacAllow;
+
+      if (paymentRequired) {
+        return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
+      }
 
       if (!authorized) {
         const message = needsWrite ? 'Write access required for push' : 'Read access required for clone';
@@ -444,7 +448,7 @@ export function createServer(options = {}) {
       return;
     }
 
-    const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
+    const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply);
 
     // Store webId and wacAllow on request for handlers to use
     request.webId = webId;
@@ -452,6 +456,14 @@ export function createServer(options = {}) {
 
     // Set WAC-Allow header for all responses (handlers may override)
     reply.header('WAC-Allow', wacAllow);
+
+    // Handle payment-gated resources
+    if (paymentRequired) {
+      return reply.code(402).send({
+        type: 'PaymentRequired',
+        ...paymentRequired
+      });
+    }
 
     if (!authorized) {
       return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);

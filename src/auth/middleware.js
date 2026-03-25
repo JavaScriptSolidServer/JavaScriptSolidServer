@@ -102,7 +102,7 @@ export async function authorize(request, reply, options = {}) {
   }
 
   // Check WAC permissions
-  const { allowed, wacAllow } = await checkAccess({
+  const { allowed, wacAllow, paymentRequired } = await checkAccess({
     resourceUrl: checkUrl,
     resourcePath: checkPath,
     isContainer: checkIsContainer,
@@ -110,7 +110,7 @@ export async function authorize(request, reply, options = {}) {
     requiredMode
   });
 
-  return { authorized: allowed, webId, wacAllow, authError };
+  return { authorized: allowed, webId, wacAllow, authError, paymentRequired };
 }
 
 /**
