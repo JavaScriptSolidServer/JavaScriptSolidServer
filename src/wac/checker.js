@@ -169,7 +169,7 @@ async function checkAuthorizations(authorizations, targetUrl, agentWebId, requir
         if (agentWebId && cost > 0) {
           try {
             const ledger = await readLedger();
-            const balance = getBalance(ledger, agentWebId, currency === 'sats' ? 'sat' : currency);
+            const balance = getBalance(ledger, agentWebId);
             if (balance >= cost) {
               // Deduct and grant access
               debit(ledger, agentWebId, cost, currency === 'sats' ? 'sat' : currency);
