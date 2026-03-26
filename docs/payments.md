@@ -11,18 +11,15 @@ Any resource can be payment-gated by adding a `PaymentCondition` to its ACL:
 
 ```json
 {
-  "@context": { "acl": "http://www.w3.org/ns/auth/acl#" },
-  "@graph": [{
-    "@type": "acl:Authorization",
-    "acl:agentClass": { "@id": "acl:AuthenticatedAgent" },
-    "acl:accessTo": { "@id": "/premium/article.jsonld" },
-    "acl:mode": [{ "@id": "acl:Read" }],
-    "acl:condition": {
-      "@type": "PaymentCondition",
-      "amount": "1000",
-      "currency": "sats"
-    }
-  }]
+  "@type": "acl:Authorization",
+  "acl:agentClass": { "@id": "acl:AuthenticatedAgent" },
+  "acl:accessTo": { "@id": "/premium/article.jsonld" },
+  "acl:mode": [{ "@id": "acl:Read" }],
+  "acl:condition": {
+    "@type": "PaymentCondition",
+    "amount": "1000",
+    "currency": "sats"
+  }
 }
 ```
 
@@ -50,7 +47,7 @@ curl -X PUT http://localhost:3000/premium/article.jsonld \
 
 curl -X PUT http://localhost:3000/premium/article.jsonld.acl \
   -H "Content-Type: application/ld+json" \
-  -d '{"@context":{"acl":"http://www.w3.org/ns/auth/acl#"},"@graph":[{"@type":"acl:Authorization","acl:agent":{"@id":"did:nostr:YOUR_PUBKEY"},"acl:accessTo":{"@id":"/premium/article.jsonld"},"acl:mode":[{"@id":"acl:Read"}],"acl:condition":{"@type":"PaymentCondition","amount":"10","currency":"sats"}}]}'
+  -d '{"@type":"acl:Authorization","acl:agent":{"@id":"did:nostr:YOUR_PUBKEY"},"acl:accessTo":{"@id":"/premium/article.jsonld"},"acl:mode":[{"@id":"acl:Read"}],"acl:condition":{"@type":"PaymentCondition","amount":"10","currency":"sats"}}'
 
 # Try to read → 402 Payment Required
 curl -H "Authorization: Nostr <nip98-token>" http://localhost:3000/premium/article.jsonld
