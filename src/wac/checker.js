@@ -6,6 +6,7 @@
 import * as storage from '../storage/filesystem.js';
 import { parseAcl, AccessMode, AgentClass } from './parser.js';
 import { getAclUrl } from '../ldp/headers.js';
+import { readLedger, getBalance, debit } from '../webledger.js';
 
 /**
  * Check if agent has required access mode for resource
@@ -37,7 +38,7 @@ export async function checkAccess({
 
   // Check authorizations
   // Note: For default ACLs, we check if the ACL's default rules apply to the actual resource URL
-  const result = checkAuthorizations(
+  const result = await checkAuthorizations(
     authorizations,
     resourceUrl,  // Use actual resource URL, not the ACL container URL
     agentWebId,
@@ -128,7 +129,7 @@ function getParentPath(path) {
 // Supported condition types
 const SUPPORTED_CONDITIONS = ['PaymentCondition', 'https://webacl.org/ns#PaymentCondition'];
 
-function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode, isDefault) {
+async function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode, isDefault) {
   for (const auth of authorizations) {
     // For default ACLs, check if auth has default rules and matches target
     // For direct ACLs, check if accessTo matches target
@@ -162,6 +163,24 @@ function checkAuthorizations(authorizations, targetUrl, agentWebId, requiredMode
         c.type === 'PaymentCondition' || c.type === 'https://webacl.org/ns#PaymentCondition'
       );
       if (paymentCondition) {
+        // Check if agent has sufficient balance
+        const cost = parseInt(paymentCondition.amount, 10) || 0;
+        const currency = paymentCondition.currency || 'sat';
+        if (agentWebId && cost > 0) {
+          try {
+            const ledger = await readLedger();
+            const balance = getBalance(ledger, agentWebId, currency === 'sats' ? 'sat' : currency);
+            if (balance >= cost) {
+              // Deduct and grant access
+              debit(ledger, agentWebId, cost, currency === 'sats' ? 'sat' : currency);
+              const { writeLedger } = await import('../webledger.js');
+              await writeLedger(ledger);
+              return { allowed: true, paid: cost };
+            }
+          } catch (e) {
+            // Ledger read failed — fall through to payment required
+          }
+        }
         return { allowed: false, paymentRequired: paymentCondition };
       }
     }
