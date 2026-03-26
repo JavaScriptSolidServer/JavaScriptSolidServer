@@ -29,11 +29,39 @@ Any resource can be payment-gated by adding a `PaymentCondition` to its ACL:
 When a client requests the resource:
 
 1. Server evaluates the ACL and finds the `PaymentCondition`
-2. Server responds with `402 Payment Required` and payment details in the body
-3. Client completes payment and retries with proof
-4. Server verifies and grants access
+2. Server checks the agent's balance in the webledger
+3. If balance >= cost — deducts and serves the resource (200)
+4. If balance < cost — responds with `402 Payment Required` and payment details
+
+To fund their balance, users deposit via the `/pay/.deposit` endpoint using a TXO URI (currently testnet4 for development). The balance is tracked in the webledger at `/.well-known/webledgers/webledgers.json`.
 
 **Design: fail-closed** — if the server encounters a condition type it doesn't support, access is denied. Unsupported conditions are never silently ignored.
+
+#### Quick Demo
+
+```bash
+# Start JSS with payments (testnet4 by default)
+jss start --pay --pay-cost 10
+
+# Create an article and payment-gated ACL
+curl -X PUT http://localhost:3000/premium/article.jsonld \
+  -H "Content-Type: application/ld+json" \
+  -d '{"@type": "Article", "headline": "Premium Content"}'
+
+curl -X PUT http://localhost:3000/premium/article.jsonld.acl \
+  -H "Content-Type: application/ld+json" \
+  -d '{"@context":{"acl":"http://www.w3.org/ns/auth/acl#"},"@graph":[{"@type":"acl:Authorization","acl:agent":{"@id":"did:nostr:YOUR_PUBKEY"},"acl:accessTo":{"@id":"/premium/article.jsonld"},"acl:mode":[{"@id":"acl:Read"}],"acl:condition":{"@type":"PaymentCondition","amount":"10","currency":"sats"}}]}'
+
+# Try to read → 402 Payment Required
+curl -H "Authorization: Nostr <nip98-token>" http://localhost:3000/premium/article.jsonld
+
+# Deposit testnet4 sats
+curl -X POST -H "Authorization: Nostr <nip98-token>" \
+  http://localhost:3000/pay/.deposit -d 'txo:tbtc4:txid:vout'
+
+# Try again → 200 OK + article
+curl -H "Authorization: Nostr <nip98-token>" http://localhost:3000/premium/article.jsonld
+```
 
 ### Pay Route (Full Backend)
 
