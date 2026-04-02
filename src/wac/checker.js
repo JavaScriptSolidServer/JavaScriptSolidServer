@@ -163,15 +163,22 @@ async function checkAuthorizations(authorizations, targetUrl, agentWebId, requir
         c.type === 'PaymentCondition' || c.type === 'https://webacl.org/ns#PaymentCondition'
       );
       if (paymentCondition) {
-        // Check if agent has sufficient balance
         const cost = parseInt(paymentCondition.amount, 10) || 0;
         const currency = paymentCondition.currency || 'sat';
-        if (agentWebId && cost > 0) {
+
+        if (agentWebId) {
           try {
             const ledger = await readLedger();
             const balance = getBalance(ledger, agentWebId);
-            if (balance >= cost) {
-              // Deduct and grant access
+
+            // Zero-cost gate: verify they have a ledger entry (have deposited at some point)
+            if (cost === 0) {
+              const hasEntry = ledger.entries?.some(e => e.url === agentWebId);
+              if (hasEntry) return { allowed: true };
+            }
+
+            // Paid access: check balance and deduct
+            if (cost > 0 && balance >= cost) {
               debit(ledger, agentWebId, cost, currency === 'sats' ? 'sat' : currency);
               const { writeLedger } = await import('../webledger.js');
               await writeLedger(ledger);

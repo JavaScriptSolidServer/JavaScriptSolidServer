@@ -428,6 +428,30 @@ describe('WAC Conditions', () => {
       assert.strictEqual(auths[0].conditions[0].type, 'UnknownFutureCondition');
     });
 
+    it('should parse zero-cost PaymentCondition', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#gate',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+          'acl:accessTo': { '@id': 'https://alice.example/members/' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': {
+            '@type': 'PaymentCondition',
+            'amount': '0',
+            'currency': 'sats'
+          }
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/members/.acl');
+      const condition = auths[0].conditions[0];
+
+      assert.strictEqual(condition.type, 'PaymentCondition');
+      assert.strictEqual(condition.amount, '0');
+    });
+
     it('should parse PaymentCondition with all fields', async () => {
       const acl = {
         '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
