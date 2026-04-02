@@ -14,19 +14,19 @@ jss start --mongo --mongo-url mongodb://localhost:27017 --mongo-database solid
 
 ```bash
 # Store a document
-curl -X PUT http://localhost:3000/db/alice/notes/1 \
+curl -X PUT http://localhost:4443/db/alice/notes/1 \
   -H "Content-Type: application/ld+json" \
   -H "Authorization: Bearer <token>" \
   -d '{"@context": "https://schema.org/", "@type": "Note", "text": "Hello"}'
 
 # Read it back
-curl http://localhost:3000/db/alice/notes/1
+curl http://localhost:4443/db/alice/notes/1
 
 # List container (derived from URI prefixes)
-curl http://localhost:3000/db/alice/
+curl http://localhost:4443/db/alice/
 
 # Delete
-curl -X DELETE http://localhost:3000/db/alice/notes/1 \
+curl -X DELETE http://localhost:4443/db/alice/notes/1 \
   -H "Authorization: Bearer <token>"
 ```
 

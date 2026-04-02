@@ -5,7 +5,7 @@
 Use the token returned from pod creation:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3000/alice/private/
+curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:4443/alice/private/
 ```
 
 ### Built-in Identity Provider (v0.0.12+)
@@ -19,7 +19,7 @@ jss start --idp
 With IdP enabled, pod creation requires email and password:
 
 ```bash
-curl -X POST http://localhost:3000/.pods \
+curl -X POST http://localhost:4443/.pods \
   -H "Content-Type: application/json" \
   -d '{"name": "alice", "email": "alice@example.com", "password": "secret123"}'
 ```
@@ -28,10 +28,10 @@ Response:
 ```json
 {
   "name": "alice",
-  "webId": "http://localhost:3000/alice/#me",
-  "podUri": "http://localhost:3000/alice/",
-  "idpIssuer": "http://localhost:3000",
-  "loginUrl": "http://localhost:3000/idp/auth"
+  "webId": "http://localhost:4443/alice/#me",
+  "podUri": "http://localhost:4443/alice/",
+  "idpIssuer": "http://localhost:4443",
+  "loginUrl": "http://localhost:4443/idp/auth"
 }
 ```
 
@@ -42,7 +42,7 @@ OIDC Discovery: `/.well-known/openid-configuration`
 For automated testing and scripts, use the credentials endpoint:
 
 ```bash
-curl -X POST http://localhost:3000/idp/credentials \
+curl -X POST http://localhost:4443/idp/credentials \
   -H "Content-Type: application/json" \
   -d '{"email": "alice@example.com", "password": "secret123"}'
 ```
@@ -53,7 +53,7 @@ Response:
   "access_token": "...",
   "token_type": "Bearer",
   "expires_in": 3600,
-  "webid": "http://localhost:3000/alice/#me"
+  "webid": "http://localhost:4443/alice/#me"
 }
 ```
 
@@ -109,7 +109,7 @@ The server also accepts DPoP-bound access tokens from external Solid identity pr
 ```bash
 curl -H "Authorization: DPoP ACCESS_TOKEN" \
      -H "DPoP: DPOP_PROOF" \
-     http://localhost:3000/alice/private/
+     http://localhost:4443/alice/private/
 ```
 
 ### WebID-TLS (Client Certificates)

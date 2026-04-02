@@ -11,7 +11,7 @@ jss start --activitypub --idp
 remoteStorage clients discover the storage endpoint via WebFinger:
 
 ```bash
-curl "http://localhost:3000/.well-known/webfinger?resource=acct:me@localhost:3000"
+curl "http://localhost:4443/.well-known/webfinger?resource=acct:me@localhost:4443"
 ```
 
 The response includes a `remotestorage` link relation pointing to `/storage/me/`.
@@ -38,21 +38,21 @@ The response includes a `remotestorage` link relation pointing to `/storage/me/`
 
 ```bash
 # Write a file (needs Bearer token from OAuth flow)
-curl -X PUT http://localhost:3000/storage/me/documents/hello.txt \
+curl -X PUT http://localhost:4443/storage/me/documents/hello.txt \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: text/plain" \
   -d "Hello, remoteStorage!"
 
 # Read it back
 curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:3000/storage/me/documents/hello.txt
+  http://localhost:4443/storage/me/documents/hello.txt
 
 # List a folder
 curl -H "Authorization: Bearer YOUR_TOKEN" \
-  http://localhost:3000/storage/me/documents/
+  http://localhost:4443/storage/me/documents/
 
 # Read from public folder (no auth needed)
-curl http://localhost:3000/storage/me/public/readme.txt
+curl http://localhost:4443/storage/me/public/readme.txt
 ```
 
 ### Linking Nostr to WebID (did:nostr)

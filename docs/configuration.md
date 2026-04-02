@@ -112,16 +112,16 @@ const server = createServer({ notifications: true });
 Clients discover the WebSocket URL via the `Updates-Via` header:
 
 ```bash
-curl -I http://localhost:3000/alice/public/
-# Updates-Via: ws://localhost:3000/.notifications
+curl -I http://localhost:4443/alice/public/
+# Updates-Via: ws://localhost:4443/.notifications
 ```
 
 Protocol (solid-0.1, compatible with SolidOS):
 ```
 Server: protocol solid-0.1
-Client: sub http://localhost:3000/alice/public/data.json
-Server: ack http://localhost:3000/alice/public/data.json
-Server: pub http://localhost:3000/alice/public/data.json  (on change)
+Client: sub http://localhost:4443/alice/public/data.json
+Server: ack http://localhost:4443/alice/public/data.json
+Server: pub http://localhost:4443/alice/public/data.json  (on change)
 ```
 
 
@@ -131,7 +131,7 @@ Server: pub http://localhost:3000/alice/public/data.json  (on change)
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `-p, --port <n>` | Port to listen on | 3000 |
+| `-p, --port <n>` | Port to listen on | 4443 |
 | `-h, --host <addr>` | Host to bind to | 0.0.0.0 |
 | `-r, --root <path>` | Data directory | ./data |
 | `-c, --config <file>` | Config file path | - |
@@ -235,7 +235,7 @@ Then: `jss start --config config.json`
 ### Creating a Pod
 
 ```bash
-curl -X POST http://localhost:3000/.pods \
+curl -X POST http://localhost:4443/.pods \
   -H "Content-Type: application/json" \
   -d '{"name": "alice"}'
 ```
@@ -244,8 +244,8 @@ Response:
 ```json
 {
   "name": "alice",
-  "webId": "http://localhost:3000/alice/#me",
-  "podUri": "http://localhost:3000/alice/",
+  "webId": "http://localhost:4443/alice/#me",
+  "podUri": "http://localhost:4443/alice/",
   "token": "eyJ..."
 }
 ```
@@ -421,15 +421,15 @@ const server = createServer({ notifications: true });
 Clients discover the WebSocket URL via the `Updates-Via` header:
 
 ```bash
-curl -I http://localhost:3000/alice/public/
-# Updates-Via: ws://localhost:3000/.notifications
+curl -I http://localhost:4443/alice/public/
+# Updates-Via: ws://localhost:4443/.notifications
 ```
 
 Protocol (solid-0.1, compatible with SolidOS):
 ```
 Server: protocol solid-0.1
-Client: sub http://localhost:3000/alice/public/data.json
-Server: ack http://localhost:3000/alice/public/data.json
-Server: pub http://localhost:3000/alice/public/data.json  (on change)
+Client: sub http://localhost:4443/alice/public/data.json
+Server: ack http://localhost:4443/alice/public/data.json
+Server: pub http://localhost:4443/alice/public/data.json  (on change)
 ```
 

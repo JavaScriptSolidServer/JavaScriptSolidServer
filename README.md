@@ -48,7 +48,7 @@ jss start --port 8443 --idp --mashlib --conneg --git --nostr
 ### Creating a Pod
 
 ```bash
-curl -X POST http://localhost:3000/.pods \
+curl -X POST http://localhost:4443/.pods \
   -H "Content-Type: application/json" \
   -d '{"name": "alice"}'
 ```
@@ -57,10 +57,10 @@ curl -X POST http://localhost:3000/.pods \
 
 ```bash
 # Read
-curl http://localhost:3000/alice/public/
+curl http://localhost:4443/alice/public/
 
 # Write
-curl -X PUT http://localhost:3000/alice/public/data.json \
+curl -X PUT http://localhost:4443/alice/public/data.json \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/ld+json" \
   -d '{"@id": "#data", "http://example.org/value": 42}'

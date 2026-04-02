@@ -16,7 +16,7 @@ import path from 'path';
  */
 export const defaults = {
   // Server
-  port: 3000,
+  port: 4443,
   host: '0.0.0.0',
   root: './data',
 

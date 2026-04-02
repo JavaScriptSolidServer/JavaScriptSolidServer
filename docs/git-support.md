@@ -252,10 +252,10 @@ JSS_GIT=true jss start
 
 ```bash
 # Clone
-git clone http://localhost:3000/myrepo
+git clone http://localhost:4443/myrepo
 
 # Clone with authentication (if required)
-git clone http://localhost:3000/myrepo
+git clone http://localhost:4443/myrepo
 # Git will prompt for credentials
 
 # Push (requires write access)
