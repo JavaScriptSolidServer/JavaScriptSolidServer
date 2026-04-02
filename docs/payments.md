@@ -41,23 +41,23 @@ To fund their balance, users deposit via the `/pay/.deposit` endpoint using a TX
 jss start --pay --pay-cost 10
 
 # Create an article and payment-gated ACL
-curl -X PUT http://localhost:3000/premium/article.jsonld \
+curl -X PUT http://localhost:4443/premium/article.jsonld \
   -H "Content-Type: application/ld+json" \
   -d '{"@type": "Article", "headline": "Premium Content"}'
 
-curl -X PUT http://localhost:3000/premium/article.jsonld.acl \
+curl -X PUT http://localhost:4443/premium/article.jsonld.acl \
   -H "Content-Type: application/ld+json" \
   -d '{"@type":"acl:Authorization","acl:agent":{"@id":"did:nostr:YOUR_PUBKEY"},"acl:accessTo":{"@id":"/premium/article.jsonld"},"acl:mode":[{"@id":"acl:Read"}],"acl:condition":{"@type":"PaymentCondition","amount":"10","currency":"sats"}}'
 
 # Try to read → 402 Payment Required
-curl -H "Authorization: Nostr <nip98-token>" http://localhost:3000/premium/article.jsonld
+curl -H "Authorization: Nostr <nip98-token>" http://localhost:4443/premium/article.jsonld
 
 # Deposit testnet4 sats
 curl -X POST -H "Authorization: Nostr <nip98-token>" \
-  http://localhost:3000/pay/.deposit -d 'txo:tbtc4:txid:vout'
+  http://localhost:4443/pay/.deposit -d 'txo:tbtc4:txid:vout'
 
 # Try again → 200 OK + article
-curl -H "Authorization: Nostr <nip98-token>" http://localhost:3000/premium/article.jsonld
+curl -H "Authorization: Nostr <nip98-token>" http://localhost:4443/premium/article.jsonld
 ```
 
 ### Pay Route (Full Backend)
@@ -97,26 +97,26 @@ jss start --pay --pay-cost 10 --pay-address your-address --pay-token PODS --pay-
 
 ```bash
 # Check balance
-curl -H "Authorization: Nostr <base64-event>" http://localhost:3000/pay/.balance
+curl -H "Authorization: Nostr <base64-event>" http://localhost:4443/pay/.balance
 
 # Deposit (post a confirmed transaction output)
 curl -X POST -H "Authorization: Nostr <base64-event>" \
-  http://localhost:3000/pay/.deposit \
+  http://localhost:4443/pay/.deposit \
   -d "txid:vout"
 
 # Access paid resource
-curl -H "Authorization: Nostr <base64-event>" http://localhost:3000/pay/my-resource
+curl -H "Authorization: Nostr <base64-event>" http://localhost:4443/pay/my-resource
 
 # Buy tokens with sat balance
 curl -X POST -H "Authorization: Nostr <base64-event>" \
   -H "Content-Type: application/json" \
-  http://localhost:3000/pay/.buy \
+  http://localhost:4443/pay/.buy \
   -d '{"amount": 100}'
 
 # Withdraw entire balance as portable tokens
 curl -X POST -H "Authorization: Nostr <base64-event>" \
   -H "Content-Type: application/json" \
-  http://localhost:3000/pay/.withdraw \
+  http://localhost:4443/pay/.withdraw \
   -d '{"all": true}'
 ```
 
@@ -140,17 +140,17 @@ Deposits detect the chain from the TXO URI prefix (`txo:tbtc3:txid:vout`). Each 
 # Add liquidity
 curl -X POST -H "Authorization: Nostr <token>" \
   -H "Content-Type: application/json" \
-  http://localhost:3000/pay/.pool \
+  http://localhost:4443/pay/.pool \
   -d '{"action": "add-liquidity", "tbtc3": 1000, "tbtc4": 5000}'
 
 # Swap
 curl -X POST -H "Authorization: Nostr <token>" \
   -H "Content-Type: application/json" \
-  http://localhost:3000/pay/.pool \
+  http://localhost:4443/pay/.pool \
   -d '{"action": "swap", "sell": "tbtc3", "amount": 100}'
 
 # Check pool state
-curl http://localhost:3000/pay/.pool
+curl http://localhost:4443/pay/.pool
 ```
 
 Supported chains: `btc`, `tbtc3`, `tbtc4`, `ltc`, `signet`.

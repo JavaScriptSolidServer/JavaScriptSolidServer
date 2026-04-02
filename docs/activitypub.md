@@ -55,13 +55,13 @@ const server = createServer({
 
 ```bash
 # Check WebFinger
-curl "http://localhost:3000/.well-known/webfinger?resource=acct:alice@localhost:3000"
+curl "http://localhost:4443/.well-known/webfinger?resource=acct:alice@localhost:4443"
 
 # Get Actor (AP format)
-curl -H "Accept: application/activity+json" http://localhost:3000/profile/card
+curl -H "Accept: application/activity+json" http://localhost:4443/profile/card
 
 # Check NodeInfo
-curl http://localhost:3000/.well-known/nodeinfo/2.1
+curl http://localhost:4443/.well-known/nodeinfo/2.1
 ```
 
 ## Mastodon-compatible API
@@ -99,11 +99,11 @@ Supports out-of-band (OOB) redirect for CLI/desktop clients.
 
 ```bash
 # Register a client
-curl -X POST http://localhost:3000/api/v1/apps \
+curl -X POST http://localhost:4443/api/v1/apps \
   -H "Content-Type: application/json" \
   -d '{"client_name": "Test App", "redirect_uris": "urn:ietf:wg:oauth:2.0:oob"}'
 
 # Check instance info
-curl http://localhost:3000/api/v1/instance
+curl http://localhost:4443/api/v1/instance
 ```
 

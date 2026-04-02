@@ -11,17 +11,17 @@ jss start --notifications
 Clients discover the WebSocket URL via the `Updates-Via` header:
 
 ```bash
-curl -I http://localhost:3000/alice/public/
-# Updates-Via: ws://localhost:3000/.notifications
+curl -I http://localhost:4443/alice/public/
+# Updates-Via: ws://localhost:4443/.notifications
 ```
 
 ## Protocol
 
 ```
 Server: protocol solid-0.1
-Client: sub http://localhost:3000/alice/public/data.json
-Server: ack http://localhost:3000/alice/public/data.json
-Server: pub http://localhost:3000/alice/public/data.json  (on change)
+Client: sub http://localhost:4443/alice/public/data.json
+Server: ack http://localhost:4443/alice/public/data.json
+Server: pub http://localhost:4443/alice/public/data.json  (on change)
 ```
 
 ## How It Works

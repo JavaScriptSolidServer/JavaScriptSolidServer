@@ -1,8 +1,8 @@
 #!/bin/bash
 # Demo: HTTP 402 Payment-Gated Article
-# Requires: JSS running on localhost:3000 with --pay --pay-cost 10
+# Requires: JSS running on localhost:4443 with --pay --pay-cost 10
 
-BASE="http://localhost:3000"
+BASE="http://localhost:4443"
 
 echo "=== Setting up payment-gated article demo ==="
 
