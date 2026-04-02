@@ -96,7 +96,7 @@ describe('Pod Lifecycle', () => {
       assertStatus(priv, 200);
 
       // Check Settings exists (needs auth)
-      const settings = await request('/carol/Settings/', { auth: 'carol' });
+      const settings = await request('/carol/settings/', { auth: 'carol' });
       assertStatus(settings, 200);
     });
 
@@ -104,15 +104,15 @@ describe('Pod Lifecycle', () => {
       await createTestPod('dan');
 
       // Check Preferences.ttl (needs auth - Settings is private)
-      const prefs = await request('/dan/Settings/Preferences.ttl', { auth: 'dan' });
+      const prefs = await request('/dan/settings/Preferences.ttl', { auth: 'dan' });
       assertStatus(prefs, 200);
 
       // Check public type index (needs auth)
-      const pubIndex = await request('/dan/Settings/publicTypeIndex.ttl', { auth: 'dan' });
+      const pubIndex = await request('/dan/settings/publicTypeIndex.ttl', { auth: 'dan' });
       assertStatus(pubIndex, 200);
 
       // Check private type index (needs auth)
-      const privIndex = await request('/dan/Settings/privateTypeIndex.ttl', { auth: 'dan' });
+      const privIndex = await request('/dan/settings/privateTypeIndex.ttl', { auth: 'dan' });
       assertStatus(privIndex, 200);
     });
   });
