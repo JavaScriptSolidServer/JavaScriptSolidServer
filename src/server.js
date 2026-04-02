@@ -571,7 +571,7 @@ export function createServer(options = {}) {
     await storage.createContainer('/inbox/');
     await storage.createContainer('/public/');
     await storage.createContainer('/private/');
-    await storage.createContainer('/Settings/');
+    await storage.createContainer('/settings/');
     await storage.createContainer('/profile/');
 
     // Generate profile
@@ -580,13 +580,13 @@ export function createServer(options = {}) {
 
     // Preferences and type indexes
     const prefs = generatePreferences({ webId, podUri });
-    await storage.write('/Settings/Preferences.ttl', serialize(prefs));
+    await storage.write('/settings/Preferences.ttl', serialize(prefs));
 
-    const publicTypeIndex = generateTypeIndex(`${podUri}Settings/publicTypeIndex.ttl`);
-    await storage.write('/Settings/publicTypeIndex.ttl', serialize(publicTypeIndex));
+    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.ttl`);
+    await storage.write('/settings/publicTypeIndex.ttl', serialize(publicTypeIndex));
 
-    const privateTypeIndex = generateTypeIndex(`${podUri}Settings/privateTypeIndex.ttl`);
-    await storage.write('/Settings/privateTypeIndex.ttl', serialize(privateTypeIndex));
+    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.ttl`);
+    await storage.write('/settings/privateTypeIndex.ttl', serialize(privateTypeIndex));
 
     // ACL files
     const rootAcl = generateOwnerAcl(podUri, webId, true);
@@ -595,8 +595,8 @@ export function createServer(options = {}) {
     const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
     await storage.write('/private/.acl', serializeAcl(privateAcl));
 
-    const settingsAcl = generatePrivateAcl(`${podUri}Settings/`, webId);
-    await storage.write('/Settings/.acl', serializeAcl(settingsAcl));
+    const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+    await storage.write('/settings/.acl', serializeAcl(settingsAcl));
 
     const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
     await storage.write('/inbox/.acl', serializeAcl(inboxAcl));
