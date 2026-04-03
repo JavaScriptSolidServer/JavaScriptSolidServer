@@ -472,15 +472,22 @@ export function createServer(options = {}) {
 
   // Pod creation endpoint with rate limiting
   // Limit: 1 pod per IP per day to prevent resource exhaustion and namespace squatting
-  fastify.post('/.pods', {
-    config: {
-      rateLimit: {
-        max: 1,
-        timeWindow: '1 day',
-        keyGenerator: (request) => request.ip
+  // Disabled in single-user mode
+  if (singleUser) {
+    fastify.post('/.pods', async (request, reply) => {
+      return reply.code(403).send({ error: 'Pod creation disabled in single-user mode' });
+    });
+  } else {
+    fastify.post('/.pods', {
+      config: {
+        rateLimit: {
+          max: 1,
+          timeWindow: '1 day',
+          keyGenerator: (request) => request.ip
+        }
       }
-    }
-  }, handleCreatePod);
+    }, handleCreatePod);
+  }
 
   // Mashlib CDN mode: redirect chunk requests to CDN
   if (mashlibEnabled && mashlibCdn) {
