@@ -24,6 +24,8 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashl
  * @returns {string} Normalized resource URL
  */
 function buildResourceUrl(request, urlPath) {
+  // Use request.headers.host (includes port) instead of request.hostname (strips port)
+  const host = request.headers.host || request.hostname;
   if (request.subdomainsEnabled && request.baseDomain &&
       request.hostname === request.baseDomain && !request.podName) {
     const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
@@ -33,7 +35,7 @@ function buildResourceUrl(request, urlPath) {
       return `${request.protocol}://${podName}.${request.baseDomain}${remainder}`;
     }
   }
-  return `${request.protocol}://${request.hostname}${urlPath}`;
+  return `${request.protocol}://${host}${urlPath}`;
 }
 
 /**
@@ -180,7 +182,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
     ? "This resource is protected. You'll need to sign in to continue."
     : "You're signed in, but you don't have permission to view this resource.";
 
-  const baseUrl = `${request.protocol}://${request.hostname}`;
+  const baseUrl = `${request.protocol}://${request.headers.host || request.hostname}`;
 
   return `<!DOCTYPE html>
 <html lang="en">
