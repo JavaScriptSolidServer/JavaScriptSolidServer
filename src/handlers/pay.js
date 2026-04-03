@@ -330,11 +330,20 @@ export function createPayHandler(options = {}) {
             const addrUtxos = await resp.json();
 
             for (const u of addrUtxos) {
+              if (!u.status?.confirmed) continue;
               if (utxos.find(x => x.txid === u.txid && x.vout === u.vout)) continue;
-              // New UTXO — auto-credit
+              // New confirmed UTXO — fetch tx for scriptpubkey, then auto-credit
+              let scriptpubkey = '';
+              try {
+                const txResp = await fetch(`${chain.explorer}/tx/${u.txid}`);
+                if (txResp.ok) {
+                  const txData = await txResp.json();
+                  scriptpubkey = txData.vout?.[u.vout]?.scriptpubkey || '';
+                }
+              } catch { /* best effort */ }
               const currency = chain.unit;
               credit(ledger, didUri, u.value, currency);
-              utxos.push({ txid: u.txid, vout: u.vout, amount: u.value, scriptpubkey: u.scriptpubkey || '', chain: chainId, tweak: didUri, spent: false });
+              utxos.push({ txid: u.txid, vout: u.vout, amount: u.value, scriptpubkey, chain: chainId, tweak: didUri, spent: false });
               credited += u.value;
             }
           }
