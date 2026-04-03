@@ -67,7 +67,7 @@ export function createToken(webId, expiresIn) {
  * JWT tokens (3-part) require async verification via verifyTokenAsync().
  *
  * @param {string} token - The token to verify
- * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
+ * @returns {{webId: string, iat: number, exp?: number} | null} Decoded payload or null
  */
 export function verifyToken(token) {
   if (!token || typeof token !== 'string') {
