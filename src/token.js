@@ -98,7 +98,7 @@ function btDeriveChainedPubkey(pubkeyBase, states) {
   return cur;
 }
 
-function btDeriveChainedPrivkey(privkeyBytes, states) {
+export function btDeriveChainedPrivkey(privkeyBytes, states) {
   let d = bytesToBigInt(privkeyBytes);
   let cur = new Uint8Array(secp256k1.getPublicKey(privkeyBytes, true));
   for (const s of states) {

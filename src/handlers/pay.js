@@ -29,7 +29,7 @@ import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
 import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, btAddress } from '../mrc20.js';
-import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript } from '../token.js';
+import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript, btDeriveChainedPrivkey } from '../token.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import fs from 'fs-extra';
@@ -282,7 +282,7 @@ export function createPayHandler(options = {}) {
       return reply.send(info);
     }
 
-    // --- GET /pay/.address — public deposit address ---
+    // --- GET /pay/.address — deposit address (optional per-user tweak) ---
     if (url === '/pay/.address' && request.method === 'GET') {
       const chain = request.query?.chain || (payChains ? payChains[0] : 'tbtc4');
       if (!CHAIN_REGISTRY[chain]) {
@@ -293,8 +293,15 @@ export function createPayHandler(options = {}) {
       }
       const kp = await loadOrCreateKeypair();
       const network = chain === 'btc' ? 'mainnet' : (chain === 'tbtc3' ? 'testnet' : 'testnet4');
-      const address = btAddress(kp.pubkey, [], network);
-      return reply.send({ address, chain, pubkey: kp.pubkey });
+      const user = request.query?.user?.trim().toLowerCase() || null;
+      if (user && !/^did:nostr:[0-9a-f]{64}$/.test(user)) {
+        return reply.code(400).send({ error: 'Invalid user DID. Expected: did:nostr:<64-hex>' });
+      }
+      const states = user ? [user] : [];
+      const address = btAddress(kp.pubkey, states, network);
+      const response = { address, chain, pubkey: kp.pubkey };
+      if (user) response.user = user;
+      return reply.send(response);
     }
 
     // --- GET /pay/.balance ---
@@ -435,8 +442,10 @@ export function createPayHandler(options = {}) {
           return reply.code(400).send({ error: `Unknown chain: ${chainId}` });
         }
 
-        // Derive pod's address for this chain
+        // Derive address — try per-user tweaked address first, fall back to generic
         const network = chainId === 'btc' ? 'mainnet' : (chainId === 'tbtc3' ? 'testnet' : 'testnet4');
+        const didUri = pubkeyToDidNostr(pubkey);
+        const userAddress = btAddress(kp.pubkey, [didUri], network);
         const podAddress = btAddress(kp.pubkey, [], network);
 
         // Fetch transaction from mempool
@@ -455,9 +464,11 @@ export function createPayHandler(options = {}) {
           return reply.code(400).send({ error: `Output ${deposit.vout} not found` });
         }
 
-        // Verify output pays our address
-        if (output.scriptpubkey_address !== podAddress) {
-          return reply.code(400).send({ error: 'Output does not pay this pod\'s address', expected: podAddress });
+        // Verify output pays our address (per-user tweaked or generic pod address)
+        const outputAddr = output.scriptpubkey_address;
+        const tweak = outputAddr === userAddress ? didUri : null;
+        if (outputAddr !== userAddress && outputAddr !== podAddress) {
+          return reply.code(400).send({ error: 'Output does not pay this pod\'s address', expected: { user: userAddress, pod: podAddress } });
         }
 
         const amount = output.value;
@@ -465,14 +476,12 @@ export function createPayHandler(options = {}) {
 
         // Replay protection + UTXO tracking
         const utxos = await loadUtxos();
-        const utxoKey = `${deposit.txid}:${deposit.vout}`;
         if (utxos.find(u => u.txid === deposit.txid && u.vout === deposit.vout)) {
           return reply.code(400).send({ error: 'This output has already been claimed' });
         }
-        utxos.push({ txid: deposit.txid, vout: deposit.vout, amount, scriptpubkey: output.scriptpubkey, chain: chainId, spent: false });
+        utxos.push({ txid: deposit.txid, vout: deposit.vout, amount, scriptpubkey: output.scriptpubkey, chain: chainId, tweak, spent: false });
         await saveUtxos(utxos);
 
-        const didUri = pubkeyToDidNostr(pubkey);
         const ledger = await readLedger();
         const newBalance = credit(ledger, didUri, amount, currency);
         await writeLedger(ledger);
@@ -752,23 +761,45 @@ export function createPayHandler(options = {}) {
         return reply.code(400).send({ error: 'No UTXOs available for withdrawal' });
       }
 
-      // Select UTXOs (simple: pick first one that's big enough, or accumulate)
-      let selected = [];
-      let total = 0;
+      // Load pod keypair
+      const kp = await loadOrCreateKeypair();
+
+      // Select UTXOs — group by tweak so we can sign with one key
+      // Prefer untweaked UTXOs first, then tweaked ones
       const fee = 300;
       const needed = withdrawAmount + fee;
-      for (const utxo of available) {
+      let selected = [];
+      let total = 0;
+      let selectedTweak = null;
+
+      // Try untweaked first
+      for (const utxo of available.filter(u => !u.tweak)) {
         selected.push(utxo);
         total += utxo.amount;
         if (total >= needed) break;
+      }
+      // If not enough, try tweaked (same tweak group only)
+      if (total < needed) {
+        const tweaked = available.filter(u => u.tweak);
+        selected = [];
+        total = 0;
+        selectedTweak = null;
+        for (const utxo of tweaked) {
+          if (selectedTweak && utxo.tweak !== selectedTweak) continue;
+          selected.push(utxo);
+          selectedTweak = utxo.tweak;
+          total += utxo.amount;
+          if (total >= needed) break;
+        }
       }
       if (total < needed) {
         return reply.code(400).send({ error: 'Not enough UTXO value for withdrawal + fee', available: total, needed });
       }
 
-      // Load pod keypair
-      const kp = await loadOrCreateKeypair();
-      const privkeyBytes = hexToBytes(kp.privkey);
+      // Derive signing key (tweaked if UTXOs are tweaked)
+      const privkeyBytes = selectedTweak
+        ? btDeriveChainedPrivkey(hexToBytes(kp.privkey), [selectedTweak])
+        : hexToBytes(kp.privkey);
 
       // Generate a new keypair for the voucher recipient
       const voucherPrivkey = secp256k1.utils.randomPrivateKey();
