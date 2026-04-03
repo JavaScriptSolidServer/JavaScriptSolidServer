@@ -39,15 +39,17 @@ const SECRET = getSecret();
 /**
  * Create a simple token for a WebID
  * @param {string} webId - The WebID to create token for
- * @param {number} expiresIn - Expiration time in seconds (default 1 hour)
+ * @param {number} [expiresIn] - Expiration time in seconds (default: no expiry)
  * @returns {string} Token string
  */
-export function createToken(webId, expiresIn = 3600) {
+export function createToken(webId, expiresIn) {
   const payload = {
     webId,
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + expiresIn
   };
+  if (expiresIn !== undefined && expiresIn > 0) {
+    payload.exp = Math.floor(Date.now() / 1000) + expiresIn;
+  }
 
   const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto
@@ -65,7 +67,7 @@ export function createToken(webId, expiresIn = 3600) {
  * JWT tokens (3-part) require async verification via verifyTokenAsync().
  *
  * @param {string} token - The token to verify
- * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
+ * @returns {{webId: string, iat: number, exp?: number} | null} Decoded payload or null
  */
 export function verifyToken(token) {
   if (!token || typeof token !== 'string') {

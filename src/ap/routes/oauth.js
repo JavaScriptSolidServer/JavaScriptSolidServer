@@ -123,7 +123,7 @@ export function createAuthorizePostHandler () {
     // Implicit grant (response_type=token) — return token directly in fragment (RFC 6749 §4.2.2)
     // Used by remoteStorage clients
     if (response_type === 'token') {
-      const accessToken = createToken(account.webId)
+      const accessToken = createToken(account.webId, 3600)
 
       // Handle OOB — display token
       if (redirect_uri === OOB_REDIRECT) {
@@ -208,7 +208,7 @@ export function createTokenHandler () {
     }
 
     // Generate Bearer token using existing token infrastructure
-    const accessToken = createToken(authCode.webId)
+    const accessToken = createToken(authCode.webId, 3600)
 
     return reply.send({
       access_token: accessToken,
