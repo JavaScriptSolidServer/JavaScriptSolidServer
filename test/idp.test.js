@@ -132,6 +132,12 @@ describe('Identity Provider', () => {
       assert.ok(body.loginUrl, 'should include login URL');
       // Should also return a token for curl-based workflows
       assert.ok(body.token, 'should include token');
+
+      // Token should work for authenticated requests
+      const privateRes = await fetch(`${baseUrl}/${body.name}/private/`, {
+        headers: { 'Authorization': `Bearer ${body.token}` },
+      });
+      assert.strictEqual(privateRes.status, 200, 'token should authenticate to private folder');
     });
 
     it('should reject duplicate email', async () => {
