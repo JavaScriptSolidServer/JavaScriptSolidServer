@@ -311,6 +311,41 @@ export function createPayHandler(options = {}) {
         return reply.code(401).send({ error: 'NIP-98 authentication required' });
       }
       const didUri = pubkeyToDidNostr(pubkey);
+
+      // Auto-detect deposits to user's tweaked address (Phase 3)
+      if (payChains) {
+        try {
+          const kp = await loadOrCreateKeypair();
+          const utxos = await loadUtxos();
+          const ledger = await readLedger();
+          let credited = 0;
+
+          for (const chainId of payChains) {
+            const chain = CHAIN_REGISTRY[chainId];
+            const network = chainId === 'btc' ? 'mainnet' : (chainId === 'tbtc3' ? 'testnet' : 'testnet4');
+            const userAddr = btAddress(kp.pubkey, [didUri], network);
+
+            const resp = await fetch(`${chain.explorer}/address/${userAddr}/utxo`);
+            if (!resp.ok) continue;
+            const addrUtxos = await resp.json();
+
+            for (const u of addrUtxos) {
+              if (utxos.find(x => x.txid === u.txid && x.vout === u.vout)) continue;
+              // New UTXO — auto-credit
+              const currency = chain.unit;
+              credit(ledger, didUri, u.value, currency);
+              utxos.push({ txid: u.txid, vout: u.vout, amount: u.value, scriptpubkey: u.scriptpubkey || '', chain: chainId, tweak: didUri, spent: false });
+              credited += u.value;
+            }
+          }
+
+          if (credited > 0) {
+            await writeLedger(ledger);
+            await saveUtxos(utxos);
+          }
+        } catch { /* scan failure is non-fatal */ }
+      }
+
       const ledger = await readLedger();
       const response = {
         did: didUri,
