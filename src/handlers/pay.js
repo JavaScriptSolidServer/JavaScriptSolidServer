@@ -507,7 +507,10 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const currency = body?.currency && payChains?.includes(body.currency) ? body.currency : null;
+      if (body?.currency && (!payChains || !payChains.includes(body.currency))) {
+        return reply.code(400).send({ error: `Unsupported currency: ${body.currency}`, enabledChains: payChains || [] });
+      }
+      const currency = body?.currency || null;
       const balance = getBalance(ledger, didUri, currency);
 
       // Calculate withdrawal amount
@@ -572,7 +575,7 @@ export function createPayHandler(options = {}) {
         cost: satCost,
         rate: payRate,
         balance: getBalance(ledger, didUri, currency),
-        unit: 'sat',
+        unit: currency || 'sat',
         txid: result.txid,
         proof: {
           state: result.state,
