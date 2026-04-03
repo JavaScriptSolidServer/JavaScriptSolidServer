@@ -130,8 +130,8 @@ describe('Identity Provider', () => {
       assert.ok(body.podUri.includes(`idpuser${uniqueId}`));
       assert.ok(body.idpIssuer, 'should include IdP issuer');
       assert.ok(body.loginUrl, 'should include login URL');
-      // Should NOT have simple token when IdP is enabled
-      assert.ok(!body.token, 'should not have simple token');
+      // Should also return a token for curl-based workflows
+      assert.ok(body.token, 'should include token');
     });
 
     it('should reject duplicate email', async () => {

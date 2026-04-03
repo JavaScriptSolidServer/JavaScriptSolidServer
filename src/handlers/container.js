@@ -316,10 +316,12 @@ export async function handleCreatePod(request, reply) {
       const { createAccount } = await import('../idp/accounts.js');
       await createAccount({ username: name, email, password, webId, podName: name });
 
+      const token = createToken(webId);
       return reply.code(201).send({
         name,
         webId,
         podUri,
+        token,
         idpIssuer: issuer,
         loginUrl: `${baseUri}/idp/auth`,
       });
