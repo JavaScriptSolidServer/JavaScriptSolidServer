@@ -475,7 +475,7 @@ export function createServer(options = {}) {
   // Disabled in single-user mode
   if (singleUser) {
     fastify.post('/.pods', async (request, reply) => {
-      return reply.code(403).send({ error: 'Pod creation disabled in single-user mode' });
+      return reply.code(403).send({ error: 'Forbidden', message: 'Pod creation disabled in single-user mode' });
     });
   } else {
     fastify.post('/.pods', {
