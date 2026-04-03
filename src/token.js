@@ -187,24 +187,24 @@ async function broadcastTx(rawTxHex, mempoolUrl) {
 }
 
 // --- Trail persistence ---
-function trailDir() {
-  return path.join(process.env.DATA_ROOT || './data', '.well-known', 'token');
+function trailDir(root) {
+  return path.join(root || process.env.DATA_ROOT || './data', '.well-known', 'token');
 }
 
-function trailPath(ticker) {
-  return path.join(trailDir(), `${ticker.toLowerCase()}.json`);
+function trailPath(ticker, root) {
+  return path.join(trailDir(root), `${ticker.toLowerCase()}.json`);
 }
 
-export async function loadTrail(ticker) {
+export async function loadTrail(ticker, root) {
   try {
-    const data = await fs.readFile(trailPath(ticker), 'utf8');
+    const data = await fs.readFile(trailPath(ticker, root), 'utf8');
     return JSON.parse(data);
   } catch { return null; }
 }
 
-async function saveTrail(trail) {
-  await fs.ensureDir(trailDir());
-  await fs.writeFile(trailPath(trail.ticker), JSON.stringify(trail, null, 2));
+async function saveTrail(trail, root) {
+  await fs.ensureDir(trailDir(root));
+  await fs.writeFile(trailPath(trail.ticker, root), JSON.stringify(trail, null, 2));
 }
 
 export async function listTrails() {
@@ -236,14 +236,13 @@ export function parseTxoUri(uri) {
 
 // --- Mint: create genesis MRC20 token ---
 export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'https://mempool.space/testnet4', network = 'testnet4', root }) {
-  if (root) process.env.DATA_ROOT = root;
   const txo = parseTxoUri(voucher);
   const privkeyBytes = hexToU8(txo.privkey);
   const pubkeyBase = new Uint8Array(secp256k1.getPublicKey(privkeyBytes, true));
   const pubkeyBaseHex = bytesToHex(pubkeyBase);
 
   // Check if token already exists
-  const existing = await loadTrail(ticker);
+  const existing = await loadTrail(ticker, root);
   if (existing) throw new Error(`Token ${ticker} already exists`);
 
   // Create genesis MRC20 state
@@ -301,15 +300,14 @@ export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'h
     network,
     dateCreated: new Date().toISOString()
   };
-  await saveTrail(trail);
+  await saveTrail(trail, root);
 
   return { trail, txid: newTxid, address: genesisAddr };
 }
 
 // --- Transfer: send tokens to an address ---
 export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'https://mempool.space/testnet4', root }) {
-  if (root) process.env.DATA_ROOT = root;
-  const trail = await loadTrail(ticker);
+  const trail = await loadTrail(ticker, root);
   if (!trail) throw new Error(`Token ${ticker} not found`);
 
   const privkeyBytes = hexToU8(trail.privkey);
@@ -384,15 +382,14 @@ export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'ht
   trail.currentTxid = newTxid;
   trail.currentVout = 0;
   trail.currentAmount = outputAmount;
-  await saveTrail(trail);
+  await saveTrail(trail, root);
 
   return { trail, txid: newTxid, address: newAddr, state: newState, prevState: currentState };
 }
 
 // --- Info: show token state ---
 export async function tokenInfo(ticker, { root } = {}) {
-  if (root) process.env.DATA_ROOT = root;
-  const trail = await loadTrail(ticker);
+  const trail = await loadTrail(ticker, root);
   if (!trail) throw new Error(`Token ${ticker} not found`);
 
   const currentState = trail.states[trail.states.length - 1];
