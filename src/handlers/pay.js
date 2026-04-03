@@ -28,10 +28,29 @@
 import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
-import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex } from '../mrc20.js';
+import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex, btAddress } from '../mrc20.js';
 import { loadTrail, transferToken } from '../token.js';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import fs from 'fs-extra';
 import path from 'path';
+
+// --- Pod keypair for deposit addresses ---
+const keypairFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/keypair.json');
+
+async function loadOrCreateKeypair() {
+  try {
+    const data = await fs.readFile(keypairFile(), 'utf8');
+    return JSON.parse(data);
+  } catch {
+    const privkey = secp256k1.utils.randomPrivateKey();
+    const pubkey = secp256k1.getPublicKey(privkey, true);
+    const kp = { privkey: bytesToHex(privkey), pubkey: bytesToHex(pubkey) };
+    await fs.ensureDir(path.dirname(keypairFile()));
+    await fs.writeFile(keypairFile(), JSON.stringify(kp, null, 2));
+    return kp;
+  }
+}
 
 const DEFAULT_COST = 1; // satoshis per request
 
@@ -242,6 +261,15 @@ export function createPayHandler(options = {}) {
         info.pool = '/pay/.pool';
       }
       return reply.send(info);
+    }
+
+    // --- GET /pay/.address — public deposit address ---
+    if (url === '/pay/.address' && request.method === 'GET') {
+      const kp = await loadOrCreateKeypair();
+      const chain = request.query?.chain || (payChains ? payChains[0] : 'tbtc4');
+      const network = chain === 'btc' ? 'mainnet' : (chain === 'tbtc3' ? 'testnet' : 'testnet4');
+      const address = btAddress(kp.pubkey, [], network);
+      return reply.send({ address, chain, pubkey: kp.pubkey });
     }
 
     // --- GET /pay/.balance ---
