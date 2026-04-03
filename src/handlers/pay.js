@@ -29,14 +29,14 @@ import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
 import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex, btAddress } from '../mrc20.js';
-import { loadTrail, transferToken } from '../token.js';
+import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript } from '../token.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import fs from 'fs-extra';
 import path from 'path';
 
-// --- Pod keypair for deposit addresses ---
-const keypairFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/keypair.json');
+// --- Pod keypair for deposit addresses (stored outside web-accessible tree) ---
+const keypairFile = () => path.join(process.env.DATA_ROOT || './data', '.private/keypair.json');
 
 async function loadOrCreateKeypair() {
   try {
@@ -52,8 +52,8 @@ async function loadOrCreateKeypair() {
   }
 }
 
-// --- Pod UTXO tracking ---
-const utxoFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/utxos.json');
+// --- Pod UTXO tracking (stored outside web-accessible tree) ---
+const utxoFile = () => path.join(process.env.DATA_ROOT || './data', '.private/utxos.json');
 
 async function loadUtxos() {
   try {
@@ -284,8 +284,14 @@ export function createPayHandler(options = {}) {
 
     // --- GET /pay/.address — public deposit address ---
     if (url === '/pay/.address' && request.method === 'GET') {
-      const kp = await loadOrCreateKeypair();
       const chain = request.query?.chain || (payChains ? payChains[0] : 'tbtc4');
+      if (!CHAIN_REGISTRY[chain]) {
+        return reply.code(400).send({ error: `Unsupported chain: ${chain}` });
+      }
+      if (payChains && !payChains.includes(chain)) {
+        return reply.code(400).send({ error: `Chain not enabled: ${chain}`, enabledChains: payChains });
+      }
+      const kp = await loadOrCreateKeypair();
       const network = chain === 'btc' ? 'mainnet' : (chain === 'tbtc3' ? 'testnet' : 'testnet4');
       const address = btAddress(kp.pubkey, [], network);
       return reply.send({ address, chain, pubkey: kp.pubkey });
@@ -763,15 +769,14 @@ export function createPayHandler(options = {}) {
       const voucherPrivkey = secp256k1.utils.randomPrivateKey();
       const voucherPubkey = secp256k1.getPublicKey(voucherPrivkey, true);
       const voucherXonly = voucherPubkey.slice(1);
-      const voucherScript = (await import('../token.js')).p2trScript(voucherXonly);
+      const voucherScript = p2trScript(voucherXonly);
 
       // Build outputs: voucher + change back to pod
       const outputs = [{ amount: withdrawAmount, scriptPubKey: voucherScript }];
       const change = total - withdrawAmount - fee;
+      const podXonly = hexToBytes(kp.pubkey).slice(1);
       if (change > 546) {
-        const podXonly = hexToBytes(kp.pubkey).slice(1);
-        const podScript = (await import('../token.js')).p2trScript(podXonly);
-        outputs.push({ amount: change, scriptPubKey: podScript });
+        outputs.push({ amount: change, scriptPubKey: p2trScript(podXonly) });
       }
 
       // Build inputs
@@ -780,26 +785,27 @@ export function createPayHandler(options = {}) {
       }));
 
       // Build and broadcast
-      const { buildTransaction: buildTx, broadcastTx: broadcast } = await import('../token.js');
       let newTxid;
       try {
-        const rawTx = buildTx(inputs, outputs, privkeyBytes);
-        newTxid = await broadcast(rawTx, chain.explorer.replace(/\/api$/, ''));
+        const rawTx = buildTransaction(inputs, outputs, privkeyBytes);
+        newTxid = await broadcastTx(rawTx, chain.explorer.replace(/\/api$/, ''));
       } catch (err) {
         return reply.code(500).send({ error: `Broadcast failed: ${err.message}` });
       }
 
+      // Debit user balance
+      const debitResult = debit(ledger, didUri, withdrawAmount, currency);
+      if (!debitResult.success) {
+        return reply.code(402).send({ error: 'Balance changed during withdrawal', balance: debitResult.balance });
+      }
+      await writeLedger(ledger);
+
       // Mark UTXOs as spent, add change UTXO
       for (const u of selected) { u.spent = true; }
       if (change > 546) {
-        const podXonly = hexToBytes(kp.pubkey).slice(1);
         utxos.push({ txid: newTxid, vout: 1, amount: change, scriptpubkey: '5120' + bytesToHex(podXonly), chain: chainId, spent: false });
       }
       await saveUtxos(utxos);
-
-      // Debit user balance
-      debit(ledger, didUri, withdrawAmount, currency);
-      await writeLedger(ledger);
 
       // Return voucher URI
       const voucherUri = `txo:${chainId}:${newTxid}:0?amount=${withdrawAmount}&key=${bytesToHex(voucherPrivkey)}`;
