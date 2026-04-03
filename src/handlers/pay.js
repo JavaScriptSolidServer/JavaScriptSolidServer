@@ -195,6 +195,10 @@ function classifyDepositObject(obj) {
   if (obj.state?.profile === 'mono.mrc20.v0.1' && obj.prevState) {
     return { type: 'mrc20', state: obj.state, prevState: obj.prevState, anchor: obj.anchor };
   }
+  // Claim deposit: user sent sats to pod's address, claiming with txid
+  if (obj.txid && obj.vout !== undefined) {
+    return { type: 'claim', txid: obj.txid, vout: parseInt(obj.vout, 10), chain: obj.chain };
+  }
   // Fall back to TXO URI in .txo field
   if (obj.txo) {
     return { type: 'sats', txo: obj.txo };
@@ -398,11 +402,62 @@ export function createPayHandler(options = {}) {
         });
       }
 
+      // --- Claim deposit: user sent sats to pod's address ---
+      if (deposit.type === 'claim') {
+        const kp = await loadOrCreateKeypair();
+        const chainId = deposit.chain || (payChains ? payChains[0] : 'tbtc4');
+        if (payChains && !payChains.includes(chainId)) {
+          return reply.code(400).send({ error: `Chain '${chainId}' not enabled`, enabledChains: payChains });
+        }
+        const chain = CHAIN_REGISTRY[chainId];
+        if (!chain) {
+          return reply.code(400).send({ error: `Unknown chain: ${chainId}` });
+        }
+
+        // Derive pod's address for this chain
+        const network = chainId === 'btc' ? 'mainnet' : (chainId === 'tbtc3' ? 'testnet' : 'testnet4');
+        const podAddress = btAddress(kp.pubkey, [], network);
+
+        // Fetch transaction from mempool
+        const txResp = await fetch(`${chain.explorer}/tx/${deposit.txid}`);
+        if (!txResp.ok) {
+          return reply.code(400).send({ error: 'Transaction not found' });
+        }
+        const txData = await txResp.json();
+        const output = txData.vout?.[deposit.vout];
+        if (!output) {
+          return reply.code(400).send({ error: `Output ${deposit.vout} not found` });
+        }
+
+        // Verify output pays our address
+        if (output.scriptpubkey_address !== podAddress) {
+          return reply.code(400).send({ error: 'Output does not pay this pod\'s address', expected: podAddress });
+        }
+
+        const amount = output.value;
+        const currency = chain.unit;
+        const didUri = pubkeyToDidNostr(pubkey);
+        const ledger = await readLedger();
+        const newBalance = credit(ledger, didUri, amount, currency);
+        await writeLedger(ledger);
+
+        return reply.send({
+          did: didUri,
+          deposited: amount,
+          balance: newBalance,
+          unit: currency,
+          chain: chainId,
+          txid: deposit.txid,
+          address: podAddress
+        });
+      }
+
       return reply.code(400).send({
-        error: 'Invalid deposit format. Send a TXO URI string or MRC20 state proof.',
+        error: 'Invalid deposit format. Send a TXO URI string, MRC20 state proof, or claim {txid, vout}.',
         formats: {
           sats: 'POST body: "<txid>:<vout>" or {"txo": "<txid>:<vout>"}',
-          mrc20: 'POST body: {"type": "mrc20", "state": {...}, "prevState": {...}}'
+          mrc20: 'POST body: {"type": "mrc20", "state": {...}, "prevState": {...}}',
+          claim: 'POST body: {"txid": "...", "vout": 0, "chain": "tbtc4"}'
         }
       });
     }

@@ -109,12 +109,12 @@ function btDeriveChainedPrivkey(privkeyBytes, states) {
   return bigIntToBytes(d);
 }
 
-function p2trScript(xonly) {
+export function p2trScript(xonly) {
   return concatBytes(new Uint8Array([0x51, 0x20]), xonly);
 }
 
 // --- Bitcoin transaction building ---
-function buildTransaction(inputs, outputs, privkeyBytes) {
+export function buildTransaction(inputs, outputs, privkeyBytes) {
   const internalXOnly = new Uint8Array(secp256k1.getPublicKey(privkeyBytes, true)).slice(1);
   const untweakedHex = '5120' + bytesToHex(internalXOnly);
   const needsTweak = bytesToHex(inputs[0].scriptPubKey) !== untweakedHex;
@@ -173,7 +173,7 @@ function buildTransaction(inputs, outputs, privkeyBytes) {
   return bytesToHex(concatBytes(...parts));
 }
 
-async function broadcastTx(rawTxHex, mempoolUrl) {
+export async function broadcastTx(rawTxHex, mempoolUrl) {
   const res = await fetch(`${mempoolUrl}/api/tx`, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
