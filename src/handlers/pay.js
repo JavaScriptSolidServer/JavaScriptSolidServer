@@ -293,7 +293,10 @@ export function createPayHandler(options = {}) {
       }
       const kp = await loadOrCreateKeypair();
       const network = chain === 'btc' ? 'mainnet' : (chain === 'tbtc3' ? 'testnet' : 'testnet4');
-      const user = request.query?.user;
+      const user = request.query?.user?.trim().toLowerCase() || null;
+      if (user && !/^did:nostr:[0-9a-f]{64}$/.test(user)) {
+        return reply.code(400).send({ error: 'Invalid user DID. Expected: did:nostr:<64-hex>' });
+      }
       const states = user ? [user] : [];
       const address = btAddress(kp.pubkey, states, network);
       const response = { address, chain, pubkey: kp.pubkey };
@@ -775,12 +778,14 @@ export function createPayHandler(options = {}) {
         total += utxo.amount;
         if (total >= needed) break;
       }
-      // If not enough, try tweaked (same tweak only)
+      // If not enough, try tweaked (same tweak group only)
       if (total < needed) {
+        const tweaked = available.filter(u => u.tweak);
         selected = [];
         total = 0;
-        for (const utxo of available) {
-          if (selected.length > 0 && utxo.tweak !== selectedTweak) continue;
+        selectedTweak = null;
+        for (const utxo of tweaked) {
+          if (selectedTweak && utxo.tweak !== selectedTweak) continue;
           selected.push(utxo);
           selectedTweak = utxo.tweak;
           total += utxo.amount;
