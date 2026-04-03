@@ -49,7 +49,7 @@ export async function checkAccess({
   // Calculate WAC-Allow header
   const wacAllow = calculateWacAllow(authorizations, resourceUrl, agentWebId, isDefault);
 
-  return { allowed: result.allowed, wacAllow, paymentRequired: result.paymentRequired || null };
+  return { allowed: result.allowed, wacAllow, paymentRequired: result.paymentRequired || null, paid: result.paid, balance: result.balance, currency: result.currency };
 }
 
 /**
@@ -186,7 +186,7 @@ async function checkAuthorizations(authorizations, targetUrl, agentWebId, requir
               debit(ledger, agentWebId, cost, currency);
               const { writeLedger } = await import('../webledger.js');
               await writeLedger(ledger);
-              return { allowed: true, paid: cost };
+              return { allowed: true, paid: cost, balance: balance - cost, currency };
             }
           } catch (e) {
             // Ledger read failed — fall through to payment required
