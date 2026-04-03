@@ -47,7 +47,7 @@ export function createToken(webId, expiresIn) {
     webId,
     iat: Math.floor(Date.now() / 1000),
   };
-  if (expiresIn) {
+  if (expiresIn !== undefined && expiresIn > 0) {
     payload.exp = Math.floor(Date.now() / 1000) + expiresIn;
   }
 
