@@ -507,7 +507,8 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const balance = getBalance(ledger, didUri);
+      const currency = body?.currency && payChains?.includes(body.currency) ? body.currency : null;
+      const balance = getBalance(ledger, didUri, currency);
 
       // Calculate withdrawal amount
       let satCost, tokenAmount;
@@ -562,7 +563,7 @@ export function createPayHandler(options = {}) {
       }
 
       // Debit balance
-      debit(ledger, didUri, satCost);
+      debit(ledger, didUri, satCost, currency);
       await writeLedger(ledger);
 
       return reply.send({
@@ -570,7 +571,7 @@ export function createPayHandler(options = {}) {
         ticker: payToken,
         cost: satCost,
         rate: payRate,
-        balance: getBalance(ledger, didUri),
+        balance: getBalance(ledger, didUri, currency),
         unit: 'sat',
         txid: result.txid,
         proof: {
