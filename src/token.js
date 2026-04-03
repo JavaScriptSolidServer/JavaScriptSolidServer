@@ -207,13 +207,14 @@ async function saveTrail(trail, root) {
   await fs.writeFile(trailPath(trail.ticker, root), JSON.stringify(trail, null, 2));
 }
 
-export async function listTrails() {
+export async function listTrails(root) {
   try {
-    const files = await fs.readdir(trailDir());
+    const dir = trailDir(root);
+    const files = await fs.readdir(dir);
     const trails = [];
     for (const f of files) {
       if (f.endsWith('.json')) {
-        const data = await fs.readFile(path.join(trailDir(), f), 'utf8');
+        const data = await fs.readFile(path.join(dir, f), 'utf8');
         trails.push(JSON.parse(data));
       }
     }
