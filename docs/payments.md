@@ -73,8 +73,10 @@ jss start --pay --pay-cost 10 --pay-address your-address --pay-token PODS --pay-
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/pay/.info` | Public: cost, token info, chains, pool |
-| GET | `/pay/.balance` | Check your balance (NIP-98 auth) |
-| POST | `/pay/.deposit` | Deposit sats via TXO URI or MRC20 state proof |
+| GET | `/pay/.address` | Public: pod's taproot deposit address (optional `?user=did:nostr:...` for per-user address) |
+| GET | `/pay/.balance` | Check your balance (NIP-98 auth) — also auto-detects new deposits |
+| POST | `/pay/.deposit` | Deposit sats via TXO URI, claim `{txid, vout, chain}`, or MRC20 state proof |
+| POST | `/pay/.withdraw-sats` | Withdraw sats as a TXO voucher URI |
 | POST | `/pay/.buy` | Buy tokens with sat balance (requires `--pay-token`) |
 | POST | `/pay/.withdraw` | Withdraw balance as portable tokens (requires `--pay-token`) |
 | GET | `/pay/.offers` | List open sell orders (secondary market) |
@@ -86,41 +88,61 @@ jss start --pay --pay-cost 10 --pay-address your-address --pay-token PODS --pay-
 
 ### How It Works
 
-1. Authenticate with NIP-98 (Nostr HTTP Auth)
-2. Check balance at `/pay/.balance`
-3. Deposit sats by POSTing a TXO URI to `/pay/.deposit`
+1. Get your deposit address: `GET /pay/.address?user=did:nostr:YOUR_PUBKEY`
+2. Send sats to that address from any Bitcoin wallet
+3. Check balance at `/pay/.balance` — deposits are auto-detected
 4. Access paid resources — each request deducts the configured cost
-5. Optionally buy tokens (`/pay/.buy`) or withdraw as portable tokens (`/pay/.withdraw`)
-6. Balance tracked in a [Web Ledger](https://webledgers.org/) at `/.well-known/webledgers/webledgers.json`
+5. Withdraw sats as a portable voucher: `POST /pay/.withdraw-sats`
+6. Optionally buy tokens (`/pay/.buy`) or withdraw as portable tokens (`/pay/.withdraw`)
+7. Balance tracked in a [Web Ledger](https://webledgers.org/) at `/.well-known/webledgers/webledgers.json`
+
+Each user gets a unique taproot deposit address derived from the pod's master key + their identity. The pod auto-detects deposits by scanning the mempool API when you check your balance.
 
 ### Example
 
 ```bash
-# Check balance
+# Get your deposit address
+curl http://localhost:4443/pay/.address?chain=tbtc4&user=did:nostr:YOUR_PUBKEY
+# → {"address": "tb1p...", "chain": "tbtc4", "pubkey": "02..."}
+
+# Send sats to that address, then check balance (auto-detects deposits)
 curl -H "Authorization: Nostr <base64-event>" http://localhost:4443/pay/.balance
 
-# Deposit (post a confirmed transaction output)
+# Or deposit manually with a TXO voucher URI
 curl -X POST -H "Authorization: Nostr <base64-event>" \
   http://localhost:4443/pay/.deposit \
-  -d "txid:vout"
+  -d "txo:tbtc4:txid:vout?amount=X&key=Y"
+
+# Or claim a deposit to the pod's address
+curl -X POST -H "Authorization: Nostr <base64-event>" \
+  -H "Content-Type: application/json" \
+  http://localhost:4443/pay/.deposit \
+  -d '{"txid": "abc...", "vout": 0, "chain": "tbtc4"}'
 
 # Access paid resource
 curl -H "Authorization: Nostr <base64-event>" http://localhost:4443/pay/my-resource
+
+# Withdraw sats as a portable TXO voucher
+curl -X POST -H "Authorization: Nostr <base64-event>" \
+  -H "Content-Type: application/json" \
+  http://localhost:4443/pay/.withdraw-sats \
+  -d '{"amount": 10000, "chain": "tbtc4"}'
+# → {"voucher": "txo:tbtc4:txid:0?amount=10000&key=...", ...}
 
 # Buy tokens with sat balance
 curl -X POST -H "Authorization: Nostr <base64-event>" \
   -H "Content-Type: application/json" \
   http://localhost:4443/pay/.buy \
-  -d '{"amount": 100}'
+  -d '{"amount": 100, "currency": "tbtc4"}'
 
 # Withdraw entire balance as portable tokens
 curl -X POST -H "Authorization: Nostr <base64-event>" \
   -H "Content-Type: application/json" \
   http://localhost:4443/pay/.withdraw \
-  -d '{"all": true}'
+  -d '{"all": true, "currency": "tbtc4"}'
 ```
 
-Deposit verification uses the mempool API (default: testnet4). The `X-Balance` and `X-Cost` headers are returned on successful paid requests. Buy and withdraw return portable MRC20 proofs with Bitcoin anchor data for independent verification.
+Three deposit methods: (1) send to your per-user address and check balance (auto-detected), (2) TXO voucher URI with private key, (3) claim a txid after sending to the pod's address. The `X-Balance`, `X-Cost`, and `X-Pay-Currency` headers are returned on successful paid requests. Buy and withdraw return portable MRC20 proofs with Bitcoin anchor data for independent verification.
 
 ### Secondary Market
 
