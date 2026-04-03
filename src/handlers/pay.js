@@ -28,7 +28,7 @@
 import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
-import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex, btAddress } from '../mrc20.js';
+import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, btAddress } from '../mrc20.js';
 import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript } from '../token.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
@@ -440,11 +440,16 @@ export function createPayHandler(options = {}) {
         const podAddress = btAddress(kp.pubkey, [], network);
 
         // Fetch transaction from mempool
-        const txResp = await fetch(`${chain.explorer}/tx/${deposit.txid}`);
-        if (!txResp.ok) {
-          return reply.code(400).send({ error: 'Transaction not found' });
+        let txData;
+        try {
+          const txResp = await fetch(`${chain.explorer}/tx/${deposit.txid}`);
+          if (!txResp.ok) {
+            return reply.code(400).send({ error: 'Transaction not found' });
+          }
+          txData = await txResp.json();
+        } catch (err) {
+          return reply.code(502).send({ error: `Failed to verify transaction: ${err.message}` });
         }
-        const txData = await txResp.json();
         const output = txData.vout?.[deposit.vout];
         if (!output) {
           return reply.code(400).send({ error: `Output ${deposit.vout} not found` });
