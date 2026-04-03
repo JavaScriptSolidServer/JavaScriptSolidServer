@@ -330,9 +330,8 @@ export function createPayHandler(options = {}) {
             const addrUtxos = await resp.json();
 
             for (const u of addrUtxos) {
-              if (!u.status?.confirmed) continue;
               if (utxos.find(x => x.txid === u.txid && x.vout === u.vout)) continue;
-              // New confirmed UTXO — fetch tx for scriptpubkey, then auto-credit
+              // New UTXO — fetch tx for scriptpubkey, then auto-credit
               let scriptpubkey = '';
               try {
                 const txResp = await fetch(`${chain.explorer}/tx/${u.txid}`);
