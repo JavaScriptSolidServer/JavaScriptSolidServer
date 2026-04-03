@@ -130,8 +130,14 @@ describe('Identity Provider', () => {
       assert.ok(body.podUri.includes(`idpuser${uniqueId}`));
       assert.ok(body.idpIssuer, 'should include IdP issuer');
       assert.ok(body.loginUrl, 'should include login URL');
-      // Should NOT have simple token when IdP is enabled
-      assert.ok(!body.token, 'should not have simple token');
+      // Should also return a token for curl-based workflows
+      assert.ok(body.token, 'should include token');
+
+      // Token should work for authenticated requests
+      const privateRes = await fetch(`${baseUrl}/${body.name}/private/`, {
+        headers: { 'Authorization': `Bearer ${body.token}` },
+      });
+      assert.strictEqual(privateRes.status, 200, 'token should authenticate to private folder');
     });
 
     it('should reject duplicate email', async () => {

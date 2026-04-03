@@ -310,16 +310,18 @@ export async function handleCreatePod(request, reply) {
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
-  // If IdP is enabled, create account instead of simple token
+  // If IdP is enabled, create account and return token + login URL
   if (idpEnabled) {
     try {
       const { createAccount } = await import('../idp/accounts.js');
       await createAccount({ username: name, email, password, webId, podName: name });
 
+      const token = createToken(webId);
       return reply.code(201).send({
         name,
         webId,
         podUri,
+        token,
         idpIssuer: issuer,
         loginUrl: `${baseUri}/idp/auth`,
       });
