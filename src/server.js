@@ -448,7 +448,7 @@ export function createServer(options = {}) {
       return;
     }
 
-    const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply);
+    const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } = await authorize(request, reply);
 
     // Store webId and wacAllow on request for handlers to use
     request.webId = webId;
@@ -456,6 +456,13 @@ export function createServer(options = {}) {
 
     // Set WAC-Allow header for all responses (handlers may override)
     reply.header('WAC-Allow', wacAllow);
+
+    // Set payment headers for paid access
+    if (paid !== undefined) {
+      reply.header('X-Cost', String(paid));
+      reply.header('X-Balance', String(balance));
+      if (currency) reply.header('X-Pay-Currency', currency);
+    }
 
     // Handle payment-gated resources
     if (paymentRequired) {
