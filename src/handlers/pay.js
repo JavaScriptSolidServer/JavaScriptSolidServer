@@ -52,6 +52,21 @@ async function loadOrCreateKeypair() {
   }
 }
 
+// --- Pod UTXO tracking ---
+const utxoFile = () => path.join(process.env.DATA_ROOT || './data', '.well-known/webledgers/utxos.json');
+
+async function loadUtxos() {
+  try {
+    const data = await fs.readFile(utxoFile(), 'utf8');
+    return JSON.parse(data);
+  } catch { return []; }
+}
+
+async function saveUtxos(utxos) {
+  await fs.ensureDir(path.dirname(utxoFile()));
+  await fs.writeFile(utxoFile(), JSON.stringify(utxos, null, 2));
+}
+
 const DEFAULT_COST = 1; // satoshis per request
 
 // --- Chain registry for multi-chain deposits ---
@@ -436,6 +451,16 @@ export function createPayHandler(options = {}) {
 
         const amount = output.value;
         const currency = chain.unit;
+
+        // Replay protection + UTXO tracking
+        const utxos = await loadUtxos();
+        const utxoKey = `${deposit.txid}:${deposit.vout}`;
+        if (utxos.find(u => u.txid === deposit.txid && u.vout === deposit.vout)) {
+          return reply.code(400).send({ error: 'This output has already been claimed' });
+        }
+        utxos.push({ txid: deposit.txid, vout: deposit.vout, amount, scriptpubkey: output.scriptpubkey, chain: chainId, spent: false });
+        await saveUtxos(utxos);
+
         const didUri = pubkeyToDidNostr(pubkey);
         const ledger = await readLedger();
         const newBalance = credit(ledger, didUri, amount, currency);
@@ -669,6 +694,121 @@ export function createPayHandler(options = {}) {
             network: result.trail.network
           }
         }
+      });
+    }
+
+    // --- POST /pay/.withdraw-sats — withdraw sats as a TXO voucher ---
+    if (url === '/pay/.withdraw-sats' && request.method === 'POST') {
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      let body = request.body;
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
+
+      const withdrawAmount = parseInt(body?.amount, 10);
+      const chainId = body?.chain || (payChains ? payChains[0] : 'tbtc4');
+      if (!withdrawAmount || withdrawAmount <= 0) {
+        return reply.code(400).send({ error: 'Specify amount to withdraw' });
+      }
+      if (payChains && !payChains.includes(chainId)) {
+        return reply.code(400).send({ error: `Chain '${chainId}' not enabled` });
+      }
+      const chain = CHAIN_REGISTRY[chainId];
+      if (!chain) {
+        return reply.code(400).send({ error: `Unknown chain: ${chainId}` });
+      }
+      const currency = chain.unit;
+
+      // Check user balance
+      const didUri = pubkeyToDidNostr(pubkey);
+      const ledger = await readLedger();
+      const balance = getBalance(ledger, didUri, currency);
+      if (balance < withdrawAmount) {
+        return reply.code(402).send({ error: 'Insufficient balance', balance, requested: withdrawAmount, unit: currency });
+      }
+
+      // Find unspent UTXOs for this chain
+      const utxos = await loadUtxos();
+      const available = utxos.filter(u => u.chain === chainId && !u.spent);
+      if (available.length === 0) {
+        return reply.code(400).send({ error: 'No UTXOs available for withdrawal' });
+      }
+
+      // Select UTXOs (simple: pick first one that's big enough, or accumulate)
+      let selected = [];
+      let total = 0;
+      const fee = 300;
+      const needed = withdrawAmount + fee;
+      for (const utxo of available) {
+        selected.push(utxo);
+        total += utxo.amount;
+        if (total >= needed) break;
+      }
+      if (total < needed) {
+        return reply.code(400).send({ error: 'Not enough UTXO value for withdrawal + fee', available: total, needed });
+      }
+
+      // Load pod keypair
+      const kp = await loadOrCreateKeypair();
+      const privkeyBytes = hexToBytes(kp.privkey);
+
+      // Generate a new keypair for the voucher recipient
+      const voucherPrivkey = secp256k1.utils.randomPrivateKey();
+      const voucherPubkey = secp256k1.getPublicKey(voucherPrivkey, true);
+      const voucherXonly = voucherPubkey.slice(1);
+      const voucherScript = (await import('../token.js')).p2trScript(voucherXonly);
+
+      // Build outputs: voucher + change back to pod
+      const outputs = [{ amount: withdrawAmount, scriptPubKey: voucherScript }];
+      const change = total - withdrawAmount - fee;
+      if (change > 546) {
+        const podXonly = hexToBytes(kp.pubkey).slice(1);
+        const podScript = (await import('../token.js')).p2trScript(podXonly);
+        outputs.push({ amount: change, scriptPubKey: podScript });
+      }
+
+      // Build inputs
+      const inputs = selected.map(u => ({
+        txid: u.txid, vout: u.vout, amount: u.amount, scriptPubKey: hexToBytes(u.scriptpubkey)
+      }));
+
+      // Build and broadcast
+      const { buildTransaction: buildTx, broadcastTx: broadcast } = await import('../token.js');
+      let newTxid;
+      try {
+        const rawTx = buildTx(inputs, outputs, privkeyBytes);
+        newTxid = await broadcast(rawTx, chain.explorer.replace(/\/api$/, ''));
+      } catch (err) {
+        return reply.code(500).send({ error: `Broadcast failed: ${err.message}` });
+      }
+
+      // Mark UTXOs as spent, add change UTXO
+      for (const u of selected) { u.spent = true; }
+      if (change > 546) {
+        const podXonly = hexToBytes(kp.pubkey).slice(1);
+        utxos.push({ txid: newTxid, vout: 1, amount: change, scriptpubkey: '5120' + bytesToHex(podXonly), chain: chainId, spent: false });
+      }
+      await saveUtxos(utxos);
+
+      // Debit user balance
+      debit(ledger, didUri, withdrawAmount, currency);
+      await writeLedger(ledger);
+
+      // Return voucher URI
+      const voucherUri = `txo:${chainId}:${newTxid}:0?amount=${withdrawAmount}&key=${bytesToHex(voucherPrivkey)}`;
+      return reply.send({
+        voucher: voucherUri,
+        txid: newTxid,
+        amount: withdrawAmount,
+        unit: currency,
+        balance: getBalance(ledger, didUri, currency)
       });
     }
 
