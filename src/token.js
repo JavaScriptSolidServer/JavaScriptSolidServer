@@ -235,7 +235,8 @@ export function parseTxoUri(uri) {
 }
 
 // --- Mint: create genesis MRC20 token ---
-export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'https://mempool.space/testnet4', network = 'testnet4' }) {
+export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'https://mempool.space/testnet4', network = 'testnet4', root }) {
+  if (root) process.env.DATA_ROOT = root;
   const txo = parseTxoUri(voucher);
   const privkeyBytes = hexToU8(txo.privkey);
   const pubkeyBase = new Uint8Array(secp256k1.getPublicKey(privkeyBytes, true));
@@ -306,7 +307,8 @@ export async function mintToken({ ticker, name, supply, voucher, mempoolUrl = 'h
 }
 
 // --- Transfer: send tokens to an address ---
-export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'https://mempool.space/testnet4' }) {
+export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'https://mempool.space/testnet4', root }) {
+  if (root) process.env.DATA_ROOT = root;
   const trail = await loadTrail(ticker);
   if (!trail) throw new Error(`Token ${ticker} not found`);
 
@@ -388,7 +390,8 @@ export async function transferToken({ ticker, from, to, amount, mempoolUrl = 'ht
 }
 
 // --- Info: show token state ---
-export async function tokenInfo(ticker) {
+export async function tokenInfo(ticker, { root } = {}) {
+  if (root) process.env.DATA_ROOT = root;
   const trail = await loadTrail(ticker);
   if (!trail) throw new Error(`Token ${ticker} not found`);
 
