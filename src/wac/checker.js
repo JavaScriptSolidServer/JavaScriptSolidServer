@@ -181,9 +181,9 @@ async function checkAuthorizations(authorizations, targetUrl, agentWebId, requir
             }
 
             // Paid access: check balance and deduct
-            const balance = getBalance(ledger, agentWebId);
+            const balance = getBalance(ledger, agentWebId, currency);
             if (cost > 0 && balance >= cost) {
-              debit(ledger, agentWebId, cost, currency === 'sats' ? 'sat' : currency);
+              debit(ledger, agentWebId, cost, currency);
               const { writeLedger } = await import('../webledger.js');
               await writeLedger(ledger);
               return { allowed: true, paid: cost };

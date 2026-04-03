@@ -1,6 +1,6 @@
 {
   "name": "javascript-solid-server",
-  "version": "0.0.125",
+  "version": "0.0.126",
   "description": "A minimal, fast Solid server",
   "main": "src/index.js",
   "type": "module",
