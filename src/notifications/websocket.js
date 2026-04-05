@@ -206,11 +206,16 @@ export function broadcast(url) {
 
   // Walk up all ancestor containers so subscribing to a root
   // catches changes in nested paths (e.g. /db/mydata/ catches /db/mydata/issues/1)
-  var containerUrl = getParentContainer(url);
-  while (containerUrl && containerUrl !== url) {
+  // Stop at the origin root to avoid climbing past the hostname
+  let originRoot;
+  try { originRoot = new URL(url).origin + '/'; } catch (e) { return; }
+
+  let currentUrl = url;
+  let containerUrl = getParentContainer(currentUrl);
+  while (containerUrl && containerUrl !== currentUrl && containerUrl.length >= originRoot.length) {
     notifySubscribers(containerUrl);
-    url = containerUrl;
-    containerUrl = getParentContainer(containerUrl);
+    currentUrl = containerUrl;
+    containerUrl = getParentContainer(currentUrl);
   }
 }
 
