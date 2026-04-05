@@ -204,11 +204,13 @@ export function broadcast(url) {
   // Notify direct subscribers
   notifySubscribers(url);
 
-  // Also notify container subscribers (parent directory)
-  // This allows subscribing to a container and getting notified of all child changes
-  const containerUrl = getParentContainer(url);
-  if (containerUrl && containerUrl !== url) {
+  // Walk up all ancestor containers so subscribing to a root
+  // catches changes in nested paths (e.g. /db/mydata/ catches /db/mydata/issues/1)
+  var containerUrl = getParentContainer(url);
+  while (containerUrl && containerUrl !== url) {
     notifySubscribers(containerUrl);
+    url = containerUrl;
+    containerUrl = getParentContainer(containerUrl);
   }
 }
 
