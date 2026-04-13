@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 840" width="960" height="840">
+<defs>
+  <marker id="aBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#2563eb"/>
+  </marker>
+  <marker id="aPurp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#7c3aed"/>
+  </marker>
+  <marker id="aGreen" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#059669"/>
+  </marker>
+  <marker id="aOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#ea580c"/>
+  </marker>
+  <marker id="aTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#0d9488"/>
+  </marker>
+  <marker id="aGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#6b7280"/>
+  </marker>
+  <marker id="aGold" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#b45309"/>
+  </marker>
+  <marker id="aRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M 0 1 L 10 5 L 0 9 z" fill="#dc2626"/>
+  </marker>
+  <filter id="shadow" x="-2%" y="-2%" width="104%" height="108%">
+    <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity="0.08"/>
+  </filter>
+</defs>
+<rect width="960" height="840" fill="#ffffff"/>
+<text x="480" y="34" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#111827">JavaScript Solid Server (JSS)</text>
+<text x="480" y="52" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" fill="#6b7280">Lightweight high-performance Solid pod server · ~1 MB · 5,400+ req/s · Node.js</text>
+<!-- Layer 1: Clients -->
+<rect x="80" y="72" width="800" height="64" rx="8" fill="#eff6ff" stroke="none"/>
+<text x="96" y="88" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#2563eb" letter-spacing="0.5">CLIENTS</text>
+<rect x="96" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="148" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Solid Apps</text>
+<rect x="228" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="280" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Browsers</text>
+<rect x="360" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="412" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Nostr Clients</text>
+<rect x="492" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#ea580c" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="544" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Fediverse</text>
+<rect x="624" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="676" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Git</text>
+<rect x="756" y="94" width="104" height="32" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="808" y="114" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">CLI / API</text>
+<!-- Layer 2: Authentication -->
+<rect x="80" y="160" width="800" height="72" rx="8" fill="#f0fdfa" stroke="none"/>
+<text x="96" y="176" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#0d9488" letter-spacing="0.5">AUTHENTICATION LAYER</text>
+<rect x="112" y="182" width="112" height="40" rx="8" fill="#ffffff" stroke="#0d9488" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="168" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Solid-OIDC</text>
+<text x="168" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">DPoP tokens</text>
+<rect x="264" y="182" width="112" height="40" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="320" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Passkeys</text>
+<text x="320" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Schnorr SSO</text>
+<rect x="416" y="182" width="112" height="40" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="472" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Nostr NIP-98</text>
+<text x="472" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Signatures</text>
+<rect x="568" y="182" width="112" height="40" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="624" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">Invites</text>
+<text x="624" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Controlled signup</text>
+<rect x="720" y="182" width="112" height="40" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="776" y="200" text-anchor="middle" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#111827">WebID</text>
+<text x="776" y="214" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Identity</text>
+<!-- Layer 3: Core Server -->
+<rect x="80" y="256" width="800" height="168" rx="8" fill="#f0fdf4" stroke="none"/>
+<text x="96" y="272" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#059669" letter-spacing="0.5">CORE SERVER ENGINE</text>
+<rect x="100" y="280" width="200" height="56" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="200.0" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">LDP CRUD</text>
+<text x="200.0" y="326" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">GET PUT POST DELETE PATCH HEAD</text>
+<text x="200" y="310" text-anchor="middle" font-family="monospace" font-size="9" fill="#059669">5,400+ req/s</text>
+<rect x="320" y="280" width="160" height="56" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="400.0" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">Content Negotiation</text>
+<text x="400.0" y="326" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">JSON-LD + Turtle + N3</text>
+<rect x="500" y="280" width="160" height="56" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="580.0" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">WebSocket</text>
+<text x="580.0" y="326" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Live update notifications</text>
+<rect x="680" y="280" width="168" height="56" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="764.0" y="300" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">SPARQL Update</text>
+<text x="764.0" y="326" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">N3 PATCH operations</text>
+<rect x="100" y="352" width="268" height="56" rx="6" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="112" y="372" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#374151">Multi-Pod Architecture</text>
+<text x="112" y="394" font-family="monospace" font-size="9" fill="#6b7280">path: /alice/ | subdomain: alice.pod.me</text>
+<rect x="388" y="352" width="132" height="56" rx="6" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="400" y="372" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#374151">HTTP 402 Pay</text>
+<text x="400" y="394" font-family="monospace" font-size="9" fill="#6b7280">satoshi per request</text>
+<rect x="540" y="352" width="132" height="56" rx="6" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="552" y="372" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#374151">Storage Quotas</text>
+<text x="552" y="394" font-family="monospace" font-size="9" fill="#6b7280">per-user limits</text>
+<rect x="692" y="352" width="156" height="56" rx="6" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="704" y="372" font-family="system-ui, sans-serif" font-size="10" font-weight="600" fill="#374151">Terminal</text>
+<text x="704" y="394" font-family="monospace" font-size="9" fill="#6b7280">WebSocket shell</text>
+<!-- Layer 4: Protocol Integrations -->
+<rect x="80" y="448" width="800" height="80" rx="8" fill="#faf5ff" stroke="none"/>
+<text x="96" y="464" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#7c3aed" letter-spacing="0.5">PROTOCOL INTEGRATIONS</text>
+<rect x="100" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="156.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">Nostr Relay</text>
+<text x="156.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">NIP-01 wss://</text>
+<rect x="224" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#ea580c" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="280.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">ActivityPub</text>
+<text x="280.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Fediverse</text>
+<rect x="348" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="404.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">Git HTTP</text>
+<text x="404.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Clone + Push</text>
+<rect x="472" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="528.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">remoteStorage</text>
+<text x="528.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">File sync</text>
+<rect x="596" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="652.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">WebRTC</text>
+<text x="652.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">P2P signaling</text>
+<rect x="720" y="470" width="112" height="48" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="776.0" y="490" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11" font-weight="600" fill="#111827">Tunnel</text>
+<text x="776.0" y="508" text-anchor="middle" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Reverse proxy</text>
+<!-- Layer 5: Access Control -->
+<rect x="80" y="552" width="800" height="72" rx="8" fill="#fef2f2" stroke="none"/>
+<text x="96" y="568" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#ea580c" letter-spacing="0.5">WEB ACCESS CONTROL (WAC)</text>
+<rect x="108" y="574" width="340" height="40" rx="6" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="124" y="590" font-family="monospace" font-size="10" fill="#ea580c">resource.acl</text>
+<text x="228" y="590" font-family="system-ui, sans-serif" font-size="9.5" fill="#6b7280">→ agent + mode + accessTo</text>
+<text x="124" y="606" font-family="system-ui, sans-serif" font-size="8.5" fill="#6b7280">Inheritance: acl:default cascades to children</text>
+<rect x="466" y="580" width="60" height="24" rx="6" fill="#ffffff" stroke="#059669" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="496.0" y="596" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#111827">Read</text>
+<rect x="534" y="580" width="60" height="24" rx="6" fill="#ffffff" stroke="#ea580c" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="564.0" y="596" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#111827">Write</text>
+<rect x="602" y="580" width="60" height="24" rx="6" fill="#ffffff" stroke="#2563eb" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="632.0" y="596" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#111827">Append</text>
+<rect x="674" y="580" width="60" height="24" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="704.0" y="596" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#111827">Control</text>
+<rect x="750" y="580" width="60" height="24" rx="6" fill="#ffffff" stroke="#b45309" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="780.0" y="596" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#111827">Origin</text>
+<!-- Layer 6: Storage -->
+<rect x="80" y="648" width="800" height="80" rx="8" fill="#fefce8" stroke="none"/>
+<text x="96" y="664" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#b45309" letter-spacing="0.5">STORAGE LAYER</text>
+<rect x="120" y="672" width="320" height="40" rx="8" fill="#ffffff" stroke="#059669" stroke-width="2" filter="url(#shadow)"/>
+<text x="280" y="690" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="700" fill="#111827">Filesystem (default)</text>
+<text x="280" y="706" text-anchor="middle" font-family="monospace" font-size="8.5" fill="#059669">JSON-LD files + .acl resources</text>
+<rect x="480" y="672" width="200" height="40" rx="8" fill="#ffffff" stroke="#059669" stroke-width="1.2" filter="url(#shadow)"/>
+<text x="580" y="690" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" font-weight="600" fill="#111827">MongoDB</text>
+<text x="580" y="706" text-anchor="middle" font-family="monospace" font-size="8.5" fill="#6b7280">optional /db/ routes</text>
+<rect x="720" y="672" width="140" height="40" rx="8" fill="#ffffff" stroke="#d1d5db" stroke-width="1"/>
+<text x="790" y="690" text-anchor="middle" font-family="monospace" font-size="10" fill="#111827">/alice/</text>
+<text x="790" y="706" text-anchor="middle" font-family="monospace" font-size="10" fill="#6b7280">/bob/</text>
+<!-- Performance Stats -->
+<rect x="80" y="748" width="380" height="72" rx="8" fill="#f0fdf4" stroke="#059669" stroke-width="1.2"/>
+<text x="100" y="766" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#059669">PERFORMANCE</text>
+<text x="108" y="786" font-family="monospace" font-size="9" font-weight="700" fill="#111827">GET</text>
+<text x="108" y="800" font-family="monospace" font-size="10" font-weight="600" fill="#059669">5,400+</text>
+<text x="108" y="812" font-family="monospace" font-size="8" fill="#6b7280">1.2ms</text>
+<text x="196" y="786" font-family="monospace" font-size="9" font-weight="700" fill="#111827">PUT</text>
+<text x="196" y="800" font-family="monospace" font-size="10" font-weight="600" fill="#059669">5,700+</text>
+<text x="196" y="812" font-family="monospace" font-size="8" fill="#6b7280">1.1ms</text>
+<text x="284" y="786" font-family="monospace" font-size="9" font-weight="700" fill="#111827">POST</text>
+<text x="284" y="800" font-family="monospace" font-size="10" font-weight="600" fill="#059669">5,200+</text>
+<text x="284" y="812" font-family="monospace" font-size="8" fill="#6b7280">1.3ms</text>
+<text x="372" y="786" font-family="monospace" font-size="9" font-weight="700" fill="#111827">OPTIONS</text>
+<text x="372" y="800" font-family="monospace" font-size="10" font-weight="600" fill="#059669">10,000+</text>
+<text x="372" y="812" font-family="monospace" font-size="8" fill="#6b7280">0.4ms</text>
+<rect x="500" y="748" width="380" height="72" rx="8" fill="#fffbeb" stroke="#b45309" stroke-width="1.2"/>
+<text x="520" y="766" font-family="system-ui, sans-serif" font-size="10" font-weight="700" fill="#b45309">QUICK START</text>
+<text x="520" y="784" font-family="monospace" font-size="9" fill="#111827">npm install -g javascript-solid-server</text>
+<text x="520" y="800" font-family="monospace" font-size="9" fill="#059669">jss start --port 8443 --idp --nostr</text>
+<text x="520" y="814" font-family="monospace" font-size="8.5" fill="#6b7280">~1 MB package · AGPL-3.0</text>
+<!-- Arrows -->
+<path d="M480 136 L480 160" fill="none" stroke="#0d9488" stroke-width="1.5" marker-end="url(#aTeal)"/>
+<rect x="436.0" y="139" width="88.0" height="18" rx="4" fill="#ffffff" stroke="#0d9488" stroke-width="0.8"/>
+<text x="480" y="151" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#0d9488">authenticate</text>
+<path d="M480 232 L480 256" fill="none" stroke="#059669" stroke-width="1.5" marker-end="url(#aGreen)"/>
+<rect x="452.25" y="235" width="55.5" height="18" rx="4" fill="#ffffff" stroke="#059669" stroke-width="0.8"/>
+<text x="480" y="247" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#059669">request</text>
+<path d="M480 424 L480 448" fill="none" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#aPurp)"/>
+<rect x="445.75" y="427" width="68.5" height="18" rx="4" fill="#ffffff" stroke="#7c3aed" stroke-width="0.8"/>
+<text x="480" y="439" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#7c3aed">protocols</text>
+<path d="M480 528 L480 552" fill="none" stroke="#ea580c" stroke-width="1.5" marker-end="url(#aOrange)"/>
+<rect x="445.75" y="531" width="68.5" height="18" rx="4" fill="#ffffff" stroke="#ea580c" stroke-width="0.8"/>
+<text x="480" y="543" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#ea580c">authorize</text>
+<path d="M480 624 L480 648" fill="none" stroke="#b45309" stroke-width="1.5" marker-end="url(#aGold)"/>
+<rect x="452.25" y="627" width="55.5" height="18" rx="4" fill="#ffffff" stroke="#b45309" stroke-width="0.8"/>
+<text x="480" y="639" text-anchor="middle" font-family="system-ui, sans-serif" font-size="9" font-weight="500" fill="#b45309">persist</text>
+</svg>

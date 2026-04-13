@@ -6,6 +6,12 @@ A minimal, fast, JSON-LD native Solid server.
 
 **[Documentation](https://javascriptsolidserver.github.io/docs/)** | **[GitHub](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)**
 
+## Architecture
+
+<p align="center">
+  <img src="jss-architecture.svg" alt="JSS Architecture Diagram" width="960">
+</p>
+
 ## Features
 
 - **LDP CRUD** — GET, PUT, POST, DELETE, HEAD, PATCH (N3 + SPARQL Update)
