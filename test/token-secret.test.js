@@ -56,6 +56,27 @@ describe('readOrWritePersistedSecret', () => {
     const unwritable = path.join(blockerFile, '.jss', 'token.secret');
     assert.throws(() => readOrWritePersistedSecret(unwritable));
   });
+
+  it('recovers when the secret file already exists but is empty', () => {
+    // Simulates the lose-a-race case: another process created the file
+    // between our read and our write. Exclusive-create fails EEXIST and
+    // we fall back to reading / (if empty) writing without wx.
+    const p = path.join(tmpDir, 'empty', '.jss', 'token.secret');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, '');
+    const s = readOrWritePersistedSecret(p);
+    assert.strictEqual(s.length, 64);
+    assert.strictEqual(fs.readFileSync(p, 'utf8').trim(), s);
+  });
+
+  it('tightens permissions when the file already exists with loose mode', { skip: process.platform === 'win32' }, () => {
+    const p = path.join(tmpDir, 'loose', '.jss', 'token.secret');
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o755 });
+    fs.writeFileSync(p, 'a'.repeat(64), { mode: 0o644 });
+    readOrWritePersistedSecret(p);
+    assert.strictEqual(fs.statSync(p).mode & 0o777, 0o600);
+    assert.strictEqual(fs.statSync(path.dirname(p)).mode & 0o777, 0o700);
+  });
 });
 
 describe('resolveTokenSecret', () => {
@@ -112,6 +133,22 @@ describe('resolveTokenSecret', () => {
       exit: (code) => { exitCode = code; },
     });
     assert.strictEqual(exitCode, 1);
+  });
+
+  it('production error message references the actual secret directory', () => {
+    const secretPath = buildUnwritable('custom-path');
+    const errors = [];
+    resolveTokenSecret({
+      env: { NODE_ENV: 'production' },
+      secretPath,
+      log: { warn: () => {}, error: (msg) => errors.push(msg) },
+      exit: () => {},
+    });
+    // Guidance line should point at the dirname we actually tried to write.
+    assert.ok(
+      errors.some(m => m.includes(path.dirname(secretPath))),
+      `expected an error to mention ${path.dirname(secretPath)}, got: ${errors.join(' | ')}`
+    );
   });
 
   it('falls back to an ephemeral secret outside production when persistence fails', () => {
