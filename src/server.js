@@ -314,12 +314,12 @@ export function createServer(options = {}) {
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
 
-  // ActivityPub actor endpoint - dedicated route for /profile/card with AP Accept header
+  // ActivityPub actor endpoint - dedicated route for /profile/card.jsonld with AP Accept header
   // Registered before wildcard routes to take priority
   if (activitypubEnabled) {
     fastify.route({
       method: 'GET',
-      url: '/profile/card',
+      url: '/profile/card.jsonld',
       handler: async (request, reply) => {
         const accept = request.headers.accept || '';
         const wantsAP = accept.includes('activity+json') ||
@@ -426,13 +426,13 @@ export function createServer(options = {}) {
   fastify.addHook('preHandler', async (request, reply) => {
     // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
-    const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following',
+    const apPaths = ['/inbox', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
       '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials',
       '/oauth/authorize', '/oauth/token'];
     // Check if request wants ActivityPub content for profile
     const accept = request.headers.accept || '';
     const wantsAP = accept.includes('activity+json') || accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
-    const isProfileAP = activitypubEnabled && wantsAP && (request.url === '/profile/card' || request.url.startsWith('/profile/card?'));
+    const isProfileAP = activitypubEnabled && wantsAP && (request.url === '/profile/card.jsonld' || request.url.startsWith('/profile/card.jsonld?'));
     if (request.url === '/.pods' ||
         request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
@@ -557,11 +557,11 @@ export function createServer(options = {}) {
       const isRootPod = !singleUserName || singleUserName === '/';
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
-      const webId = `${podUri}profile/card#me`;
+      const webId = `${podUri}profile/card.jsonld#me`;
       const displayName = isRootPod ? 'me' : singleUserName;
 
-      // Check if pod already exists (profile/card is the indicator)
-      const profileExists = await storage.exists(`${podPath}profile/card`);
+      // Check if pod already exists (profile/card.jsonld is the indicator)
+      const profileExists = await storage.exists(`${podPath}profile/card.jsonld`);
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
@@ -593,18 +593,18 @@ export function createServer(options = {}) {
     await storage.createContainer('/profile/');
 
     // Generate profile
-    const profileHtml = generateProfile({ webId, name: displayName, podUri, issuer });
-    await storage.write('/profile/card', profileHtml);
+    const profile = generateProfile({ webId, name: displayName, podUri, issuer });
+    await storage.write('/profile/card.jsonld', serialize(profile));
 
     // Preferences and type indexes
     const prefs = generatePreferences({ webId, podUri });
-    await storage.write('/settings/Preferences.ttl', serialize(prefs));
+    await storage.write('/settings/prefs.jsonld', serialize(prefs));
 
-    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.ttl`);
-    await storage.write('/settings/publicTypeIndex.ttl', serialize(publicTypeIndex));
+    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`);
+    await storage.write('/settings/publicTypeIndex.jsonld', serialize(publicTypeIndex));
 
-    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.ttl`);
-    await storage.write('/settings/privateTypeIndex.ttl', serialize(privateTypeIndex));
+    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`);
+    await storage.write('/settings/privateTypeIndex.jsonld', serialize(privateTypeIndex));
 
     // ACL files
     const rootAcl = generateOwnerAcl(podUri, webId, true);

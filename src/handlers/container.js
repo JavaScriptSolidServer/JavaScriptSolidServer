@@ -173,20 +173,20 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.createContainer(`${podPath}settings/`);
   await storage.createContainer(`${podPath}profile/`);
 
-  // Generate and write WebID profile at /profile/card (standard Solid location)
-  const profileHtml = generateProfile({ webId, name, podUri, issuer });
-  await storage.write(`${podPath}profile/card`, profileHtml);
+  // Generate and write WebID profile at /profile/card.jsonld
+  const profile = generateProfile({ webId, name, podUri, issuer });
+  await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
 
-  // Generate and write preferences (mashlib-compatible paths)
+  // Generate and write preferences
   const prefs = generatePreferences({ webId, podUri });
-  await storage.write(`${podPath}settings/Preferences.ttl`, serialize(prefs));
+  await storage.write(`${podPath}settings/prefs.jsonld`, serialize(prefs));
 
-  // Generate and write type indexes with .ttl extension for mashlib
-  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.ttl`);
-  await storage.write(`${podPath}settings/publicTypeIndex.ttl`, serialize(publicTypeIndex));
+  // Generate and write type indexes
+  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`);
+  await storage.write(`${podPath}settings/publicTypeIndex.jsonld`, serialize(publicTypeIndex));
 
-  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.ttl`);
-  await storage.write(`${podPath}settings/privateTypeIndex.ttl`, serialize(privateTypeIndex));
+  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`);
+  await storage.write(`${podPath}settings/privateTypeIndex.jsonld`, serialize(privateTypeIndex));
 
   // Create default ACL files
   // Pod root: owner full control, public read
@@ -229,13 +229,13 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
  *
  * Creates the following structure:
  *   /{name}/
- *   /{name}/profile/card     - WebID profile
- *   /{name}/inbox/           - Notifications
- *   /{name}/public/          - Public files
- *   /{name}/private/         - Private files
- *   /{name}/settings/prefs   - Preferences
- *   /{name}/settings/publicTypeIndex
- *   /{name}/settings/privateTypeIndex
+ *   /{name}/profile/card.jsonld          - WebID profile
+ *   /{name}/inbox/                       - Notifications
+ *   /{name}/public/                      - Public files
+ *   /{name}/private/                     - Private files
+ *   /{name}/settings/prefs.jsonld        - Preferences
+ *   /{name}/settings/publicTypeIndex.jsonld
+ *   /{name}/settings/privateTypeIndex.jsonld
  */
 export async function handleCreatePod(request, reply) {
   // Read-only mode - block pod creation
@@ -283,12 +283,12 @@ export async function handleCreatePod(request, reply) {
     const podHost = `${name}.${baseDomain}`;
     baseUri = `${request.protocol}://${baseDomain}`;
     podUri = `${request.protocol}://${podHost}/`;
-    webId = `${podUri}profile/card#me`;
+    webId = `${podUri}profile/card.jsonld#me`;
   } else {
     // Path mode: example.com/alice/profile/card#me
     baseUri = `${request.protocol}://${request.hostname}`;
     podUri = `${baseUri}${podPath}`;
-    webId = `${podUri}profile/card#me`;
+    webId = `${podUri}profile/card.jsonld#me`;
   }
 
   // Issuer needs trailing slash for CTH compatibility
