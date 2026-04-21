@@ -150,8 +150,16 @@ export function getResourceName(urlPath) {
 
 /**
  * Extract pod name from URL path or request
+ *
+ * In subdomain mode the pod name comes from the hostname. Otherwise JSS is a
+ * single-pod server: `dataRoot` itself is the one and only pod and there is
+ * no per-pod subdirectory. We return '.' so callers that build pod-scoped
+ * paths (e.g. the quota sidecar) resolve to `<dataRoot>/.quota.json` via
+ * `path.join` rather than mistaking the first URL segment for a pod name
+ * (which produced `<dataRoot>/index.html/.quota.json` → ENOTDIR on `PUT /index.html`).
+ *
  * @param {string|object} pathOrRequest - URL path string or Fastify request object
- * @returns {string|null} - Pod name or null if not found
+ * @returns {string} - Pod name, or '.' for single-pod mode
  */
 export function getPodName(pathOrRequest) {
   // If it's a request object
@@ -160,13 +168,12 @@ export function getPodName(pathOrRequest) {
     if (pathOrRequest.subdomainsEnabled && pathOrRequest.podName) {
       return pathOrRequest.podName;
     }
-    // Path mode: extract from URL
-    const urlPath = pathOrRequest.url?.split('?')[0] || '';
-    return getPodNameFromPath(urlPath);
+    // Single-pod mode: the whole dataRoot is the pod.
+    return '.';
   }
 
-  // If it's a string path
-  return getPodNameFromPath(pathOrRequest);
+  // String form (single-pod contexts, e.g. quota helpers).
+  return '.';
 }
 
 /**
