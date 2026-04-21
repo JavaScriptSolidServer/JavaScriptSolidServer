@@ -182,6 +182,8 @@ export function createServer(options = {}) {
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('config', null);
   fastify.decorateRequest('liveReloadEnabled', null);
+  fastify.decorateRequest('singleUser', null);
+  fastify.decorateRequest('singleUserName', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled || liveReloadEnabled;
@@ -195,6 +197,8 @@ export function createServer(options = {}) {
     request.defaultQuota = defaultQuota;
     request.config = { public: options.public, readOnly: options.readOnly };
     request.liveReloadEnabled = liveReloadEnabled;
+    request.singleUser = singleUser;
+    request.singleUserName = singleUserName;
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {

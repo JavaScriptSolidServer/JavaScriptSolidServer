@@ -151,29 +151,45 @@ export function getResourceName(urlPath) {
 /**
  * Extract pod name from URL path or request
  *
- * In subdomain mode the pod name comes from the hostname. Otherwise JSS is in
- * single-user mode: `dataRoot` itself is the one and only pod and there is
- * no per-pod subdirectory. We return '.' so callers that build pod-scoped
- * paths (e.g. the quota sidecar) resolve to `<dataRoot>/.quota.json` via
- * `path.join` rather than mistaking the first URL segment for a pod name
- * (which produced `<dataRoot>/index.html/.quota.json` → ENOTDIR on `PUT /index.html`).
+ * Resolves to one of four shapes, by deployment mode:
+ *
+ * - Subdomain mode with a recognized subdomain → `request.podName` (from hostname).
+ * - Subdomain mode with no recognized subdomain → `null` (base-domain access;
+ *   callers guard with `if (podName)` and skip pod-scoped side effects).
+ * - Single-user, root-pod (`singleUserName` empty or '/') → `'.'` so
+ *   `path.join(dataRoot, '.', QUOTA_FILE)` collapses to `<dataRoot>/QUOTA_FILE`.
+ * - Single-user, named pod → `singleUserName` (all requests share the one pod,
+ *   independent of URL — avoids mistaking a URL segment like `index.html`
+ *   for a pod name).
+ * - Path-based multi-pod (default, no flags) → first URL segment, or `null`
+ *   for requests at `/` that aren't inside any pod.
+ *
+ * Background: before this function knew about single-user mode, a
+ * `PUT /index.html` on a single-user root-pod deployment produced a pod name
+ * of `"index.html"`, and the quota sidecar landed at
+ * `<dataRoot>/index.html/.quota.json` → `ENOTDIR` (index.html is a file).
  *
  * @param {string|object} pathOrRequest - URL path string or Fastify request object
- * @returns {string} - Pod name, or '.' in single-user mode
+ * @returns {string|null} - Pod name, `'.'` for root-pod, or `null` when no pod applies
  */
 export function getPodName(pathOrRequest) {
-  // If it's a request object
-  if (typeof pathOrRequest === 'object') {
-    // Subdomain mode: pod name from hostname
-    if (pathOrRequest.subdomainsEnabled && pathOrRequest.podName) {
-      return pathOrRequest.podName;
+  if (typeof pathOrRequest === 'object' && pathOrRequest !== null) {
+    // Subdomain mode: hostname drives it. Unrecognized host → no pod.
+    if (pathOrRequest.subdomainsEnabled) {
+      return pathOrRequest.podName || null;
     }
-    // Single-pod mode: the whole dataRoot is the pod.
-    return '.';
+    // Single-user mode: always the one pod, regardless of URL path.
+    if (pathOrRequest.singleUser) {
+      const name = pathOrRequest.singleUserName;
+      return (!name || name === '/') ? '.' : name;
+    }
+    // Path-based multi-pod: first URL segment.
+    const urlPath = pathOrRequest.url?.split('?')[0] || '';
+    return getPodNameFromPath(urlPath);
   }
 
-  // String form (single-pod contexts, e.g. quota helpers).
-  return '.';
+  // String form: path-based pod extraction.
+  return getPodNameFromPath(pathOrRequest);
 }
 
 /**
