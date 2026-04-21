@@ -77,6 +77,22 @@ describe('readOrWritePersistedSecret', () => {
     assert.strictEqual(fs.statSync(p).mode & 0o777, 0o600);
     assert.strictEqual(fs.statSync(path.dirname(p)).mode & 0o777, 0o700);
   });
+
+  it('reads a pre-existing secret even when the parent dir is not writable', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, () => {
+    // Simulates a read-only deployment: secret provisioned ahead of time,
+    // parent dir not writable for the current user. Must not block startup.
+    const p = path.join(tmpDir, 'readonly-parent', '.jss', 'token.secret');
+    fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+    const expected = 'b'.repeat(64);
+    fs.writeFileSync(p, expected);
+    fs.chmodSync(path.dirname(p), 0o500); // r-x, no write
+    try {
+      const s = readOrWritePersistedSecret(p);
+      assert.strictEqual(s, expected);
+    } finally {
+      fs.chmodSync(path.dirname(p), 0o700);  // let after()'s rmSync clean up
+    }
+  });
 });
 
 describe('resolveTokenSecret', () => {
@@ -126,25 +142,45 @@ describe('resolveTokenSecret', () => {
 
   it('hard-exits in production when persistence fails', () => {
     let exitCode;
-    resolveTokenSecret({
-      env: { NODE_ENV: 'production' },
-      secretPath: buildUnwritable('prod'),
-      log: silentLog,
-      exit: (code) => { exitCode = code; },
+    assert.throws(() => {
+      resolveTokenSecret({
+        env: { NODE_ENV: 'production' },
+        secretPath: buildUnwritable('prod'),
+        log: silentLog,
+        exit: (code) => { exitCode = code; },  // stubbed — doesn't actually terminate
+      });
     });
+    // exit(1) must still have been invoked even though we throw afterwards,
+    // so a non-stubbed production process actually terminates.
     assert.strictEqual(exitCode, 1);
+  });
+
+  it('throws after exit so a stubbed exit() cannot leak undefined downstream', () => {
+    // Regression: earlier versions returned undefined "for tests" after
+    // calling exit(), which could let callers continue with an invalid
+    // secret when exit is stubbed.
+    assert.throws(
+      () => resolveTokenSecret({
+        env: { NODE_ENV: 'production' },
+        secretPath: buildUnwritable('no-leak'),
+        log: silentLog,
+        exit: () => {},
+      }),
+      /TOKEN_SECRET/
+    );
   });
 
   it('production error message references the actual secret directory', () => {
     const secretPath = buildUnwritable('custom-path');
     const errors = [];
-    resolveTokenSecret({
-      env: { NODE_ENV: 'production' },
-      secretPath,
-      log: { warn: () => {}, error: (msg) => errors.push(msg) },
-      exit: () => {},
+    assert.throws(() => {
+      resolveTokenSecret({
+        env: { NODE_ENV: 'production' },
+        secretPath,
+        log: { warn: () => {}, error: (msg) => errors.push(msg) },
+        exit: () => {},
+      });
     });
-    // Guidance line should point at the dirname we actually tried to write.
     assert.ok(
       errors.some(m => m.includes(path.dirname(secretPath))),
       `expected an error to mention ${path.dirname(secretPath)}, got: ${errors.join(' | ')}`

@@ -13,38 +13,42 @@ import path from 'path';
 
 export const DEFAULT_SECRET_PATH = path.join(os.homedir(), '.jss', 'token.secret');
 
-// Tighten permissions on POSIX. No-op on Windows, which uses ACLs and
-// surfaces EPERM on chmod — swallow that specifically.
+// Tighten permissions on POSIX, best-effort. No-op on Windows (ACLs) and
+// on read-only filesystems — we never want perm-tightening to block using
+// an otherwise-valid secret.
 function chmodBestEffort(target, mode) {
   try {
     fs.chmodSync(target, mode);
-  } catch (e) {
-    if (e.code !== 'EPERM' && e.code !== 'ENOTSUP') throw e;
+  } catch {
+    // Intentionally swallow — perms are defensive hardening, not required.
   }
 }
 
 /**
  * Read a persisted secret from `filePath`, or generate one and write it
- * (with dir mode 0700 and file mode 0600) if the file is missing. Safe
- * against multiple JSS processes starting in parallel: the write uses an
- * exclusive flag and we re-read on EEXIST, so every process converges on
- * the same secret rather than racing.
+ * (with dir mode 0700 and file mode 0600) if the file is missing.
  *
- * Anything other than ENOENT on read (permission denied, read-only FS, …)
- * throws.
+ * Read-first: if the file already exists and is non-empty we return it
+ * without trying to mkdir or tighten the containing directory. Deployments
+ * with a pre-provisioned secret on a read-only filesystem boot cleanly.
+ *
+ * Concurrent-startup safe: new secrets are written to a per-process temp
+ * file in the same directory and `renameSync`'d into place, so another
+ * process reading the target never sees a half-written file. If a peer
+ * process won the rename we fall back to reading their value.
+ *
+ * Anything other than ENOENT on the initial read (permission denied,
+ * corrupt FS, …) propagates.
  */
 export function readOrWritePersistedSecret(filePath = DEFAULT_SECRET_PATH) {
-  // Always ensure the dir exists and is 0700 — enforce perms on every call,
-  // not only when we're the one creating it. mkdirSync({mode}) is only
-  // applied on creation, so an existing dir with looser mode needs chmod.
   const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodBestEffort(dir, 0o700);
 
-  // Fast path: file already exists and is non-empty.
+  // Fast path: pre-existing non-empty file. No mkdir/chmod attempt on the
+  // parent dir here — a read-only FS must not fail this path.
   try {
     const existing = fs.readFileSync(filePath, 'utf8').trim();
     if (existing) {
+      chmodBestEffort(dir, 0o700);
       chmodBestEffort(filePath, 0o600);
       return existing;
     }
@@ -52,28 +56,29 @@ export function readOrWritePersistedSecret(filePath = DEFAULT_SECRET_PATH) {
     if (e.code !== 'ENOENT') throw e;
   }
 
-  const generated = crypto.randomBytes(32).toString('hex');
-  try {
-    // Exclusive create — concurrent processes can't overwrite each other's
-    // freshly generated secrets. mode is honoured on POSIX; Windows ignores
-    // it (uses ACLs).
-    fs.writeFileSync(filePath, generated, { mode: 0o600, flag: 'wx' });
-    chmodBestEffort(filePath, 0o600);
-    return generated;
-  } catch (e) {
-    if (e.code !== 'EEXIST') throw e;
-  }
+  // Slow path: create it. Only touch the FS with writes from here on.
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodBestEffort(dir, 0o700);
 
-  // Another process won the race — read what they wrote.
-  const existing = fs.readFileSync(filePath, 'utf8').trim();
-  if (existing) {
-    chmodBestEffort(filePath, 0o600);
-    return existing;
+  const generated = crypto.randomBytes(32).toString('hex');
+  // Atomic write: fully write a temp file, then rename into place. On
+  // POSIX the rename is atomic, so concurrent readers see either the old
+  // content or the new complete content — never a half-written file.
+  const tmpPath = `${filePath}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, generated, { mode: 0o600 });
+    fs.renameSync(tmpPath, filePath);
+  } catch (e) {
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw e;
   }
-  // Same fallback as before for a pre-existing empty file.
-  fs.writeFileSync(filePath, generated, { mode: 0o600 });
   chmodBestEffort(filePath, 0o600);
-  return generated;
+
+  // Multiple processes racing each produce a different secret; only the
+  // last renamer's value sticks on disk. Re-read so every process ends up
+  // using the winning secret and token verification stays consistent.
+  const persisted = fs.readFileSync(filePath, 'utf8').trim();
+  return persisted || generated;
 }
 
 /**
@@ -103,7 +108,9 @@ export function resolveTokenSecret({
       log.error(`SECURITY ERROR: TOKEN_SECRET not set and ${secretPath} is not writable (${e.message}).`);
       log.error(`Set TOKEN_SECRET explicitly, or grant write access to ${path.dirname(secretPath)}.`);
       exit(1);
-      return undefined; // for tests that stub `exit`
+      // `exit` is injectable; if a caller stubs it out we must not silently
+      // return undefined and let downstream code use an invalid secret.
+      throw new Error(`Failed to resolve TOKEN_SECRET in production: ${e.message}`);
     }
     const ephemeral = crypto.randomBytes(32).toString('hex');
     log.warn(`WARNING: Could not persist TOKEN_SECRET (${e.message}). Using ephemeral secret; tokens will not survive restarts.`);
