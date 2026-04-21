@@ -560,8 +560,12 @@ export function createServer(options = {}) {
       const webId = `${podUri}profile/card.jsonld#me`;
       const displayName = isRootPod ? 'me' : singleUserName;
 
-      // Check if pod already exists (profile/card.jsonld is the indicator)
-      const profileExists = await storage.exists(`${podPath}profile/card.jsonld`);
+      // Check if pod already exists. Accept either the new `card.jsonld`
+      // or legacy extensionless `card` layout so we don't re-seed a pod
+      // that was created by an older JSS version.
+      const profileExists =
+        await storage.exists(`${podPath}profile/card.jsonld`) ||
+        await storage.exists(`${podPath}profile/card`);
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);

@@ -272,20 +272,19 @@ export async function handleCreatePod(request, reply) {
     return reply.code(409).send({ error: 'Pod already exists' });
   }
 
-  // Build URIs
-  // WebID follows standard Solid convention: /alice/profile/card#me
+  // Build URIs. WebID is the JSON-LD profile with an #me fragment.
   const subdomainsEnabled = request.subdomainsEnabled;
   const baseDomain = request.baseDomain;
 
   let baseUri, podUri, webId;
   if (subdomainsEnabled && baseDomain) {
-    // Subdomain mode: alice.example.com/profile/card#me
+    // Subdomain mode: alice.example.com/profile/card.jsonld#me
     const podHost = `${name}.${baseDomain}`;
     baseUri = `${request.protocol}://${baseDomain}`;
     podUri = `${request.protocol}://${podHost}/`;
     webId = `${podUri}profile/card.jsonld#me`;
   } else {
-    // Path mode: example.com/alice/profile/card#me
+    // Path mode: example.com/alice/profile/card.jsonld#me
     baseUri = `${request.protocol}://${request.hostname}`;
     podUri = `${baseUri}${podPath}`;
     webId = `${podUri}profile/card.jsonld#me`;
