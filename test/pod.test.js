@@ -36,7 +36,7 @@ describe('Pod Lifecycle', () => {
 
       const data = await res.json();
       assert.strictEqual(data.name, 'alice');
-      assert.ok(data.webId.endsWith('/alice/profile/card#me'));
+      assert.ok(data.webId.endsWith('/alice/profile/card.jsonld#me'));
       assert.ok(data.podUri.endsWith('/alice/'));
     });
 
@@ -103,16 +103,16 @@ describe('Pod Lifecycle', () => {
     it('should create settings files', async () => {
       await createTestPod('dan');
 
-      // Check Preferences.ttl (needs auth - Settings is private)
-      const prefs = await request('/dan/settings/Preferences.ttl', { auth: 'dan' });
+      // Check prefs.jsonld (needs auth - settings is private)
+      const prefs = await request('/dan/settings/prefs.jsonld', { auth: 'dan' });
       assertStatus(prefs, 200);
 
       // Check public type index (needs auth)
-      const pubIndex = await request('/dan/settings/publicTypeIndex.ttl', { auth: 'dan' });
+      const pubIndex = await request('/dan/settings/publicTypeIndex.jsonld', { auth: 'dan' });
       assertStatus(pubIndex, 200);
 
       // Check private type index (needs auth)
-      const privIndex = await request('/dan/settings/privateTypeIndex.ttl', { auth: 'dan' });
+      const privIndex = await request('/dan/settings/privateTypeIndex.jsonld', { auth: 'dan' });
       assertStatus(privIndex, 200);
     });
   });

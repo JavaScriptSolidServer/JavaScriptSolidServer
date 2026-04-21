@@ -15,7 +15,7 @@ export function createCollectionsHandler(config) {
     const protocol = request.headers['x-forwarded-proto'] || request.protocol
     const host = request.headers['x-forwarded-host'] || request.hostname
     const baseUrl = `${protocol}://${host}`
-    const profileUrl = `${baseUrl}/profile/card`
+    const profileUrl = `${baseUrl}/profile/card.jsonld`
 
     let items, totalItems
 

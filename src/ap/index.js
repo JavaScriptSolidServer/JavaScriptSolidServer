@@ -68,7 +68,7 @@ export async function activityPubPlugin(fastify, options = {}) {
   const getActorId = (request) => {
     const protocol = getProtocol(request)
     const host = request.headers['x-forwarded-host'] || request.hostname
-    return `${protocol}://${host}/profile/card#me`
+    return `${protocol}://${host}/profile/card.jsonld#me`
   }
 
   // Helper to get base URL
@@ -96,11 +96,11 @@ export async function activityPubPlugin(fastify, options = {}) {
       return reply.code(404).send({ error: 'Not found' })
     }
 
-    // For now, accept any username and map to /profile/card#me
+    // For now, accept any username and map to /profile/card.jsonld#me
     // In multi-user mode, we'd look up the user
     const baseUrl = getBaseUrl(request)
-    const actorUrl = `${baseUrl}/profile/card#me`
-    const profileUrl = `${baseUrl}/profile/card`
+    const actorUrl = `${baseUrl}/profile/card.jsonld#me`
+    const profileUrl = `${baseUrl}/profile/card.jsonld`
 
     const response = webfinger.createResponse(
       `${parsed.username}@${parsed.domain}`,
@@ -174,18 +174,18 @@ export async function activityPubPlugin(fastify, options = {}) {
   // Inbox endpoint
   const inboxHandler = createInboxHandler(config, keypair)
   fastify.post('/inbox', inboxHandler)
-  fastify.post('/profile/card/inbox', inboxHandler)
+  fastify.post('/profile/card.jsonld/inbox', inboxHandler)
 
   // Outbox endpoint
   const outboxHandler = createOutboxHandler(config, keypair)
   const outboxPostHandler = createOutboxPostHandler(config, keypair)
-  fastify.get('/profile/card/outbox', outboxHandler)
-  fastify.post('/profile/card/outbox', outboxPostHandler)
+  fastify.get('/profile/card.jsonld/outbox', outboxHandler)
+  fastify.post('/profile/card.jsonld/outbox', outboxPostHandler)
 
   // Followers/Following collections
   const collectionsHandler = createCollectionsHandler(config)
-  fastify.get('/profile/card/followers', (req, reply) => collectionsHandler(req, reply, 'followers'))
-  fastify.get('/profile/card/following', (req, reply) => collectionsHandler(req, reply, 'following'))
+  fastify.get('/profile/card.jsonld/followers', (req, reply) => collectionsHandler(req, reply, 'followers'))
+  fastify.get('/profile/card.jsonld/following', (req, reply) => collectionsHandler(req, reply, 'following'))
 
   // Mastodon-compatible API endpoints
   fastify.post('/api/v1/apps', createAppsHandler())

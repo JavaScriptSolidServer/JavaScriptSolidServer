@@ -405,20 +405,20 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   }
 
   try {
-    // Build URLs - WebID follows standard Solid convention: /profile/card#me
+    // Build URLs. WebID is the JSON-LD profile with an #me fragment.
     const subdomainsEnabled = request.subdomainsEnabled;
     const baseDomain = request.baseDomain;
     const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
 
     let podUri, webId;
     if (subdomainsEnabled && baseDomain) {
-      // Subdomain mode: alice.example.com/profile/card#me
+      // Subdomain mode: alice.example.com/profile/card.jsonld#me
       podUri = `${request.protocol}://${username}.${baseDomain}/`;
-      webId = `${podUri}profile/card#me`;
+      webId = `${podUri}profile/card.jsonld#me`;
     } else {
-      // Path mode: example.com/alice/profile/card#me
+      // Path mode: example.com/alice/profile/card.jsonld#me
       podUri = `${baseUrl}/${username}/`;
-      webId = `${podUri}profile/card#me`;
+      webId = `${podUri}profile/card.jsonld#me`;
     }
 
     // Check if pod already exists

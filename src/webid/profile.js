@@ -1,7 +1,10 @@
 /**
  * WebID Profile generation
- * Creates profile documents following Solid conventions
- * Profile is HTML with embedded JSON-LD structured data
+ *
+ * Creates profile documents following Solid conventions. Default profile
+ * shape is now plain JSON-LD at `profile/card.jsonld` — operators who
+ * want a human-readable HTML shell can serve their own `index.html` with
+ * an embedded `<script type="application/ld+json">` data island.
  */
 
 const FOAF = 'http://xmlns.com/foaf/0.1/';
@@ -45,95 +48,33 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,
-    'preferencesFile': `${pod}settings/Preferences.ttl`,
-    'publicTypeIndex': `${pod}settings/publicTypeIndex.ttl`,
-    'privateTypeIndex': `${pod}settings/privateTypeIndex.ttl`
+    'preferencesFile': `${pod}settings/prefs.jsonld`,
+    'publicTypeIndex': `${pod}settings/publicTypeIndex.jsonld`,
+    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`
   };
 }
 
 /**
- * Generate HTML profile with embedded JSON-LD data island
- * The page uses mashlib + solidos-lite to render the profile from the data island
+ * Generate the profile document as a plain JSON-LD object.
+ *
+ * Previously returned an HTML shell with an embedded data island; that
+ * shell still exists for hand-curated personal sites, but server-default
+ * profiles are now plain JSON-LD for predictability and easier
+ * post-processing by clients.
+ *
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI
  * @param {string} options.issuer - OIDC issuer URI
- * @returns {string} HTML document with JSON-LD data island
+ * @returns {object} JSON-LD profile document
  */
 export function generateProfile({ webId, name, podUri, issuer }) {
-  const jsonLd = generateProfileJsonLd({ webId, name, podUri, issuer });
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(name)}'s Profile</title>
-  <link rel="stylesheet" href="https://javascriptsolidserver.github.io/mashlib-jss/dist/mash.css">
-  <script type="application/ld+json">
-${JSON.stringify(jsonLd, null, 2)}
-  </script>
-  <style>
-    body { margin: 0; font-family: system-ui, sans-serif; }
-    .loading { padding: 2rem; text-align: center; color: #666; }
-  </style>
-</head>
-<body>
-  <div class="TabulatorOutline" id="DummyUUID" role="main">
-    <table id="outline"></table>
-    <div id="GlobalDashboard"></div>
-  </div>
-  <div class="loading" id="loading">Loading profile...</div>
-
-  <script src="https://javascriptsolidserver.github.io/mashlib-jss/dist/mashlib.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/solidos-lite/solidos-lite.js"></script>
-  <script>
-  document.addEventListener('DOMContentLoaded', function() {
-    const loadingEl = document.getElementById('loading');
-
-    // Initialize solidos-lite to handle data islands
-    const success = SolidOSLite.init({ verbose: false });
-    if (!success) {
-      loadingEl.textContent = 'Failed to initialize. Please try refreshing.';
-      return;
-    }
-
-    // Parse data islands into the RDF store
-    SolidOSLite.parseAllIslands();
-
-    // Mark this document as already fetched
-    const pageBase = window.location.href.split('?')[0].split('#')[0];
-    const fetcher = SolidLogic.store.fetcher;
-    fetcher.requested[pageBase] = 'done';
-    fetcher.requested[pageBase.replace(/\\/$/, '')] = 'done';
-
-    // Navigate to #me
-    const subject = $rdf.sym(pageBase + '#me');
-    const outliner = panes.getOutliner(document);
-    outliner.GotoSubject(subject, true, undefined, true, undefined);
-
-    loadingEl.style.display = 'none';
-  });
-  </script>
-</body>
-</html>`;
+  return generateProfileJsonLd({ webId, name, podUri, issuer });
 }
 
 /**
- * Escape HTML entities
- */
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Generate preferences file as JSON-LD
- * Uses mashlib-compatible paths (settings/Preferences.ttl)
+ * Generate preferences file as JSON-LD.
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.podUri - Pod root URI
@@ -149,9 +90,9 @@ export function generatePreferences({ webId, podUri }) {
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' }
     },
-    '@id': `${pod}settings/Preferences.ttl`,
-    'publicTypeIndex': `${pod}settings/publicTypeIndex.ttl`,
-    'privateTypeIndex': `${pod}settings/privateTypeIndex.ttl`
+    '@id': `${pod}settings/prefs.jsonld`,
+    'publicTypeIndex': `${pod}settings/publicTypeIndex.jsonld`,
+    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`
   };
 }
 
