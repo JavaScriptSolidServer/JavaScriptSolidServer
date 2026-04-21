@@ -43,8 +43,10 @@ function chmodBestEffort(target, mode) {
 export function readOrWritePersistedSecret(filePath = DEFAULT_SECRET_PATH) {
   const dir = path.dirname(filePath);
 
-  // Fast path: pre-existing non-empty file. No mkdir/chmod attempt on the
-  // parent dir here — a read-only FS must not fail this path.
+  // Fast path: pre-existing non-empty file. We do not mkdir the parent
+  // dir here, and perm-tightening is best-effort (chmodBestEffort swallows
+  // all errors), so a pre-provisioned secret on a read-only filesystem
+  // still boots cleanly.
   try {
     const existing = fs.readFileSync(filePath, 'utf8').trim();
     if (existing) {
@@ -105,8 +107,9 @@ export function resolveTokenSecret({
     return s;
   } catch (e) {
     if (env.NODE_ENV === 'production') {
-      log.error(`SECURITY ERROR: TOKEN_SECRET not set and ${secretPath} is not writable (${e.message}).`);
-      log.error(`Set TOKEN_SECRET explicitly, or grant write access to ${path.dirname(secretPath)}.`);
+      const code = e?.code ? ` [${e.code}]` : '';
+      log.error(`SECURITY ERROR: TOKEN_SECRET not set and ${secretPath} could not be read or created${code} (${e.message}).`);
+      log.error(`Set TOKEN_SECRET explicitly, or grant the necessary access to ${path.dirname(secretPath)}.`);
       exit(1);
       // `exit` is injectable; if a caller stubs it out we must not silently
       // return undefined and let downstream code use an invalid secret.

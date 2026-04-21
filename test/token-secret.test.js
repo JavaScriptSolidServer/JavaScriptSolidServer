@@ -58,9 +58,10 @@ describe('readOrWritePersistedSecret', () => {
   });
 
   it('recovers when the secret file already exists but is empty', () => {
-    // Simulates the lose-a-race case: another process created the file
-    // between our read and our write. Exclusive-create fails EEXIST and
-    // we fall back to reading / (if empty) writing without wx.
+    // Simulates a concurrent or interrupted persistence case: the file
+    // is present (so the fast path falls through the trim-empty check)
+    // but carries no usable secret yet. tmp-file + renameSync repairs
+    // it by overwriting atomically.
     const p = path.join(tmpDir, 'empty', '.jss', 'token.secret');
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, '');
