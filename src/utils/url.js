@@ -150,22 +150,45 @@ export function getResourceName(urlPath) {
 
 /**
  * Extract pod name from URL path or request
+ *
+ * Resolves to one of four shapes, by deployment mode:
+ *
+ * - Subdomain mode with a recognized subdomain → `request.podName` (from hostname).
+ * - Subdomain mode with no recognized subdomain → `null` (base-domain access;
+ *   callers guard with `if (podName)` and skip pod-scoped side effects).
+ * - Single-user, root-pod (`singleUserName` empty or '/') → `'.'` so
+ *   `path.join(dataRoot, '.', QUOTA_FILE)` collapses to `<dataRoot>/QUOTA_FILE`.
+ * - Single-user, named pod → `singleUserName` (all requests share the one pod,
+ *   independent of URL — avoids mistaking a URL segment like `index.html`
+ *   for a pod name).
+ * - Path-based multi-pod (default, no flags) → first URL segment, or `null`
+ *   for requests at `/` that aren't inside any pod.
+ *
+ * Background: before this function knew about single-user mode, a
+ * `PUT /index.html` on a single-user root-pod deployment produced a pod name
+ * of `"index.html"`, and the quota sidecar landed at
+ * `<dataRoot>/index.html/.quota.json` → `ENOTDIR` (index.html is a file).
+ *
  * @param {string|object} pathOrRequest - URL path string or Fastify request object
- * @returns {string|null} - Pod name or null if not found
+ * @returns {string|null} - Pod name, `'.'` for root-pod, or `null` when no pod applies
  */
 export function getPodName(pathOrRequest) {
-  // If it's a request object
-  if (typeof pathOrRequest === 'object') {
-    // Subdomain mode: pod name from hostname
-    if (pathOrRequest.subdomainsEnabled && pathOrRequest.podName) {
-      return pathOrRequest.podName;
+  if (typeof pathOrRequest === 'object' && pathOrRequest !== null) {
+    // Subdomain mode: hostname drives it. Unrecognized host → no pod.
+    if (pathOrRequest.subdomainsEnabled) {
+      return pathOrRequest.podName || null;
     }
-    // Path mode: extract from URL
+    // Single-user mode: always the one pod, regardless of URL path.
+    if (pathOrRequest.singleUser) {
+      const name = pathOrRequest.singleUserName;
+      return (!name || name === '/') ? '.' : name;
+    }
+    // Path-based multi-pod: first URL segment.
     const urlPath = pathOrRequest.url?.split('?')[0] || '';
     return getPodNameFromPath(urlPath);
   }
 
-  // If it's a string path
+  // String form: path-based pod extraction.
   return getPodNameFromPath(pathOrRequest);
 }
 
