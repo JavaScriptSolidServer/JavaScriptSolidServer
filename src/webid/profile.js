@@ -24,7 +24,6 @@ const PIM = 'http://www.w3.org/ns/pim/space#';
  */
 export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
-  const profileDoc = webId.split('#')[0];
 
   return {
     '@context': {
@@ -39,12 +38,14 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'preferencesFile': { '@id': 'pim:preferencesFile', '@type': '@id' },
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' },
+      'isPrimaryTopicOf': { '@id': 'foaf:isPrimaryTopicOf', '@type': '@id' },
       'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' }
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
     'foaf:name': name,
-    'mainEntityOfPage': profileDoc,
+    'isPrimaryTopicOf': '',
+    'mainEntityOfPage': '',
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,
