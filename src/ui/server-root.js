@@ -12,6 +12,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import * as storage from '../storage/filesystem.js';
+import { generatePublicReadAcl, serializeAcl } from '../wac/parser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(__dirname, 'server-root.html');
@@ -96,25 +97,6 @@ function escape(s = '') {
     .replace(/"/g, '&quot;');
 }
 
-/**
- * Build a public-read-only ACL (no owner) for the server root.
- * The existing WAC generators all require an owner WebID; the server
- * root has none, so this is a tiny local helper.
- */
-function publicReadAcl(target) {
-  return JSON.stringify({
-    '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
-    '@graph': [
-      {
-        '@id': '#public',
-        '@type': 'acl:Authorization',
-        'acl:agentClass': { '@id': 'foaf:Agent' },
-        'acl:accessTo': { '@id': target },
-        'acl:mode': [{ '@id': 'acl:Read' }]
-      }
-    ]
-  }, null, 2);
-}
 
 /**
  * Seed DATA_ROOT/index.html, DATA_ROOT/.acl and DATA_ROOT/index.html.acl
@@ -152,7 +134,7 @@ export async function seedServerRoot(ctx = {}) {
   // (createRootPodStructure in single-user mode writes its own ACL and
   // runs in a later hook, which will overwrite this if needed.)
   if (!(await storage.exists('/.acl'))) {
-    const ok = await storage.write('/.acl', publicReadAcl('/'));
+    const ok = await storage.write('/.acl', serializeAcl(generatePublicReadAcl('/')));
     if (ok) seededAcl = true;
   }
 
@@ -160,7 +142,7 @@ export async function seedServerRoot(ctx = {}) {
   // ACL above has no acl:default (we don't want to implicitly publish all
   // children), so /index.html needs its own rule when fetched directly.
   if (!(await storage.exists('/index.html.acl'))) {
-    const ok = await storage.write('/index.html.acl', publicReadAcl('/index.html'));
+    const ok = await storage.write('/index.html.acl', serializeAcl(generatePublicReadAcl('/index.html')));
     if (ok) seededPageAcl = true;
   }
 

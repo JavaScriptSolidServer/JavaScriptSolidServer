@@ -548,32 +548,35 @@ export function createServer(options = {}) {
 
   // Server-root landing page: seed /index.html and /.acl on first start
   // (skip-if-exists, operator customisations preserved). See #276.
-  fastify.addHook('onReady', async () => {
-    try {
-      const pkg = await readFile(join(__dirname, '..', 'package.json'), 'utf8');
-      const { version } = JSON.parse(pkg);
-      await seedServerRoot({
-        version,
-        singleUser,
-        idp: idpEnabled,
-        singleUserName,
-        enabled: {
+  // Skipped in read-only mode — startup must not mutate DATA_ROOT.
+  if (!options.readOnly) {
+    fastify.addHook('onReady', async () => {
+      try {
+        const pkg = await readFile(join(__dirname, '..', 'package.json'), 'utf8');
+        const { version } = JSON.parse(pkg);
+        await seedServerRoot({
+          version,
+          singleUser,
           idp: idpEnabled,
-          nostr: nostrEnabled,
-          webrtc: webrtcEnabled,
-          activitypub: activitypubEnabled,
-          git: gitEnabled,
-          pay: payEnabled,
-          notifications: notificationsEnabled,
-          mashlib: mashlibEnabled,
-          mongo: mongoEnabled,
-          tunnel: tunnelEnabled
-        }
-      });
-    } catch (err) {
-      fastify.log.warn({ err }, 'Failed to seed server root');
-    }
-  });
+          singleUserName,
+          enabled: {
+            idp: idpEnabled,
+            nostr: nostrEnabled,
+            webrtc: webrtcEnabled,
+            activitypub: activitypubEnabled,
+            git: gitEnabled,
+            pay: payEnabled,
+            notifications: notificationsEnabled,
+            mashlib: mashlibEnabled,
+            mongo: mongoEnabled,
+            tunnel: tunnelEnabled
+          }
+        });
+      } catch (err) {
+        fastify.log.warn({ err }, 'Failed to seed server root');
+      }
+    });
+  }
 
   // Single-user mode: create pod on startup if it doesn't exist
   if (singleUser) {
