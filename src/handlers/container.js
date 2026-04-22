@@ -182,10 +182,10 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.write(`${podPath}settings/prefs.jsonld`, serialize(prefs));
 
   // Generate and write type indexes
-  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`);
+  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`, { listed: true });
   await storage.write(`${podPath}settings/publicTypeIndex.jsonld`, serialize(publicTypeIndex));
 
-  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`);
+  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
   await storage.write(`${podPath}settings/privateTypeIndex.jsonld`, serialize(privateTypeIndex));
 
   // Create default ACL files

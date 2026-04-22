@@ -131,5 +131,33 @@ describe('Pod Lifecycle', () => {
       const prefs = await request('/elsa/settings/prefs.jsonld');
       assertStatus(prefs, 401);
     });
+
+    it('should type indexes with ListedDocument / UnlistedDocument', async () => {
+      await createTestPod('frida');
+
+      const pub = await request('/frida/settings/publicTypeIndex.jsonld');
+      assertStatus(pub, 200);
+      const pubBody = await pub.json();
+      assert.ok(
+        Array.isArray(pubBody['@type']) && pubBody['@type'].includes('solid:ListedDocument'),
+        'publicTypeIndex should be solid:ListedDocument'
+      );
+      assert.ok(
+        Array.isArray(pubBody['@type']) && pubBody['@type'].includes('solid:TypeIndex'),
+        'publicTypeIndex should be solid:TypeIndex'
+      );
+
+      const priv = await request('/frida/settings/privateTypeIndex.jsonld', { auth: 'frida' });
+      assertStatus(priv, 200);
+      const privBody = await priv.json();
+      assert.ok(
+        Array.isArray(privBody['@type']) && privBody['@type'].includes('solid:UnlistedDocument'),
+        'privateTypeIndex should be solid:UnlistedDocument'
+      );
+      assert.ok(
+        Array.isArray(privBody['@type']) && privBody['@type'].includes('solid:TypeIndex'),
+        'privateTypeIndex should be solid:TypeIndex'
+      );
+    });
   });
 });
