@@ -723,7 +723,9 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
     </form>
 
     <p style="text-align: center; margin-top: 24px; color: #666; font-size: 14px;">
-      Already have an account? <a href="${uid ? `/idp/interaction/${uid}` : '/idp'}" style="color: #0066cc;">${uid ? 'Sign In' : 'Back to home'}</a>
+      ${uid
+        ? `Already have an account? <a href="/idp/interaction/${uid}" style="color: #0066cc;">Sign In</a>`
+        : `<a href="/idp" style="color: #0066cc;">Back to home</a>`}
     </p>
   </div>
 

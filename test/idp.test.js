@@ -203,11 +203,22 @@ describe('Identity Provider', () => {
     it('GET /idp/auth WITH client_id still reaches oidc-provider', async () => {
       // Sanity: the guard must not block real OIDC requests. We don't care
       // what oidc-provider does with this fake client_id (it'll likely
-      // surface its own error) — only that we did not 302 to /idp.
+      // surface its own error) — only that the guard did not redirect us.
       const res = await fetch(
         `${baseUrl}/idp/auth?client_id=test&redirect_uri=http://localhost&response_type=code&scope=openid`,
         { redirect: 'manual' }
       );
+      // Must NOT be a redirect (the guard's only effect would be a 302).
+      assert.ok(res.status < 300 || res.status >= 400,
+        `expected non-redirect response, got ${res.status}`);
+      // And must not have a Location header pointing anywhere.
+      assert.strictEqual(res.headers.get('location'), null);
+    });
+
+    it('GET /idp/auth with empty client_id is a malformed OIDC request, not bare', async () => {
+      // Tightened guard (=== undefined) lets ?client_id= pass through to
+      // oidc-provider rather than redirecting to /idp.
+      const res = await fetch(`${baseUrl}/idp/auth?client_id=`, { redirect: 'manual' });
       assert.notStrictEqual(res.headers.get('location'), '/idp');
     });
   });
