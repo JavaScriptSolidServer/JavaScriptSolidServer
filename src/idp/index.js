@@ -183,7 +183,7 @@ export async function idpPlugin(fastify, options) {
   // Pairs with the /idp/auth guard above so a human visitor lands here
   // rather than on a raw OIDC error.
   fastify.get('/idp', async (request, reply) => {
-    return reply.type('text/html').send(landingPage({ baseUri: issuer }));
+    return reply.type('text/html').send(landingPage({ baseUri: issuer, singleUser }));
   });
 
   // Token sub-paths

@@ -356,6 +356,59 @@ describe('Identity Provider - Subdomain mode register validation', () => {
   });
 });
 
+// Single-user mode: registration is disabled, so the /idp landing must
+// suppress the "Create Account" button rather than ship a known 403 trap.
+// Regression coverage for #290.
+describe('Identity Provider - Single-user mode landing', () => {
+  let server;
+  let baseUrl;
+  const SINGLE_USER_DATA_DIR = './test-data-idp-single-user';
+
+  before(async () => {
+    await fs.remove(SINGLE_USER_DATA_DIR);
+    await fs.ensureDir(SINGLE_USER_DATA_DIR);
+
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
+    server = createServer({
+      logger: false,
+      root: SINGLE_USER_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      forceCloseConnections: true,
+    });
+
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(SINGLE_USER_DATA_DIR);
+  });
+
+  it('GET /idp omits the Create Account button', async () => {
+    const res = await fetch(`${baseUrl}/idp`);
+    assert.strictEqual(res.status, 200);
+    const body = await res.text();
+    // Sanity: the landing still rendered.
+    assert.match(body, /Solid Pod Server/);
+    // Button + register link must be absent — those would 403 in single-user mode.
+    assert.doesNotMatch(body, /Create Account/);
+    assert.doesNotMatch(body, /href="\/idp\/register"/);
+    // Sign-in note should still mention pilot as the example client.
+    assert.match(body, /solid-apps\.github\.io\/pilot/);
+  });
+
+  it('subtitle reflects the single-user shape', async () => {
+    const res = await fetch(`${baseUrl}/idp`);
+    const body = await res.text();
+    assert.match(body, /Single-user pod/);
+  });
+});
+
 describe('Identity Provider - Accounts', () => {
   let server;
   let accountsUrl;

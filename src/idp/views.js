@@ -555,12 +555,15 @@ export function errorPage(title, message) {
  *
  * The OIDC authorization endpoint (/idp/auth) requires a client_id; opening
  * /idp manually used to drop the user into a raw OIDC error. This page is
- * the human-navigable entry point — Create Account is wired up; Sign In is
- * intentionally a description for now (PR-B / #286 will introduce a
- * standalone /idp/login form).
+ * the human-navigable entry point.
+ *
+ * In single-user mode (`ctx.singleUser`) the Create Account button is
+ * suppressed — pod creation is disabled and the button would lead to a
+ * 403. The sign-in note still names pilot as the example client.
  */
 export function landingPage(ctx = {}) {
   const issuer = ctx.baseUri || '';
+  const singleUser = !!ctx.singleUser;
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -607,13 +610,17 @@ export function landingPage(ctx = {}) {
   <div class="container landing">
     <div class="landing-header">
       <h1>Solid Pod Server</h1>
-      <p class="subtitle">Create an account, then sign in from any Solid app.</p>
+      <p class="subtitle">${singleUser
+        ? 'Single-user pod — sign in from any Solid app.'
+        : 'Create an account, then sign in from any Solid app.'}</p>
     </div>
 
-    <a href="/idp/register" class="btn btn-primary" style="text-decoration: none;">Create Account</a>
+    ${singleUser
+      ? '' /* Registration is disabled in single-user mode; suppress the dead-end button. */
+      : '<a href="/idp/register" class="btn btn-primary" style="text-decoration: none;">Create Account</a>'}
 
     <div class="signin-note">
-      <strong>Already have an account?</strong> Sign in from a Solid app — for example, <a href="https://solid-apps.github.io/pilot/" target="_blank" rel="noopener">pilot</a> is a minimal console you can open right now. Point it at this server and click Sign In.
+      <strong>${singleUser ? 'Sign in' : 'Already have an account?'}</strong> ${singleUser ? 'from' : 'Sign in from'} a Solid app — for example, <a href="https://solid-apps.github.io/pilot/" target="_blank" rel="noopener">pilot</a> is a minimal console you can open right now. Point it at this server and click Sign In.
     </div>
 
     ${issuer ? `<div class="issuer">Issuer: ${escapeHtml(issuer.replace(/\/$/, ''))}</div>` : ''}
