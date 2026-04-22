@@ -6,6 +6,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs-extra';
 import { createServer } from '../src/server.js';
+import { renderServerRoot } from '../src/ui/server-root.js';
 import { startTestServer, stopTestServer, request, assertStatus } from './helpers.js';
 
 describe('Server-root landing page', () => {
@@ -75,5 +76,57 @@ describe('Server-root landing — operator override', () => {
     assert.strictEqual(res.status, 200);
     const body = await res.text();
     assert.match(body, /my custom page/);
+  });
+});
+
+describe('renderServerRoot — mode-specific output', () => {
+  it('multi-user + IDP shows Create a pod + Sign in', () => {
+    const html = renderServerRoot({ version: '1.0.0', singleUser: false, idp: true });
+    assert.match(html, /Create a pod/);
+    assert.match(html, /href="\/idp\/register"/);
+    assert.match(html, /href="\/idp"/);
+    assert.match(html, /Sign in/);
+  });
+
+  it('single-user + IDP shows Sign in only (no Create a pod)', () => {
+    const html = renderServerRoot({ version: '1.0.0', singleUser: true, idp: true, singleUserName: 'alice' });
+    assert.doesNotMatch(html, /Create a pod/);
+    assert.match(html, /Sign in/);
+  });
+
+  it('multi-user without IDP shows only the Docs link', () => {
+    const html = renderServerRoot({ version: '1.0.0', singleUser: false, idp: false });
+    assert.doesNotMatch(html, /Create a pod/);
+    assert.doesNotMatch(html, /Sign in/);
+    assert.match(html, /Docs/);
+  });
+
+  it('single-user subtitle includes the pod name when provided', () => {
+    const html = renderServerRoot({ version: '1.0.0', singleUser: true, idp: false, singleUserName: 'alice' });
+    assert.match(html, /Personal pod for alice/);
+  });
+
+  it('lists enabled features', () => {
+    const html = renderServerRoot({
+      version: '1.0.0',
+      singleUser: false,
+      idp: true,
+      enabled: { idp: true, nostr: true, webrtc: true, terminal: true }
+    });
+    assert.match(html, /<span>idp<\/span>/);
+    assert.match(html, /<span>nostr<\/span>/);
+    assert.match(html, /<span>webrtc<\/span>/);
+    assert.match(html, /<span>terminal<\/span>/);
+  });
+
+  it('interpolates version', () => {
+    const html = renderServerRoot({ version: '9.9.9' });
+    assert.match(html, /<code>9\.9\.9<\/code>/);
+  });
+
+  it('escapes version to prevent injection', () => {
+    const html = renderServerRoot({ version: '<script>alert(1)</script>' });
+    assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+    assert.match(html, /&lt;script&gt;/);
   });
 });

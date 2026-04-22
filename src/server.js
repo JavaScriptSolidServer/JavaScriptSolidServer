@@ -551,9 +551,18 @@ export function createServer(options = {}) {
   // Skipped in read-only mode — startup must not mutate DATA_ROOT.
   if (!options.readOnly) {
     fastify.addHook('onReady', async () => {
+      // Read the version from package.json — a missing or unreadable file
+      // (some production bundles omit it) shouldn't block seeding; fall
+      // back to "unknown" and continue.
+      let version = 'unknown';
       try {
         const pkg = await readFile(join(__dirname, '..', 'package.json'), 'utf8');
-        const { version } = JSON.parse(pkg);
+        ({ version } = JSON.parse(pkg));
+      } catch (err) {
+        fastify.log.warn({ err }, 'Failed to read package.json version; seeding server root with version=unknown');
+      }
+
+      try {
         await seedServerRoot({
           version,
           singleUser,
