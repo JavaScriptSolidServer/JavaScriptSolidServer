@@ -296,7 +296,7 @@ export async function idpPlugin(fastify, options) {
     });
   } else {
     fastify.get('/idp/register', async (request, reply) => {
-      return handleRegisterGet(request, reply, inviteOnly);
+      return handleRegisterGet(request, reply, issuer, inviteOnly);
     });
 
     // Registration - rate limited to prevent spam accounts
