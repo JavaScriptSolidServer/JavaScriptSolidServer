@@ -13,6 +13,7 @@ import { Command } from 'commander';
 import { createServer } from '../src/server.js';
 import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js';
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
+import { findByUsername, updatePassword, deleteAccount } from '../src/idp/accounts.js';
 import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
 import { parseSize } from '../src/config.js';
 import crypto from 'crypto';
@@ -637,31 +638,11 @@ program
         process.env.DATA_ROOT = path.resolve(options.root);
       }
 
-      // Load account by username
-      const dataRoot = process.env.DATA_ROOT || './data';
-      const accountsDir = path.join(dataRoot, '.idp', 'accounts');
-      const indexPath = path.join(accountsDir, '_username_index.json');
-
-      let usernameIndex;
-      try {
-        usernameIndex = await fs.readJson(indexPath);
-      } catch (err) {
-        if (err.code === 'ENOENT') {
-          console.error(`Error: No accounts found (missing ${indexPath})`);
-          process.exit(1);
-        }
-        throw err;
-      }
-
-      const normalizedUsername = username.toLowerCase().trim();
-      const accountId = usernameIndex[normalizedUsername];
-      if (!accountId) {
+      const account = await findByUsername(username);
+      if (!account) {
         console.error(`Error: User not found: ${username}`);
         process.exit(1);
       }
-
-      const accountPath = path.join(accountsDir, `${accountId}.json`);
-      const account = await fs.readJson(accountPath);
 
       // Determine new password
       let newPassword;
@@ -673,8 +654,8 @@ program
       } else {
         // Interactive prompt
         newPassword = await promptPassword('New password: ');
-        const confirm = await promptPassword('Confirm password: ');
-        if (newPassword !== confirm) {
+        const confirmation = await promptPassword('Confirm password: ');
+        if (newPassword !== confirmation) {
           console.error('Error: Passwords do not match');
           process.exit(1);
         }
@@ -685,17 +666,63 @@ program
         process.exit(1);
       }
 
-      // Hash and save
-      const bcrypt = await import('bcryptjs').then(m => m.default);
-      account.passwordHash = await bcrypt.hash(newPassword, 10);
-      account.passwordChangedAt = new Date().toISOString();
-      await fs.writeJson(accountPath, account, { spaces: 2 });
+      await updatePassword(account.id, newPassword);
 
       if (options.generate) {
-        console.log(`\nPassword updated for ${normalizedUsername}`);
+        console.log(`\nPassword updated for ${account.username}`);
         console.log(`Generated password: ${newPassword}\n`);
       } else {
-        console.log(`\nPassword updated for ${normalizedUsername}\n`);
+        console.log(`\nPassword updated for ${account.username}\n`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Account commands - manage user accounts
+ */
+const accountCmd = program
+  .command('account')
+  .description('Manage user accounts');
+
+accountCmd
+  .command('delete <username>')
+  .description('Delete a user account from the IdP')
+  .option('-r, --root <path>',  'Data directory')
+  .option('-y, --yes',          'Skip the confirmation prompt')
+  .option('--purge',            'Also delete pod data at <dataRoot>/<username>/')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const account = await findByUsername(username);
+      if (!account) {
+        console.error(`Error: User not found: ${username}`);
+        process.exit(1);
+      }
+
+      if (!options.yes) {
+        const summary = `Delete account '${account.username}' (${account.webId})${options.purge ? ' AND purge pod data' : ''}?`;
+        const ok = await confirm(summary, false);
+        if (!ok) {
+          console.log('Cancelled.');
+          process.exit(0);
+        }
+      }
+
+      await deleteAccount(account.id);
+
+      if (options.purge) {
+        const dataRoot = process.env.DATA_ROOT || './data';
+        const podPath = path.join(dataRoot, account.username);
+        await fs.remove(podPath);
+        console.log(`\nDeleted account ${account.username}. Pod data removed from ${podPath}.\n`);
+      } else {
+        console.log(`\nDeleted account ${account.username}. Pod data preserved at <dataRoot>/${account.username}/ (use --purge to remove).\n`);
       }
     } catch (err) {
       console.error(`Error: ${err.message}`);
