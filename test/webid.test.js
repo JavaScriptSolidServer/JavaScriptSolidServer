@@ -87,7 +87,16 @@ describe('WebID Profile', () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
 
-      assert.ok(jsonLd['mainEntityOfPage'], 'Should have mainEntityOfPage');
+      // Empty string is a relative URI reference to the document itself
+      assert.ok('mainEntityOfPage' in jsonLd, 'Should have mainEntityOfPage');
+    });
+
+    it('should have isPrimaryTopicOf pointing to the document', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+
+      // Empty string is a relative URI reference to the document itself
+      assert.ok('isPrimaryTopicOf' in jsonLd, 'Should have foaf:isPrimaryTopicOf');
     });
   });
 
