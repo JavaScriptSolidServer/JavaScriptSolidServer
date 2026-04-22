@@ -181,6 +181,125 @@ describe('Identity Provider', () => {
       assert.ok(res.status >= 200 && res.status < 600, `got valid HTTP status ${res.status}`);
     });
   });
+
+  // Regression coverage for #284 — relaxed username regex + `..` rejection.
+  // Each register call below also exercises the .jsonld pod-creation flow
+  // from #283, since handleRegisterPost calls createPodStructure on success.
+  describe('Register username validation (path mode)', () => {
+    async function tryRegister(username) {
+      const res = await fetch(`${baseUrl}/idp/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ username, password: 'secret-password', confirmPassword: 'secret-password' }),
+      });
+      const body = await res.text();
+      return { status: res.status, body };
+    }
+
+    it('accepts plain alphanumeric (alice)', async () => {
+      const r = await tryRegister('alice');
+      assert.match(r.body, /Account created/);
+    });
+
+    it('accepts dash (alice-smith)', async () => {
+      const r = await tryRegister('alice-smith');
+      assert.match(r.body, /Account created/);
+    });
+
+    it('accepts dot (alice.smith)', async () => {
+      const r = await tryRegister('alice.smith');
+      assert.match(r.body, /Account created/);
+    });
+
+    it('accepts underscore (alice_work)', async () => {
+      const r = await tryRegister('alice_work');
+      assert.match(r.body, /Account created/);
+    });
+
+    it('rejects leading separator (.alice)', async () => {
+      const r = await tryRegister('.alice');
+      assert.match(r.body, /lowercase letters, numbers/);
+    });
+
+    it('rejects trailing separator (alice-)', async () => {
+      const r = await tryRegister('alice-');
+      assert.match(r.body, /lowercase letters, numbers/);
+    });
+
+    it('rejects consecutive dots (alice..bob)', async () => {
+      const r = await tryRegister('alice..bob');
+      // Quotes are HTML-escaped (&quot;) in the rendered error banner.
+      assert.match(r.body, /cannot contain (?:"|&quot;)\.\.(?:"|&quot;)/);
+    });
+
+    it('rejects uppercase (Alice)', async () => {
+      const r = await tryRegister('Alice');
+      assert.match(r.body, /lowercase letters, numbers/);
+    });
+
+    it('rejects too short (ab)', async () => {
+      const r = await tryRegister('ab');
+      // Two-char names fail the regex (min 3 enforced by the pattern itself).
+      assert.match(r.body, /lowercase letters, numbers|at least 3/);
+    });
+  });
+});
+
+// Subdomain mode: usernames become hostname components, so `.` and `_` are
+// not allowed (server.js refuses to route multi-level subdomains).
+describe('Identity Provider - Subdomain mode register validation', () => {
+  let server;
+  let baseUrl;
+  const SUBDOMAIN_DATA_DIR = './test-data-idp-subdomain';
+
+  before(async () => {
+    await fs.remove(SUBDOMAIN_DATA_DIR);
+    await fs.ensureDir(SUBDOMAIN_DATA_DIR);
+
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
+    server = createServer({
+      logger: false,
+      root: SUBDOMAIN_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      subdomains: true,
+      baseDomain: TEST_HOST,
+      forceCloseConnections: true,
+    });
+
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(SUBDOMAIN_DATA_DIR);
+  });
+
+  async function tryRegister(username) {
+    const res = await fetch(`${baseUrl}/idp/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password: 'secret-password', confirmPassword: 'secret-password' }),
+    });
+    return { status: res.status, body: await res.text() };
+  }
+
+  it('accepts dash (alice-smith)', async () => {
+    const r = await tryRegister('alice-smith');
+    assert.match(r.body, /Account created/);
+  });
+
+  it('rejects dot (alice.smith) — would not be a single-level subdomain', async () => {
+    const r = await tryRegister('alice.smith');
+    assert.match(r.body, /subdomain mode disallows/);
+  });
+
+  it('rejects underscore (alice_work) — invalid in DNS hostnames', async () => {
+    const r = await tryRegister('alice_work');
+    assert.match(r.body, /subdomain mode disallows/);
+  });
 });
 
 describe('Identity Provider - Accounts', () => {

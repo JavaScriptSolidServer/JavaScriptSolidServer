@@ -553,12 +553,35 @@ export function errorPage(title, message) {
 /**
  * Registration page HTML
  */
-export function registerPage(uid = null, error = null, success = null, inviteOnly = false) {
+export function registerPage(uid = null, error = null, success = null, inviteOnly = false, ctx = {}) {
   const inviteField = inviteOnly ? `
       <label for="invite">Invite Code</label>
       <input type="text" id="invite" name="invite" required
              placeholder="Enter your invite code" style="text-transform: uppercase;">
   ` : '';
+
+  // Embed the values the live preview needs. Escape characters that are
+  // unsafe in inline <script> contexts so values like "</script>" or
+  // U+2028 / U+2029 line separators can't terminate the script tag or
+  // confuse the parser when template-substituted.
+  const previewConfig = JSON.stringify({
+    baseUri: ctx.baseUri || '',
+    subdomainsEnabled: !!ctx.subdomainsEnabled,
+    baseDomain: ctx.baseDomain || '',
+  })
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+
+  // Server validates more strictly than the HTML pattern can express; mirror
+  // as much as possible client-side so the browser catches obvious mistakes
+  // before submit. Subdomain mode drops dot/underscore (DNS hostname rules).
+  const usernamePattern = (ctx.subdomainsEnabled && ctx.baseDomain)
+    ? '[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?'
+    : '(?!.*\\.\\.)[a-z0-9](?:[a-z0-9._-]{1,30}[a-z0-9])?';
+  const usernameTitle = (ctx.subdomainsEnabled && ctx.baseDomain)
+    ? 'Lowercase letters, numbers, or - (start and end alphanumeric, 3–32 chars). Subdomain mode disallows . and _.'
+    : 'Lowercase letters, numbers, or . _ - (start and end alphanumeric, 3–32 chars, no consecutive dots)';
 
   return `
 <!DOCTYPE html>
@@ -567,13 +590,38 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Register - Solid IdP</title>
-  <style>${styles}</style>
+  <style>${styles}
+  /* registerPage local polish (#284) */
+  .container.register { padding-top: 32px; }
+  .register-header {
+    margin: -40px -40px 24px;
+    padding: 28px 40px 22px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #fff;
+    border-radius: 12px 12px 0 0;
+  }
+  .register-header h1 { color: #fff; margin: 0 0 4px; font-size: 22px; }
+  .register-header .subtitle { color: rgba(255,255,255,.85); margin: 0; font-size: 13px; }
+  .preview {
+    margin: 4px 0 18px;
+    padding: 12px 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #475569;
+    word-break: break-all;
+  }
+  .preview .label { color: #64748b; font-weight: 600; margin-right: 6px; }
+  .preview .placeholder { color: #94a3b8; font-style: italic; }
+  </style>
 </head>
 <body>
-  <div class="container">
-    <div class="logo">${solidLogo}</div>
-    <h1>Create Account</h1>
-    <p class="subtitle">Register for a new Solid Pod${inviteOnly ? ' (invite required)' : ''}</p>
+  <div class="container register">
+    <div class="register-header">
+      <h1>Create Account</h1>
+      <p class="subtitle">Register for a new Solid Pod${inviteOnly ? ' (invite required)' : ''}</p>
+    </div>
 
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
     ${success ? `<div class="error" style="background: #efe; border-color: #cfc; color: #060;">${escapeHtml(success)}</div>` : ''}
@@ -583,8 +631,14 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
 
       <label for="username">Username</label>
       <input type="text" id="username" name="username" required ${!inviteOnly ? 'autofocus' : ''}
-             placeholder="Choose a username" pattern="[a-z0-9]+"
-             title="Lowercase letters and numbers only">
+             placeholder="Choose a username" minlength="3" maxlength="32"
+             pattern="${usernamePattern}"
+             title="${usernameTitle}">
+
+      <div class="preview" id="preview" aria-live="polite">
+        <div><span class="label">WebID</span><span id="preview-webid" class="placeholder">choose a username to preview</span></div>
+        <div style="margin-top: 4px;"><span class="label">Storage</span><span id="preview-storage" class="placeholder">—</span></div>
+      </div>
 
       <label for="password">Password</label>
       <input type="password" id="password" name="password" required
@@ -601,6 +655,46 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
       Already have an account? <a href="${uid ? `/idp/interaction/${uid}` : '/idp/auth'}" style="color: #0066cc;">Sign In</a>
     </p>
   </div>
+
+  <script>
+  (function () {
+    var cfg = ${previewConfig};
+    var input = document.getElementById('username');
+    var webEl = document.getElementById('preview-webid');
+    var storEl = document.getElementById('preview-storage');
+    if (!input || !webEl || !storEl) return;
+
+    function render() {
+      // Server rejects uppercase outright, so normalise the field as the
+      // user types — keeps the preview honest and avoids a confusing
+      // post-submit error.
+      var normalised = (input.value || '').toLowerCase();
+      if (input.value !== normalised) input.value = normalised;
+      var u = normalised.trim();
+      if (!u) {
+        webEl.textContent = 'choose a username to preview';
+        webEl.className = 'placeholder';
+        storEl.textContent = '—';
+        storEl.className = 'placeholder';
+        return;
+      }
+      var pod, webid;
+      if (cfg.subdomainsEnabled && cfg.baseDomain) {
+        var origin = cfg.baseUri.split('://')[0] + '://';
+        pod = origin + u + '.' + cfg.baseDomain + '/';
+      } else {
+        pod = (cfg.baseUri || (location.protocol + '//' + location.host)) + '/' + u + '/';
+      }
+      webid = pod + 'profile/card.jsonld#me';
+      webEl.textContent = webid;
+      webEl.className = '';
+      storEl.textContent = pod;
+      storEl.className = '';
+    }
+    input.addEventListener('input', render);
+    render();
+  })();
+  </script>
 </body>
 </html>
   `;
