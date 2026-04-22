@@ -551,9 +551,6 @@ export function errorPage(title, message) {
 }
 
 /**
- * Registration page HTML
- */
-/**
  * Friendly landing page for the IdP root.
  *
  * The OIDC authorization endpoint (/idp/auth) requires a client_id; opening
@@ -624,6 +621,9 @@ export function landingPage(ctx = {}) {
   `;
 }
 
+/**
+ * Registration page HTML
+ */
 export function registerPage(uid = null, error = null, success = null, inviteOnly = false, ctx = {}) {
   const inviteField = inviteOnly ? `
       <label for="invite">Invite Code</label>
