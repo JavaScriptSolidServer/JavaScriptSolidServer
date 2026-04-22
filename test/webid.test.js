@@ -83,20 +83,20 @@ describe('WebID Profile', () => {
       assert.ok(jsonLd['inbox'].endsWith('/webidtest/inbox/'), 'Should have inbox');
     });
 
-    it('should have mainEntityOfPage', async () => {
+    it('should have mainEntityOfPage pointing to the document', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
 
-      // Empty string is a relative URI reference to the document itself
-      assert.ok('mainEntityOfPage' in jsonLd, 'Should have mainEntityOfPage');
+      // Empty string is a relative URI reference to the document itself (JSON-LD)
+      assert.strictEqual(jsonLd['mainEntityOfPage'], '', 'mainEntityOfPage should be "" (self)');
     });
 
     it('should have isPrimaryTopicOf pointing to the document', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
 
-      // Empty string is a relative URI reference to the document itself
-      assert.ok('isPrimaryTopicOf' in jsonLd, 'Should have foaf:isPrimaryTopicOf');
+      // Empty string is a relative URI reference to the document itself (JSON-LD)
+      assert.strictEqual(jsonLd['isPrimaryTopicOf'], '', 'isPrimaryTopicOf should be "" (self)');
     });
   });
 
