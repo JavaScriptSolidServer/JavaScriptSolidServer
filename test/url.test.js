@@ -106,4 +106,15 @@ describe('getContentType', () => {
       assert.strictEqual(getContentType('/alice/notes/my-acl-plan.md'), 'text/markdown');
     });
   });
+
+  describe('.acl / .meta as extensions (#297)', () => {
+    it('treats *.acl (extension) as application/ld+json', () => {
+      assert.strictEqual(getContentType('/settings/publicTypeIndex.jsonld.acl'), 'application/ld+json');
+      assert.strictEqual(getContentType('/alice/private/secret.json.acl'), 'application/ld+json');
+    });
+
+    it('treats *.meta (extension) as application/ld+json', () => {
+      assert.strictEqual(getContentType('/alice/resource.meta'), 'application/ld+json');
+    });
+  });
 });

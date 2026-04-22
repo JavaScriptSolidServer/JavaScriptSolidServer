@@ -409,6 +409,55 @@ describe('Identity Provider - Single-user mode landing', () => {
   });
 });
 
+// Root-level pod (singleUserName: '/') — verifies createRootPodStructure wires
+// publicTypeIndex as public-read and privateTypeIndex as owner-only.
+// Regression coverage for #297.
+describe('Identity Provider - Root pod type index ACLs', () => {
+  let server;
+  let baseUrl;
+  const ROOT_POD_DATA_DIR = './test-data-idp-root-pod';
+
+  before(async () => {
+    await fs.remove(ROOT_POD_DATA_DIR);
+    await fs.ensureDir(ROOT_POD_DATA_DIR);
+
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
+    server = createServer({
+      logger: false,
+      root: ROOT_POD_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: '/',
+      forceCloseConnections: true,
+    });
+
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(ROOT_POD_DATA_DIR);
+  });
+
+  it('publicTypeIndex is readable without auth', async () => {
+    const res = await fetch(`${baseUrl}/settings/publicTypeIndex.jsonld`);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('privateTypeIndex requires auth', async () => {
+    const res = await fetch(`${baseUrl}/settings/privateTypeIndex.jsonld`);
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('prefs requires auth', async () => {
+    const res = await fetch(`${baseUrl}/settings/prefs.jsonld`);
+    assert.strictEqual(res.status, 401);
+  });
+});
+
 describe('Identity Provider - Accounts', () => {
   let server;
   let accountsUrl;
