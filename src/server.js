@@ -571,7 +571,7 @@ export function createServer(options = {}) {
         }
       });
     } catch (err) {
-      fastify.log.warn(`Failed to seed server root: ${err.message}`);
+      fastify.log.warn({ err }, 'Failed to seed server root');
     }
   });
 

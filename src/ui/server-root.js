@@ -40,10 +40,10 @@ function listFeatures(options = {}) {
 function renderActions({ singleUser, idp }) {
   const buttons = [];
   if (!singleUser && idp) {
-    buttons.push('<a href="/.account/new" class="btn btn-primary">Create a pod</a>');
-    buttons.push('<a href="/idp/auth" class="btn btn-secondary">Sign in</a>');
+    buttons.push('<a href="/idp/register" class="btn btn-primary">Create a pod</a>');
+    buttons.push('<a href="/idp" class="btn btn-secondary">Sign in</a>');
   } else if (singleUser && idp) {
-    buttons.push('<a href="/idp/auth" class="btn btn-primary">Sign in</a>');
+    buttons.push('<a href="/idp" class="btn btn-primary">Sign in</a>');
   }
   buttons.push('<a href="https://javascriptsolidserver.github.io/docs/" class="btn btn-secondary">Docs</a>');
   return `<div class="actions">${buttons.join('\n      ')}</div>`;
@@ -97,23 +97,53 @@ function escape(s = '') {
 }
 
 /**
- * Seed DATA_ROOT/index.html and DATA_ROOT/.acl if they don't already
- * exist. Operator's own files are never overwritten.
+ * Build a public-read-only ACL (no owner) for the server root.
+ * The existing WAC generators all require an owner WebID; the server
+ * root has none, so this is a tiny local helper.
+ */
+function publicReadAcl(target) {
+  return JSON.stringify({
+    '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
+    '@graph': [
+      {
+        '@id': '#public',
+        '@type': 'acl:Authorization',
+        'acl:agentClass': { '@id': 'foaf:Agent' },
+        'acl:accessTo': { '@id': target },
+        'acl:mode': [{ '@id': 'acl:Read' }]
+      }
+    ]
+  }, null, 2);
+}
+
+/**
+ * Seed DATA_ROOT/index.html, DATA_ROOT/.acl and DATA_ROOT/index.html.acl
+ * if they don't already exist. Operator's own files are never overwritten.
  *
- * Default ACL at root: public read. Write access is not granted — the
- * operator edits the file on disk, not via the web.
+ * Default ACL: public read. No write access — the operator edits
+ * /index.html on disk, not via the web.
+ *
+ * If the HTML write fails (permissions, full disk, read-only DATA_ROOT),
+ * ACL seeding is aborted to avoid leaving the server with a public-read
+ * root ACL and no index page.
  *
  * @param {object} ctx - Same context passed to renderServerRoot
- * @returns {Promise<{seeded: boolean}>}
+ * @returns {Promise<{seededHtml: boolean, seededAcl: boolean, seededPageAcl: boolean}>}
  */
 export async function seedServerRoot(ctx = {}) {
   let seededHtml = false;
   let seededAcl = false;
+  let seededPageAcl = false;
 
   // Seed /index.html if operator hasn't written one.
   if (!(await storage.exists('/index.html'))) {
     const html = renderServerRoot(ctx);
-    await storage.write('/index.html', html);
+    const ok = await storage.write('/index.html', html);
+    if (!ok) {
+      // Don't proceed with ACLs if the page itself failed to write —
+      // leaves us in a consistent unchanged state.
+      return { seededHtml: false, seededAcl: false, seededPageAcl: false };
+    }
     seededHtml = true;
   }
 
@@ -122,40 +152,17 @@ export async function seedServerRoot(ctx = {}) {
   // (createRootPodStructure in single-user mode writes its own ACL and
   // runs in a later hook, which will overwrite this if needed.)
   if (!(await storage.exists('/.acl'))) {
-    const acl = JSON.stringify({
-      '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
-      '@graph': [
-        {
-          '@id': '#public',
-          '@type': 'acl:Authorization',
-          'acl:agentClass': { '@id': 'foaf:Agent' },
-          'acl:accessTo': { '@id': '/' },
-          'acl:mode': [{ '@id': 'acl:Read' }]
-        }
-      ]
-    }, null, 2);
-    await storage.write('/.acl', acl);
-    seededAcl = true;
+    const ok = await storage.write('/.acl', publicReadAcl('/'));
+    if (ok) seededAcl = true;
   }
 
   // Dedicated ACL for the landing page itself — public read. The container
   // ACL above has no acl:default (we don't want to implicitly publish all
   // children), so /index.html needs its own rule when fetched directly.
   if (!(await storage.exists('/index.html.acl'))) {
-    const pageAcl = JSON.stringify({
-      '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
-      '@graph': [
-        {
-          '@id': '#public',
-          '@type': 'acl:Authorization',
-          'acl:agentClass': { '@id': 'foaf:Agent' },
-          'acl:accessTo': { '@id': '/index.html' },
-          'acl:mode': [{ '@id': 'acl:Read' }]
-        }
-      ]
-    }, null, 2);
-    await storage.write('/index.html.acl', pageAcl);
+    const ok = await storage.write('/index.html.acl', publicReadAcl('/index.html'));
+    if (ok) seededPageAcl = true;
   }
 
-  return { seededHtml, seededAcl };
+  return { seededHtml, seededAcl, seededPageAcl };
 }
