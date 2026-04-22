@@ -32,6 +32,7 @@ function listFeatures(options = {}) {
   if (options.mashlib) f.push('mashlib');
   if (options.mongo) f.push('mongo');
   if (options.tunnel) f.push('tunnel');
+  if (options.terminal) f.push('terminal');
   return f;
 }
 

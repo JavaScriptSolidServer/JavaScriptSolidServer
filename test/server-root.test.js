@@ -35,10 +35,16 @@ describe('Server-root landing page', () => {
 describe('Server-root landing — operator override', () => {
   let server;
   let baseUrl;
+  let savedDataRoot;
   const DATA_DIR = './test-data-server-root-override';
   const CUSTOM_HTML = '<!doctype html><html><body>my custom page</body></html>';
 
   before(async () => {
+    // Capture process.env.DATA_ROOT — createServer mutates it when options.root
+    // is provided. Restore in after() to avoid cross-test interference with
+    // suites that rely on the default ./data dir.
+    savedDataRoot = process.env.DATA_ROOT;
+
     await fs.remove(DATA_DIR);
     await fs.ensureDir(DATA_DIR);
     await fs.writeFile(`${DATA_DIR}/index.html`, CUSTOM_HTML);
@@ -55,6 +61,8 @@ describe('Server-root landing — operator override', () => {
   after(async () => {
     await server.close();
     await fs.remove(DATA_DIR);
+    if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = savedDataRoot;
   });
 
   it('does not overwrite operator-provided /index.html', async () => {

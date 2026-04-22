@@ -569,7 +569,8 @@ export function createServer(options = {}) {
             notifications: notificationsEnabled,
             mashlib: mashlibEnabled,
             mongo: mongoEnabled,
-            tunnel: tunnelEnabled
+            tunnel: tunnelEnabled,
+            terminal: terminalEnabled
           }
         });
       } catch (err) {
