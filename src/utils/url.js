@@ -237,7 +237,10 @@ export function getContentType(filePath) {
     '.md': 'text/markdown',
     '.m3u': 'audio/mpegurl',
     '.m3u8': 'application/vnd.apple.mpegurl',
-    '.pls': 'audio/x-scpls'
+    '.pls': 'audio/x-scpls',
+    // Solid ACL/meta as extensions (e.g. publicTypeIndex.jsonld.acl)
+    '.acl': 'application/ld+json',
+    '.meta': 'application/ld+json'
   };
 
   // Solid convention dotfiles (.acl, .meta) are RDF resources. path.extname
