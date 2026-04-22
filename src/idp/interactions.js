@@ -403,9 +403,20 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   // `alice_work`, and so on. No leading/trailing separators (avoids the
   // `.hidden` / trailing-dot footguns), no `..` (path traversal hygiene
   // even though storage already guards against it).
-  const usernameRegex = /^[a-z0-9]([a-z0-9._-]{1,30}[a-z0-9])?$/;
+  //
+  // In subdomain mode the username becomes a single-level subdomain — DNS
+  // hostnames don't allow `.` or `_`, and `server.js` already refuses to
+  // route multi-level subdomains as pods. So we restrict to alphanumeric +
+  // hyphen there to keep the username and the pod actually addressable.
+  const subdomainMode = !!(request.subdomainsEnabled && request.baseDomain);
+  const usernameRegex = subdomainMode
+    ? /^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])?$/
+    : /^[a-z0-9]([a-z0-9._-]{1,30}[a-z0-9])?$/;
   if (!usernameRegex.test(username)) {
-    return reply.type('text/html').send(registerPage(uid, 'Username must be lowercase letters, numbers, or . _ - (start and end alphanumeric)', null, inviteOnly, ctx));
+    const msg = subdomainMode
+      ? 'Username must be lowercase letters, numbers, or - (subdomain mode disallows . and _)'
+      : 'Username must be lowercase letters, numbers, or . _ - (start and end alphanumeric)';
+    return reply.type('text/html').send(registerPage(uid, msg, null, inviteOnly, ctx));
   }
   if (username.includes('..')) {
     return reply.type('text/html').send(registerPage(uid, 'Username cannot contain ".."', null, inviteOnly, ctx));

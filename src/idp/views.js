@@ -560,14 +560,28 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
              placeholder="Enter your invite code" style="text-transform: uppercase;">
   ` : '';
 
-  // Embed the values the live preview needs. Treat as opaque strings — the
-  // template substitution is JSON-serialised, so quotes / scripts inside
-  // baseUri can't break out.
+  // Embed the values the live preview needs. Escape characters that are
+  // unsafe in inline <script> contexts so values like "</script>" or
+  // U+2028 / U+2029 line separators can't terminate the script tag or
+  // confuse the parser when template-substituted.
   const previewConfig = JSON.stringify({
     baseUri: ctx.baseUri || '',
     subdomainsEnabled: !!ctx.subdomainsEnabled,
     baseDomain: ctx.baseDomain || '',
-  });
+  })
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+
+  // Server validates more strictly than the HTML pattern can express; mirror
+  // as much as possible client-side so the browser catches obvious mistakes
+  // before submit. Subdomain mode drops dot/underscore (DNS hostname rules).
+  const usernamePattern = (ctx.subdomainsEnabled && ctx.baseDomain)
+    ? '[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])?'
+    : '(?!.*\\.\\.)[a-z0-9](?:[a-z0-9._-]{1,30}[a-z0-9])?';
+  const usernameTitle = (ctx.subdomainsEnabled && ctx.baseDomain)
+    ? 'Lowercase letters, numbers, or - (start and end alphanumeric, 3–32 chars). Subdomain mode disallows . and _.'
+    : 'Lowercase letters, numbers, or . _ - (start and end alphanumeric, 3–32 chars, no consecutive dots)';
 
   return `
 <!DOCTYPE html>
@@ -618,8 +632,8 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
       <label for="username">Username</label>
       <input type="text" id="username" name="username" required ${!inviteOnly ? 'autofocus' : ''}
              placeholder="Choose a username" minlength="3" maxlength="32"
-             pattern="[a-z0-9]([a-z0-9._-]{1,30}[a-z0-9])?"
-             title="Lowercase letters, numbers, or . _ - (start and end alphanumeric, 3–32 chars)">
+             pattern="${usernamePattern}"
+             title="${usernameTitle}">
 
       <div class="preview" id="preview" aria-live="polite">
         <div><span class="label">WebID</span><span id="preview-webid" class="placeholder">choose a username to preview</span></div>
@@ -651,7 +665,12 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
     if (!input || !webEl || !storEl) return;
 
     function render() {
-      var u = (input.value || '').trim().toLowerCase();
+      // Server rejects uppercase outright, so normalise the field as the
+      // user types — keeps the preview honest and avoids a confusing
+      // post-submit error.
+      var normalised = (input.value || '').toLowerCase();
+      if (input.value !== normalised) input.value = normalised;
+      var u = normalised.trim();
       if (!u) {
         webEl.textContent = 'choose a username to preview';
         webEl.className = 'placeholder';
