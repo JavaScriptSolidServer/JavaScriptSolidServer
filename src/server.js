@@ -21,6 +21,7 @@ import { dbPlugin } from './db/index.js';
 import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
+import { seedServerRoot } from './ui/server-root.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -544,6 +545,35 @@ export function createServer(options = {}) {
   fastify.head('/', handleHead);
   fastify.options('/', handleOptions);
   fastify.post('/', writeRateLimit, handlePost);
+
+  // Server-root landing page: seed /index.html and /.acl on first start
+  // (skip-if-exists, operator customisations preserved). See #276.
+  fastify.addHook('onReady', async () => {
+    try {
+      const pkg = await readFile(join(__dirname, '..', 'package.json'), 'utf8');
+      const { version } = JSON.parse(pkg);
+      await seedServerRoot({
+        version,
+        singleUser,
+        idp: idpEnabled,
+        singleUserName,
+        enabled: {
+          idp: idpEnabled,
+          nostr: nostrEnabled,
+          webrtc: webrtcEnabled,
+          activitypub: activitypubEnabled,
+          git: gitEnabled,
+          pay: payEnabled,
+          notifications: notificationsEnabled,
+          mashlib: mashlibEnabled,
+          mongo: mongoEnabled,
+          tunnel: tunnelEnabled
+        }
+      });
+    } catch (err) {
+      fastify.log.warn(`Failed to seed server root: ${err.message}`);
+    }
+  });
 
   // Single-user mode: create pod on startup if it doesn't exist
   if (singleUser) {
