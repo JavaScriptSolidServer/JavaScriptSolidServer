@@ -132,7 +132,7 @@ describe('Pod Lifecycle', () => {
       assertStatus(prefs, 401);
     });
 
-    it('should type indexes with ListedDocument / UnlistedDocument', async () => {
+    it('should mark type indexes as ListedDocument / UnlistedDocument', async () => {
       await createTestPod('frida');
 
       const pub = await request('/frida/settings/publicTypeIndex.jsonld');
