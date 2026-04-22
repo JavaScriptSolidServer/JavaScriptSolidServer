@@ -622,6 +622,10 @@ export function createServer(options = {}) {
     const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
     await storage.write('/settings/.acl', serializeAcl(settingsAcl));
 
+    // publicTypeIndex: public read, overrides the private default inherited from /settings/
+    const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+    await storage.write('/settings/publicTypeIndex.jsonld.acl', serializeAcl(publicTypeIndexAcl));
+
     const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
     await storage.write('/inbox/.acl', serializeAcl(inboxAcl));
 

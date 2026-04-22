@@ -197,9 +197,13 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
-  // settings folder: owner only
+  // settings folder: owner only (contains private preferences)
   const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
   await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
+
+  // publicTypeIndex: public read, overrides the private default inherited from /settings/
+  const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+  await storage.write(`${podPath}settings/publicTypeIndex.jsonld.acl`, serializeAcl(publicTypeIndexAcl));
 
   // Inbox: owner full, public append
   const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);

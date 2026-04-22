@@ -115,5 +115,21 @@ describe('Pod Lifecycle', () => {
       const privIndex = await request('/dan/settings/privateTypeIndex.jsonld', { auth: 'dan' });
       assertStatus(privIndex, 200);
     });
+
+    it('should make publicTypeIndex publicly readable but keep privateTypeIndex private', async () => {
+      await createTestPod('elsa');
+
+      // publicTypeIndex: no auth required (per Solid Type Indexes spec)
+      const pubIndex = await request('/elsa/settings/publicTypeIndex.jsonld');
+      assertStatus(pubIndex, 200);
+
+      // privateTypeIndex: auth required
+      const privIndex = await request('/elsa/settings/privateTypeIndex.jsonld');
+      assertStatus(privIndex, 401);
+
+      // prefs: auth required (private by inheritance from /settings/)
+      const prefs = await request('/elsa/settings/prefs.jsonld');
+      assertStatus(prefs, 401);
+    });
   });
 });
