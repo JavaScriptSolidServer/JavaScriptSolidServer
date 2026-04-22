@@ -192,6 +192,8 @@ describe('Identity Provider', () => {
       assert.match(body, /Solid Pod Server/);
       assert.match(body, /Create Account/);
       assert.match(body, /href="\/idp\/register"/);
+      // Sign-in note names pilot as the example client (#288).
+      assert.match(body, /solid-apps\.github\.io\/pilot/);
     });
 
     it('GET /idp/auth without client_id redirects to /idp', async () => {
