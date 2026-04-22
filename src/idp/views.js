@@ -592,6 +592,8 @@ export function landingPage(ctx = {}) {
     line-height: 1.55;
   }
   .landing .signin-note strong { color: #1e293b; }
+  .landing .signin-note a { color: #4f46e5; text-decoration: none; font-weight: 500; }
+  .landing .signin-note a:hover { text-decoration: underline; }
   .landing .issuer {
     margin-top: 18px;
     text-align: center;
@@ -611,7 +613,7 @@ export function landingPage(ctx = {}) {
     <a href="/idp/register" class="btn btn-primary" style="text-decoration: none;">Create Account</a>
 
     <div class="signin-note">
-      <strong>Already have an account?</strong> Sign in from inside the Solid app you want to use — the app will redirect here when authentication is needed.
+      <strong>Already have an account?</strong> Sign in from a Solid app — for example, <a href="https://solid-apps.github.io/pilot/" target="_blank" rel="noopener">pilot</a> is a minimal console you can open right now. Point it at this server and click Sign In.
     </div>
 
     ${issuer ? `<div class="issuer">Issuer: ${escapeHtml(issuer.replace(/\/$/, ''))}</div>` : ''}
