@@ -98,17 +98,25 @@ export function generatePreferences({ webId, podUri }) {
 }
 
 /**
- * Generate an empty type index
+ * Generate an empty type index.
+ * Per the Solid Type Indexes spec, a public index is additionally typed
+ * `solid:ListedDocument` and a private one `solid:UnlistedDocument`.
  * @param {string} uri - URI of the type index
+ * @param {object} [opts]
+ * @param {boolean} [opts.listed] - true for publicTypeIndex, false for privateTypeIndex.
+ *   If omitted, only `solid:TypeIndex` is set (back-compat).
  * @returns {object} JSON-LD type index document
  */
-export function generateTypeIndex(uri) {
+export function generateTypeIndex(uri, opts = {}) {
+  const types = ['solid:TypeIndex'];
+  if (opts.listed === true) types.push('solid:ListedDocument');
+  else if (opts.listed === false) types.push('solid:UnlistedDocument');
   return {
     '@context': {
       'solid': SOLID
     },
     '@id': uri,
-    '@type': 'solid:TypeIndex'
+    '@type': types.length === 1 ? types[0] : types
   };
 }
 

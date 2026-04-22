@@ -606,10 +606,10 @@ export function createServer(options = {}) {
     const prefs = generatePreferences({ webId, podUri });
     await storage.write('/settings/prefs.jsonld', serialize(prefs));
 
-    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`);
+    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`, { listed: true });
     await storage.write('/settings/publicTypeIndex.jsonld', serialize(publicTypeIndex));
 
-    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`);
+    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
     await storage.write('/settings/privateTypeIndex.jsonld', serialize(privateTypeIndex));
 
     // ACL files
