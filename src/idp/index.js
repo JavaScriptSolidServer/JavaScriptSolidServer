@@ -162,7 +162,12 @@ export async function idpPlugin(fastify, options) {
       // Only catch the truly-bare case (no `client_id` param at all). An
       // explicit empty string is a malformed OIDC request — let
       // oidc-provider surface the spec error instead of redirecting.
-      if (request.method === 'GET' && request.query?.client_id === undefined) {
+      // HEAD is included so the friendly redirect also covers tools (and
+      // Fastify's auto-HEAD-from-GET) that probe with HEAD.
+      if (
+        (request.method === 'GET' || request.method === 'HEAD') &&
+        request.query?.client_id === undefined
+      ) {
         return reply.redirect('/idp');
       }
       return forwardToProvider(request, reply);

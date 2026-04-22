@@ -200,19 +200,30 @@ describe('Identity Provider', () => {
       assert.strictEqual(res.headers.get('location'), '/idp');
     });
 
+    it('HEAD /idp/auth without client_id also redirects to /idp', async () => {
+      // Fastify auto-creates HEAD handlers for GET routes; the guard must
+      // catch HEAD too so probing tools land on the friendly page rather
+      // than the raw OIDC error.
+      const res = await fetch(`${baseUrl}/idp/auth`, { method: 'HEAD', redirect: 'manual' });
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/idp');
+    });
+
     it('GET /idp/auth WITH client_id still reaches oidc-provider', async () => {
-      // Sanity: the guard must not block real OIDC requests. We don't care
-      // what oidc-provider does with this fake client_id (it'll likely
-      // surface its own error) — only that the guard did not redirect us.
+      // Sanity: the guard must not block real OIDC requests. The provider
+      // may legitimately redirect (e.g. to /idp/interaction/:uid) for
+      // valid client/parameter combinations, so we test the precise
+      // contract — the guard's specific 302→/idp response — rather than
+      // "no redirect at all".
       const res = await fetch(
         `${baseUrl}/idp/auth?client_id=test&redirect_uri=http://localhost&response_type=code&scope=openid`,
         { redirect: 'manual' }
       );
-      // Must NOT be a redirect (the guard's only effect would be a 302).
-      assert.ok(res.status < 300 || res.status >= 400,
-        `expected non-redirect response, got ${res.status}`);
-      // And must not have a Location header pointing anywhere.
-      assert.strictEqual(res.headers.get('location'), null);
+      const location = res.headers.get('location');
+      assert.ok(
+        !(res.status === 302 && location === '/idp'),
+        `request should bypass the /idp guard, got ${res.status} → ${location}`
+      );
     });
 
     it('GET /idp/auth with empty client_id is a malformed OIDC request, not bare', async () => {
