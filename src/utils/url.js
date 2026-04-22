@@ -239,6 +239,16 @@ export function getContentType(filePath) {
     '.m3u8': 'application/vnd.apple.mpegurl',
     '.pls': 'audio/x-scpls'
   };
+
+  // Solid convention dotfiles (.acl, .meta) are RDF resources. path.extname
+  // returns '' for leading-dot names, so the map lookup above misses them;
+  // fall back to a basename check and tag them as JSON-LD — the format JSS
+  // writes them in via serializeAcl() / createPodStructure(). Content
+  // negotiation then handles Turtle-native clients (umai, Soukai-based apps,
+  // older Solid tooling) via handleGet's conneg branch.
+  const base = path.basename(filePath);
+  if (base === '.acl' || base === '.meta') return 'application/ld+json';
+
   return types[ext] || 'application/octet-stream';
 }
 

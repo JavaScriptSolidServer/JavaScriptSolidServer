@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { getPodName } from '../src/utils/url.js';
+import { getPodName, getContentType } from '../src/utils/url.js';
 
 describe('getPodName', () => {
   describe('subdomain mode', () => {
@@ -70,6 +70,40 @@ describe('getPodName', () => {
 
     it('returns null for the root path', () => {
       assert.strictEqual(getPodName('/'), null);
+    });
+  });
+});
+
+// Regression coverage for #294 — .acl and .meta must be recognised as RDF
+// resources so content negotiation kicks in for Turtle-native clients.
+describe('getContentType', () => {
+  describe('extension-based mapping (existing)', () => {
+    it('maps .jsonld → application/ld+json', () => {
+      assert.strictEqual(getContentType('/x/card.jsonld'), 'application/ld+json');
+    });
+    it('maps .ttl → text/turtle', () => {
+      assert.strictEqual(getContentType('/x/card.ttl'), 'text/turtle');
+    });
+    it('falls back to application/octet-stream for unknown extensions', () => {
+      assert.strictEqual(getContentType('/x/file.xyz'), 'application/octet-stream');
+    });
+  });
+
+  describe('Solid convention dotfiles (#294)', () => {
+    it('treats .acl as application/ld+json (the format JSS writes it in)', () => {
+      assert.strictEqual(getContentType('/alice/public/.acl'), 'application/ld+json');
+      assert.strictEqual(getContentType('.acl'), 'application/ld+json');
+    });
+
+    it('treats .meta as application/ld+json', () => {
+      assert.strictEqual(getContentType('/alice/public/.meta'), 'application/ld+json');
+      assert.strictEqual(getContentType('.meta'), 'application/ld+json');
+    });
+
+    it('does not mistake non-dotfile paths containing .acl for ACL files', () => {
+      // A regular file that happens to have "acl" in its name/path stays
+      // classified by extension, not by coincidence.
+      assert.strictEqual(getContentType('/alice/notes/my-acl-plan.md'), 'text/markdown');
     });
   });
 });
