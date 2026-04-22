@@ -156,14 +156,16 @@ export async function idpPlugin(fastify, options) {
   // return a raw `invalid_request` error page; we 302 to the friendly
   // landing instead. Real OIDC requests (with client_id) pass through.
   fastify.route({
-    method: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+    // HEAD is listed explicitly so the route's contract doesn't depend on
+    // Fastify's auto-HEAD-from-GET (which `exposeHeadRoutes` can disable);
+    // the handler below treats HEAD the same as GET for the bare-client_id
+    // redirect.
+    method: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
     url: '/idp/auth',
     handler: async (request, reply) => {
       // Only catch the truly-bare case (no `client_id` param at all). An
       // explicit empty string is a malformed OIDC request — let
       // oidc-provider surface the spec error instead of redirecting.
-      // HEAD is included so the friendly redirect also covers tools (and
-      // Fastify's auto-HEAD-from-GET) that probe with HEAD.
       if (
         (request.method === 'GET' || request.method === 'HEAD') &&
         request.query?.client_id === undefined
