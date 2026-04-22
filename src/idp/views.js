@@ -551,6 +551,77 @@ export function errorPage(title, message) {
 }
 
 /**
+ * Friendly landing page for the IdP root.
+ *
+ * The OIDC authorization endpoint (/idp/auth) requires a client_id; opening
+ * /idp manually used to drop the user into a raw OIDC error. This page is
+ * the human-navigable entry point — Create Account is wired up; Sign In is
+ * intentionally a description for now (PR-B / #286 will introduce a
+ * standalone /idp/login form).
+ */
+export function landingPage(ctx = {}) {
+  const issuer = ctx.baseUri || '';
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Solid Pod Server</title>
+  <style>${styles}
+  /* landingPage local polish (#286) */
+  .container.landing { padding-top: 32px; }
+  .landing-header {
+    margin: -40px -40px 24px;
+    padding: 32px 40px 26px;
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: #fff;
+    border-radius: 12px 12px 0 0;
+    text-align: center;
+  }
+  .landing-header h1 { color: #fff; margin: 0 0 6px; font-size: 24px; }
+  .landing-header .subtitle { color: rgba(255,255,255,.85); margin: 0; font-size: 14px; }
+  .landing .signin-note {
+    margin-top: 18px;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .landing .signin-note strong { color: #1e293b; }
+  .landing .issuer {
+    margin-top: 18px;
+    text-align: center;
+    color: #94a3b8;
+    font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+  }
+  </style>
+</head>
+<body>
+  <div class="container landing">
+    <div class="landing-header">
+      <h1>Solid Pod Server</h1>
+      <p class="subtitle">Create an account, then sign in from any Solid app.</p>
+    </div>
+
+    <a href="/idp/register" class="btn btn-primary" style="text-decoration: none;">Create Account</a>
+
+    <div class="signin-note">
+      <strong>Already have an account?</strong> Sign in from inside the Solid app you want to use — the app will redirect here when authentication is needed.
+    </div>
+
+    ${issuer ? `<div class="issuer">Issuer: ${escapeHtml(issuer.replace(/\/$/, ''))}</div>` : ''}
+  </div>
+</body>
+</html>
+  `;
+}
+
+/**
  * Registration page HTML
  */
 export function registerPage(uid = null, error = null, success = null, inviteOnly = false, ctx = {}) {
@@ -652,7 +723,9 @@ export function registerPage(uid = null, error = null, success = null, inviteOnl
     </form>
 
     <p style="text-align: center; margin-top: 24px; color: #666; font-size: 14px;">
-      Already have an account? <a href="${uid ? `/idp/interaction/${uid}` : '/idp/auth'}" style="color: #0066cc;">Sign In</a>
+      ${uid
+        ? `Already have an account? <a href="/idp/interaction/${uid}" style="color: #0066cc;">Sign In</a>`
+        : `<a href="/idp" style="color: #0066cc;">Back to home</a>`}
     </p>
   </div>
 

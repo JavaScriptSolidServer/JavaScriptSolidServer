@@ -182,6 +182,58 @@ describe('Identity Provider', () => {
     });
   });
 
+  // Regression coverage for #286 — friendly /idp landing + /idp/auth guard.
+  describe('Landing page', () => {
+    it('GET /idp returns the landing HTML', async () => {
+      const res = await fetch(`${baseUrl}/idp`);
+      assert.strictEqual(res.status, 200);
+      assert.match(res.headers.get('content-type') || '', /text\/html/);
+      const body = await res.text();
+      assert.match(body, /Solid Pod Server/);
+      assert.match(body, /Create Account/);
+      assert.match(body, /href="\/idp\/register"/);
+    });
+
+    it('GET /idp/auth without client_id redirects to /idp', async () => {
+      const res = await fetch(`${baseUrl}/idp/auth`, { redirect: 'manual' });
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/idp');
+    });
+
+    it('HEAD /idp/auth without client_id also redirects to /idp', async () => {
+      // Fastify auto-creates HEAD handlers for GET routes; the guard must
+      // catch HEAD too so probing tools land on the friendly page rather
+      // than the raw OIDC error.
+      const res = await fetch(`${baseUrl}/idp/auth`, { method: 'HEAD', redirect: 'manual' });
+      assert.strictEqual(res.status, 302);
+      assert.strictEqual(res.headers.get('location'), '/idp');
+    });
+
+    it('GET /idp/auth WITH client_id still reaches oidc-provider', async () => {
+      // Sanity: the guard must not block real OIDC requests. The provider
+      // may legitimately redirect (e.g. to /idp/interaction/:uid) for
+      // valid client/parameter combinations, so we test the precise
+      // contract — the guard's specific 302→/idp response — rather than
+      // "no redirect at all".
+      const res = await fetch(
+        `${baseUrl}/idp/auth?client_id=test&redirect_uri=http://localhost&response_type=code&scope=openid`,
+        { redirect: 'manual' }
+      );
+      const location = res.headers.get('location');
+      assert.ok(
+        !(res.status === 302 && location === '/idp'),
+        `request should bypass the /idp guard, got ${res.status} → ${location}`
+      );
+    });
+
+    it('GET /idp/auth with empty client_id is a malformed OIDC request, not bare', async () => {
+      // Tightened guard (=== undefined) lets ?client_id= pass through to
+      // oidc-provider rather than redirecting to /idp.
+      const res = await fetch(`${baseUrl}/idp/auth?client_id=`, { redirect: 'manual' });
+      assert.notStrictEqual(res.headers.get('location'), '/idp');
+    });
+  });
+
   // Regression coverage for #284 — relaxed username regex + `..` rejection.
   // Each register call below also exercises the .jsonld pod-creation flow
   // from #283, since handleRegisterPost calls createPodStructure on success.

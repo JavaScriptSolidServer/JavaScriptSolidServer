@@ -24,6 +24,7 @@ import {
 } from './credentials.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
+import { landingPage } from './views.js';
 
 /**
  * IdP Fastify Plugin
@@ -140,7 +141,7 @@ export async function idpPlugin(fastify, options) {
 
   // Catch-all route for oidc-provider paths
   // Must be registered BEFORE specific routes to be matched as fallback
-  const oidcPaths = ['/idp/auth', '/idp/token', '/idp/reg', '/idp/me', '/idp/session', '/idp/session/*'];
+  const oidcPaths = ['/idp/token', '/idp/reg', '/idp/me', '/idp/session', '/idp/session/*'];
 
   for (const path of oidcPaths) {
     fastify.route({
@@ -150,8 +151,40 @@ export async function idpPlugin(fastify, options) {
     });
   }
 
+  // /idp/auth: guard against the human-fat-fingered case where someone opens
+  // the URL directly with no `client_id`. oidc-provider would otherwise
+  // return a raw `invalid_request` error page; we 302 to the friendly
+  // landing instead. Real OIDC requests (with client_id) pass through.
+  fastify.route({
+    // HEAD is listed explicitly so the route's contract doesn't depend on
+    // Fastify's auto-HEAD-from-GET (which `exposeHeadRoutes` can disable);
+    // the handler below treats HEAD the same as GET for the bare-client_id
+    // redirect.
+    method: ['GET', 'HEAD', 'POST', 'DELETE', 'OPTIONS'],
+    url: '/idp/auth',
+    handler: async (request, reply) => {
+      // Only catch the truly-bare case (no `client_id` param at all). An
+      // explicit empty string is a malformed OIDC request — let
+      // oidc-provider surface the spec error instead of redirecting.
+      if (
+        (request.method === 'GET' || request.method === 'HEAD') &&
+        request.query?.client_id === undefined
+      ) {
+        return reply.redirect('/idp');
+      }
+      return forwardToProvider(request, reply);
+    },
+  });
+
   // Also handle /idp/auth/:uid for continued authorization after login
   fastify.get('/idp/auth/:uid', forwardToProvider);
+
+  // Friendly landing — Create Account button + sign-in note.
+  // Pairs with the /idp/auth guard above so a human visitor lands here
+  // rather than on a raw OIDC error.
+  fastify.get('/idp', async (request, reply) => {
+    return reply.type('text/html').send(landingPage({ baseUri: issuer }));
+  });
 
   // Token sub-paths
   fastify.route({

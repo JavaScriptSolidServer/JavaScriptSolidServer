@@ -436,7 +436,9 @@ export function createServer(options = {}) {
     if (request.url === '/.pods' ||
         request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
+        request.url === '/idp' ||
         request.url.startsWith('/idp/') ||
+        request.url.startsWith('/idp?') ||
         request.url.startsWith('/.well-known/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
