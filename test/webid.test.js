@@ -113,7 +113,9 @@ describe('WebID Profile', () => {
     it('lws:OpenIdProvider service.serviceEndpoint mirrors oidcIssuer', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
+      assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
       const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
       assert.strictEqual(
         oidc.serviceEndpoint,
         jsonLd.oidcIssuer,
@@ -124,7 +126,9 @@ describe('WebID Profile', () => {
     it('lws:OpenIdProvider service.id is a fragment on the profile document', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
+      assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
       const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
       const docUrl = jsonLd['@id'].split('#')[0];
       assert.strictEqual(oidc.id, `${docUrl}#oidc`,
         'service entry id should be `<profile-doc>#oidc`');
