@@ -76,6 +76,16 @@ describe('quota — concurrent updates (#309)', () => {
     } finally { await cleanup(); }
   });
 
+  it('checkQuota normalizes non-numeric used to 0 on re-initialize', async () => {
+    const quotaPath = path.join(TEST_ROOT, POD, '.quota.json');
+    // Parseable but malformed — `used` is missing.
+    await fs.writeFile(quotaPath, '{"limit":0}');
+    const defaultQuota = 10 * 1024 * 1024;
+    const { quota } = await checkQuota(POD, 0, defaultQuota);
+    assert.strictEqual(quota.limit, defaultQuota);
+    assert.strictEqual(quota.used, 0, 'used must not be undefined/NaN');
+  });
+
   it('checkQuota preserves reconciled usage when re-initializing limit', async () => {
     const { size, cleanup } = await withResourceAndBrokenQuota('');
     try {

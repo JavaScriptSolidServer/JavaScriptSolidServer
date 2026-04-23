@@ -46,13 +46,14 @@ export async function loadQuota(podName) {
 export async function saveQuota(podName, quota) {
   // Atomic write: fs.writeFile truncates before writing, which lets concurrent
   // readers see an empty file. Write to a temp file and rename (POSIX-atomic).
+  // Any failure (writeFile or rename) cleans up the temp file so failed writes
+  // don't accumulate orphans.
   const finalPath = getQuotaPath(podName);
   const tmpPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
-  await fs.writeFile(tmpPath, JSON.stringify(quota, null, 2));
   try {
+    await fs.writeFile(tmpPath, JSON.stringify(quota, null, 2));
     await fs.rename(tmpPath, finalPath);
   } catch (err) {
-    // Clean up the temp file so failures don't accumulate orphans.
     await fs.unlink(tmpPath).catch(() => {});
     throw err;
   }
@@ -122,9 +123,11 @@ export async function checkQuota(podName, additionalBytes, defaultQuota) {
   let quota = await loadQuota(podName);
 
   // Initialize if no quota set. Preserve `used` so reconciled usage from a
-  // recovered corrupt/empty file is not reset to 0.
+  // recovered corrupt/empty file is not reset to 0, but guard against a
+  // parseable-but-malformed file where `used` is missing, negative, or NaN.
   if (quota.limit === 0 && defaultQuota > 0) {
-    quota = { limit: defaultQuota, used: quota.used };
+    const used = Number.isFinite(quota.used) && quota.used >= 0 ? quota.used : 0;
+    quota = { limit: defaultQuota, used };
     await saveQuota(podName, quota);
   }
 
