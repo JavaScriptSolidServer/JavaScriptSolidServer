@@ -25,7 +25,10 @@ function getQuotaPath(podName) {
  * arithmetic on it without worrying about undefined/NaN/negative values.
  */
 function sanitizeQuota(q) {
-  const toNum = (v) => (Number.isFinite(v) && v >= 0 ? v : 0);
+  const toNum = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  };
   return { limit: toNum(q?.limit), used: toNum(q?.used) };
 }
 

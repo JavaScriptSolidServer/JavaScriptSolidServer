@@ -80,16 +80,16 @@ describe('quota — concurrent updates (#309)', () => {
   it('loadQuota sanitizes malformed fields (missing/null/negative)', async () => {
     const quotaPath = path.join(TEST_ROOT, POD, '.quota.json');
     const cases = [
-      '{"limit":0}',
-      '{"limit":null,"used":null}',
-      '{"limit":-10,"used":-5}',
-      '{"limit":"100","used":"50"}'
+      ['{"limit":0}', { limit: 0, used: 0 }],
+      ['{"limit":null,"used":null}', { limit: 0, used: 0 }],
+      ['{"limit":-10,"used":-5}', { limit: 0, used: 0 }],
+      // Numeric strings are coerced — tolerates legacy/manually-edited files.
+      ['{"limit":"100","used":"50"}', { limit: 100, used: 50 }]
     ];
-    for (const body of cases) {
+    for (const [body, expected] of cases) {
       await fs.writeFile(quotaPath, body);
       const q = await loadQuota(POD);
-      assert.strictEqual(Number.isFinite(q.limit) && q.limit >= 0, true, `limit for ${body}`);
-      assert.strictEqual(Number.isFinite(q.used) && q.used >= 0, true, `used for ${body}`);
+      assert.deepStrictEqual(q, expected, `for ${body}`);
     }
   });
 
