@@ -23,13 +23,18 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashl
  * @param {string} urlPath - URL path (e.g. /alice/public/file.ttl)
  * @returns {string} Normalized resource URL
  */
-function buildResourceUrl(request, urlPath) {
+export function buildResourceUrl(request, urlPath) {
   // Use request.headers.host (includes port) instead of request.hostname (strips port)
   const host = request.headers.host || request.hostname;
   if (request.subdomainsEnabled && request.baseDomain &&
       request.hostname === request.baseDomain && !request.podName) {
     const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
-    if (pathMatch && !pathMatch[1].startsWith('.')) {
+    // Treat a path segment as a pod name only if it looks like one:
+    //   - not a dotfile (.well-known, .acl, .meta, ...)
+    //   - no dot (pod names are DNS labels; file names have extensions)
+    // This avoids rewriting /mashlib.js to https://mashlib.js.basedomain/
+    // which would fail WAC against the base domain's ACL. (#307)
+    if (pathMatch && !pathMatch[1].startsWith('.') && !pathMatch[1].includes('.')) {
       const podName = pathMatch[1];
       const remainder = pathMatch[2] || '/';
       return `${request.protocol}://${podName}.${request.baseDomain}${remainder}`;
