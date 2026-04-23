@@ -98,6 +98,37 @@ describe('WebID Profile', () => {
       // Empty string is a relative URI reference to the document itself (JSON-LD)
       assert.strictEqual(jsonLd['isPrimaryTopicOf'], '', 'isPrimaryTopicOf should be "" (self)');
     });
+
+    // LWS 1.0 Controlled Identifier alignment (#320).
+    // These assertions live alongside the WebID predicate assertions — both
+    // must continue to hold since the profile is dual-write.
+    it('should emit a CID service[] with an lws:OpenIdProvider entry', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
+      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
+    });
+
+    it('lws:OpenIdProvider service.serviceEndpoint mirrors oidcIssuer', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      assert.strictEqual(
+        oidc.serviceEndpoint,
+        jsonLd.oidcIssuer,
+        'serviceEndpoint must equal the existing oidcIssuer value'
+      );
+    });
+
+    it('lws:OpenIdProvider service.id is a fragment on the profile document', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      const docUrl = jsonLd['@id'].split('#')[0];
+      assert.strictEqual(oidc.id, `${docUrl}#oidc`,
+        'service entry id should be `<profile-doc>#oidc`');
+    });
   });
 
   describe('WebID Resolution', () => {

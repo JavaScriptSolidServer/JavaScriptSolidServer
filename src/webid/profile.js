@@ -12,6 +12,8 @@ const SOLID = 'http://www.w3.org/ns/solid/terms#';
 const SCHEMA = 'http://schema.org/';
 const LDP = 'http://www.w3.org/ns/ldp#';
 const PIM = 'http://www.w3.org/ns/pim/space#';
+const CID = 'https://www.w3.org/ns/cid/v1#';
+const LWS = 'https://www.w3.org/ns/lws#';
 
 /**
  * Generate JSON-LD data for a WebID profile
@@ -24,6 +26,9 @@ const PIM = 'http://www.w3.org/ns/pim/space#';
  */
 export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
+  // Document URL is the WebID without its fragment; service entries use
+  // fragment ids resolved against it.
+  const docUrl = webId.split('#')[0];
 
   return {
     '@context': {
@@ -32,6 +37,8 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'schema': SCHEMA,
       'pim': PIM,
       'ldp': LDP,
+      'cid': CID,
+      'lws': LWS,
       'inbox': { '@id': 'ldp:inbox', '@type': '@id' },
       'storage': { '@id': 'pim:storage', '@type': '@id' },
       'oidcIssuer': { '@id': 'solid:oidcIssuer', '@type': '@id' },
@@ -39,7 +46,9 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' },
       'isPrimaryTopicOf': { '@id': 'foaf:isPrimaryTopicOf', '@type': '@id' },
-      'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' }
+      'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' },
+      'service': { '@id': 'cid:service', '@container': '@set' },
+      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' }
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
@@ -51,7 +60,17 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
     'oidcIssuer': issuer,
     'preferencesFile': `${pod}settings/prefs.jsonld`,
     'publicTypeIndex': `${pod}settings/publicTypeIndex.jsonld`,
-    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`
+    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`,
+    // LWS 1.0 Controlled Identifier service entry — mirrors `oidcIssuer` so
+    // LWS-aware verifiers can establish trust. Additive; the legacy
+    // `solid:oidcIssuer` predicate stays for existing Solid clients.
+    'service': [
+      {
+        'id': `${docUrl}#oidc`,
+        'type': 'lws:OpenIdProvider',
+        'serviceEndpoint': issuer
+      }
+    ]
   };
 }
 
