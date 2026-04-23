@@ -423,7 +423,10 @@ function expandUri(uri, context, seen) {
   if (uri.includes(':')) {
     const [prefix, local] = uri.split(':', 2);
     const ns = context[prefix] || COMMON_PREFIXES[prefix];
-    if (ns) {
+    // Only concat when the prefix maps to a string namespace. A user-supplied
+    // context can legally define a prefix-looking key as a term-definition
+    // object; string-concatenating that would produce "[object Object]…".
+    if (typeof ns === 'string') {
       return ns + local;
     }
   }

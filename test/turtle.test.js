@@ -64,6 +64,27 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
     assert.ok(/30|"30"/.test(content), `Turtle should contain the age claim, got:\n${content}`);
   });
 
+  it('prefix-looking context key defined as an object is not string-concatenated', async () => {
+    // A user-supplied context can legally define a prefix-looking key as a
+    // term-definition object (not a namespace string). The converter must
+    // not treat it as a namespace — string-concatenating the object would
+    // produce invalid IRIs like "[object Object]foo".
+    const doc = {
+      '@context': {
+        // `bogus` is defined as a term object, not a namespace string.
+        'bogus': { '@id': 'https://example.test/ns#bogus' }
+      },
+      '@id': 'https://example.test/s',
+      // This looks like a CURIE `bogus:foo` but `bogus` is not a valid
+      // namespace — the converter should leave it alone.
+      'bogus:foo': 'hello'
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    assert.ok(typeof content === 'string');
+    assert.ok(!content.includes('[object Object]'),
+      `Turtle output must not contain object-stringification, got:\n${content}`);
+  });
+
   it('cyclical nested node reference does not hang', async () => {
     // Two nested nodes reference each other. BFS must not loop.
     const a = { '@id': 'https://example.test/a', 'ex:knows': null };
