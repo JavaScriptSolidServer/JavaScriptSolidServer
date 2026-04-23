@@ -106,7 +106,7 @@ describe('WebID Profile', () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
       assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
-      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      const oidc = jsonLd.service.find((s) => s['@type'] === 'lws:OpenIdProvider');
       assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
     });
 
@@ -114,7 +114,7 @@ describe('WebID Profile', () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
       assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
-      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      const oidc = jsonLd.service.find((s) => s['@type'] === 'lws:OpenIdProvider');
       assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
       assert.strictEqual(
         oidc.serviceEndpoint,
@@ -127,11 +127,11 @@ describe('WebID Profile', () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
       assert.ok(Array.isArray(jsonLd.service), 'profile should have a service array');
-      const oidc = jsonLd.service.find((s) => s.type === 'lws:OpenIdProvider');
+      const oidc = jsonLd.service.find((s) => s['@type'] === 'lws:OpenIdProvider');
       assert.ok(oidc, 'service[] must include an lws:OpenIdProvider entry');
       const docUrl = jsonLd['@id'].split('#')[0];
-      assert.strictEqual(oidc.id, `${docUrl}#oidc`,
-        'service entry id should be `<profile-doc>#oidc`');
+      assert.strictEqual(oidc['@id'], `${docUrl}#oidc`,
+        'service entry @id should be `<profile-doc>#oidc`');
     });
   });
 
@@ -152,5 +152,51 @@ describe('WebID Profile', () => {
 
       assertHeader(res, 'Access-Control-Allow-Origin');
     });
+  });
+});
+
+// With conneg enabled the profile is converted to Turtle on demand. The
+// CID service[] must survive that conversion — LWS verifiers that ask for
+// Turtle need to see the nested service node's type and serviceEndpoint,
+// not just a bare URI reference to it.
+describe('WebID Profile — Turtle conneg (#320)', () => {
+  before(async () => {
+    await startTestServer({ conneg: true });
+    await createTestPod('webidturtletest');
+  });
+
+  after(async () => {
+    await stopTestServer();
+  });
+
+  it('Turtle variant includes cid:service with lws:OpenIdProvider and serviceEndpoint', async () => {
+    const res = await request('/webidturtletest/profile/card.jsonld', {
+      headers: { Accept: 'text/turtle' }
+    });
+    assertStatus(res, 200);
+    assertHeaderContains(res, 'Content-Type', 'text/turtle');
+    const ttl = await res.text();
+    // Accept either prefixed (cid:service) or expanded full-URI form. The
+    // critical property is that the nested service node's data survived the
+    // JSON-LD → Turtle conversion — i.e. the type and endpoint are present
+    // as their own triples, not dropped.
+    assert.ok(
+      ttl.includes('cid:service') || ttl.includes('cid/v1#service'),
+      `Turtle should reference the CID service predicate, got:\n${ttl}`
+    );
+    assert.ok(
+      ttl.includes('OpenIdProvider'),
+      `Turtle should declare the lws:OpenIdProvider type, got:\n${ttl}`
+    );
+    assert.ok(
+      ttl.includes('cid:serviceEndpoint') || ttl.includes('cid/v1#serviceEndpoint'),
+      `Turtle should include the cid:serviceEndpoint predicate, got:\n${ttl}`
+    );
+    // The service entry URI appears as a subject (its own line), proving it
+    // was emitted as a first-class node rather than a bare URI reference.
+    assert.ok(
+      /#oidc>\s+(?:a|<[^>]*#type>)/.test(ttl),
+      `Turtle should emit the service entry as a subject, got:\n${ttl}`
+    );
   });
 });

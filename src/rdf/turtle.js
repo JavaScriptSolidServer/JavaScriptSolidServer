@@ -189,10 +189,18 @@ function jsonLdToQuads(jsonLd, baseUri) {
 
   const context = mergedContext;
 
-  for (const node of nodes) {
+  // BFS over nodes so that nested node objects (e.g. CID `service[]` entries
+  // with their own @id/@type/properties) are emitted as their own subjects
+  // rather than collapsed to a bare URI reference.
+  const visited = new Set();
+  const queue = [...nodes];
+  while (queue.length) {
+    const node = queue.shift();
     if (!node['@id']) continue;
-
     const subjectUri = resolveUri(node['@id'], baseUri);
+    if (visited.has(subjectUri)) continue;
+    visited.add(subjectUri);
+
     const subject = subjectUri.startsWith('_:')
       ? blankNode(subjectUri.slice(2))
       : namedNode(subjectUri);
@@ -226,6 +234,13 @@ function jsonLdToQuads(jsonLd, baseUri) {
         const object = valueToTerm(v, baseUri, context, isIdType);
         if (object) {
           quads.push(quad(subject, predicate, object));
+        }
+        // If v is a nested node (object with @id and at least one non-@value
+        // own property beyond @id), queue it so its triples are also emitted.
+        if (v && typeof v === 'object' && !Array.isArray(v) &&
+            v['@id'] && v['@value'] === undefined) {
+          const hasOwnClaims = Object.keys(v).some(k => k !== '@id');
+          if (hasOwnClaims) queue.push(v);
         }
       }
     }
@@ -393,14 +408,15 @@ function expandUri(uri, context) {
     }
   }
 
-  // Check if it's a term in context
+  // Check if it's a term in context. A context value can itself be a
+  // CURIE (`cid:service`) that still needs prefix expansion, so recurse.
   if (context[uri]) {
     const expansion = context[uri];
     if (typeof expansion === 'string') {
-      return expansion;
+      return expandUri(expansion, context);
     }
     if (expansion['@id']) {
-      return expansion['@id'];
+      return expandUri(expansion['@id'], context);
     }
   }
 

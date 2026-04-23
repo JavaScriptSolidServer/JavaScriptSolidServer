@@ -39,11 +39,6 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'ldp': LDP,
       'cid': CID,
       'lws': LWS,
-      // Alias `id` → @id and `type` → @type so nested nodes (like each
-      // `service[]` entry) are interpreted correctly by JSON-LD processors.
-      // CID 1.0 and DID contexts do the same.
-      'id': '@id',
-      'type': '@type',
       'inbox': { '@id': 'ldp:inbox', '@type': '@id' },
       'storage': { '@id': 'pim:storage', '@type': '@id' },
       'oidcIssuer': { '@id': 'solid:oidcIssuer', '@type': '@id' },
@@ -71,8 +66,8 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
     // `solid:oidcIssuer` predicate stays for existing Solid clients.
     'service': [
       {
-        'id': `${docUrl}#oidc`,
-        'type': 'lws:OpenIdProvider',
+        '@id': `${docUrl}#oidc`,
+        '@type': 'lws:OpenIdProvider',
         'serviceEndpoint': issuer
       }
     ]
