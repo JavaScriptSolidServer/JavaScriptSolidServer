@@ -21,6 +21,7 @@ import { dbPlugin } from './db/index.js';
 import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
+import { registerErrorHandler } from './utils/error-handler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -154,6 +155,7 @@ export function createServer(options = {}) {
   }
 
   const fastify = Fastify(fastifyOptions);
+  registerErrorHandler(fastify);
 
   // Add raw body parser for all content types
   fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
