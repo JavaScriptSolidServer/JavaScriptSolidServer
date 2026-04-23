@@ -187,6 +187,7 @@ export async function handleGet(request, reply) {
                 resourceUrl,
                 connegEnabled
               });
+              headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
               Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
               return reply.send(turtleContent);
@@ -200,6 +201,7 @@ export async function handleGet(request, reply) {
                 resourceUrl,
                 connegEnabled
               });
+              headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
               Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
               return reply.send(JSON.stringify(jsonLd, null, 2));

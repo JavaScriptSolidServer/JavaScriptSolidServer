@@ -55,6 +55,7 @@ describe('Vary / Cache-Control consistency (#315)', () => {
     assert.strictEqual(unique.size, 1,
       `expected identical Vary across variants, got: ${JSON.stringify(varys)}`);
     const vary = [...unique][0];
+    assert.ok(vary, `expected Vary header across variants, got: ${JSON.stringify(varys)}`);
     assert.match(vary, /Accept/, 'Vary must include Accept (conneg active)');
     assert.match(vary, /Authorization/, 'Vary must include Authorization (WAC)');
     assert.match(vary, /Origin/, 'Vary must include Origin (CORS)');
@@ -76,6 +77,36 @@ describe('Vary / Cache-Control consistency (#315)', () => {
       assert.match(cc, /no-cache|no-store/, `Cache-Control "${cc}" must prevent stale reuse (Accept: ${accept})`);
       // ETag is preserved so revalidation is cheap (304).
       assert.ok(res.headers.get('etag'), `expected ETag on ${accept} variant`);
+    }
+  });
+
+  it('container index.html data-island variants also carry revalidating Cache-Control', async () => {
+    // Publish an index.html with a JSON-LD data island; conneg should extract
+    // and serve it as Turtle/JSON-LD. Those variants were missing
+    // Cache-Control pre-#315.
+    const html = [
+      '<!doctype html><html><head>',
+      '<script type="application/ld+json">',
+      JSON.stringify({
+        '@context': { foaf: 'http://xmlns.com/foaf/0.1/' },
+        '@id': '#this',
+        'foaf:name': 'Island'
+      }),
+      '</script></head><body>hi</body></html>'
+    ].join('');
+    await request('/varytest/public/index.html', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/html' },
+      body: html,
+      auth: 'varytest'
+    });
+
+    for (const accept of ['text/turtle', 'application/ld+json']) {
+      const res = await request('/varytest/public/', { headers: { Accept: accept } });
+      const cc = res.headers.get('cache-control');
+      assert.ok(cc, `expected Cache-Control on ${accept} island variant, got headers: ${[...res.headers].map(([k, v]) => `${k}=${v}`).join(', ')}`);
+      assert.match(cc, /no-cache|no-store/,
+        `Cache-Control "${cc}" must prevent stale reuse (Accept: ${accept})`);
     }
   });
 });
