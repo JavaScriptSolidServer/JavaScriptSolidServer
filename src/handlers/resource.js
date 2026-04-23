@@ -22,6 +22,12 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMash
  */
 const LIVE_RELOAD_SCRIPT = `<script>(function(){var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//' +location.host+'/.notifications');ws.onopen=function(){ws.send('sub '+location.href)};ws.onmessage=function(e){if(e.data.startsWith('pub '))location.reload()};ws.onclose=function(){setTimeout(function(){location.reload()},1000)}})();</script>`;
 
+// Cache-Control for RDF data responses: let clients keep the body but force
+// revalidation via ETag on every use. This prevents stale bodies from leaking
+// across auth-state changes (WAC) and closes the mashlib render-race window
+// where a cached data variant was served on top-level navigation (#315).
+const RDF_CACHE_CONTROL = 'private, no-cache, must-revalidate';
+
 /**
  * Inject live reload script into HTML content
  */
@@ -241,7 +247,7 @@ export async function handleGet(request, reply) {
         resourceUrl,
         connegEnabled
       });
-      headers['Vary'] = 'Accept';
+      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
       headers['X-Frame-Options'] = 'DENY';
       headers['Content-Security-Policy'] = "frame-ancestors 'none'";
       headers['Cache-Control'] = 'no-store';
@@ -276,7 +282,8 @@ export async function handleGet(request, reply) {
           resourceUrl,
           connegEnabled
         });
-        headers['Vary'] = 'Accept';
+        headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+        headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
         Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
         return reply.send(turtleContent);
@@ -294,6 +301,7 @@ export async function handleGet(request, reply) {
       resourceUrl,
       connegEnabled
     });
+    headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.send(serializeJsonLd(jsonLd));
@@ -317,7 +325,7 @@ export async function handleGet(request, reply) {
       resourceUrl,
       connegEnabled
     });
-    headers['Vary'] = 'Accept';
+    headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
     headers['X-Frame-Options'] = 'DENY';
     headers['Content-Security-Policy'] = "frame-ancestors 'none'";
     // Don't cache the HTML wrapper - always negotiate fresh
@@ -400,6 +408,7 @@ export async function handleGet(request, reply) {
             connegEnabled
           });
           headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+          headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
           Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
           return reply.send(turtleContent);
@@ -430,6 +439,7 @@ export async function handleGet(request, reply) {
           connegEnabled
         });
         headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+        headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
         Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
         return reply.send(outputContent);
@@ -458,6 +468,9 @@ export async function handleGet(request, reply) {
     connegEnabled
   });
   headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
+  if (isRdfContentType(actualContentType)) {
+    headers['Cache-Control'] = RDF_CACHE_CONTROL;
+  }
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 

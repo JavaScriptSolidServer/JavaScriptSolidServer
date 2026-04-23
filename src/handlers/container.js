@@ -141,7 +141,7 @@ export async function handlePost(request, reply) {
     connegEnabled
   });
   headers['Location'] = resourceUrl;
-  headers['Vary'] = getVaryHeader(connegEnabled);
+  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
