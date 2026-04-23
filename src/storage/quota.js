@@ -47,7 +47,13 @@ export async function saveQuota(podName, quota) {
   const finalPath = getQuotaPath(podName);
   const tmpPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
   await fs.writeFile(tmpPath, JSON.stringify(quota, null, 2));
-  await fs.rename(tmpPath, finalPath);
+  try {
+    await fs.rename(tmpPath, finalPath);
+  } catch (err) {
+    // Clean up the temp file so failures don't accumulate orphans.
+    await fs.unlink(tmpPath).catch(() => {});
+    throw err;
+  }
 }
 
 /**
