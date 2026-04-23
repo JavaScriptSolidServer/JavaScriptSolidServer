@@ -189,10 +189,19 @@ export async function fromJsonLd(jsonLd, targetType, baseUri, connegEnabled = fa
 
 /**
  * Get Vary header value for content negotiation
- * Include Accept when conneg or mashlib is enabled (response varies by Accept header)
+ *
+ * Must be identical across all variants of a given URL — inconsistent Vary
+ * across variants confuses browser caches and can cause the wrong variant
+ * to be served on reload (see #315).
+ *
+ * - `Accept` — response body depends on Accept (conneg or mashlib HTML shell)
+ * - `Authorization` — response body depends on the authenticated user (WAC)
+ * - `Origin` — CORS headers echo the request's Origin
  */
 export function getVaryHeader(connegEnabled, mashlibEnabled = false) {
-  return (connegEnabled || mashlibEnabled) ? 'Accept, Origin' : 'Origin';
+  return (connegEnabled || mashlibEnabled)
+    ? 'Accept, Authorization, Origin'
+    : 'Authorization, Origin';
 }
 
 /**

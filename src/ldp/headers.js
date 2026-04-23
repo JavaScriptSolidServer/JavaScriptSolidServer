@@ -2,7 +2,7 @@
  * LDP (Linked Data Platform) header utilities
  */
 
-import { getAcceptHeaders } from '../rdf/conneg.js';
+import { getAcceptHeaders, getVaryHeader } from '../rdf/conneg.js';
 
 const LDP = 'http://www.w3.org/ns/ldp#';
 
@@ -49,7 +49,7 @@ export function getAclUrl(resourceUrl, isContainer) {
  * @param {object} options
  * @returns {object}
  */
-export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null, connegEnabled = false, updatesVia = null }) {
+export function getResponseHeaders({ isContainer = false, etag = null, contentType = null, resourceUrl = null, wacAllow = null, connegEnabled = false, mashlibEnabled = false, updatesVia = null }) {
   // Calculate ACL URL if resource URL provided
   const aclUrl = resourceUrl ? getAclUrl(resourceUrl, isContainer) : null;
 
@@ -58,7 +58,7 @@ export function getResponseHeaders({ isContainer = false, etag = null, contentTy
     'Accept-Patch': 'text/n3, application/sparql-update',
     'Accept-Ranges': isContainer ? 'none' : 'bytes',
     'Allow': 'GET, HEAD, PUT, DELETE, PATCH, OPTIONS' + (isContainer ? ', POST' : ''),
-    'Vary': connegEnabled ? 'Accept, Authorization, Origin' : 'Authorization, Origin'
+    'Vary': getVaryHeader(connegEnabled, mashlibEnabled)
   };
 
   // Only set WAC-Allow if explicitly provided (otherwise the auth hook sets it)
@@ -107,9 +107,9 @@ export function getCorsHeaders(origin) {
  * @param {object} options
  * @returns {object}
  */
-export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null, connegEnabled = false, updatesVia = null }) {
+export function getAllHeaders({ isContainer = false, etag = null, contentType = null, origin = null, resourceUrl = null, wacAllow = null, connegEnabled = false, mashlibEnabled = false, updatesVia = null }) {
   return {
-    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow, connegEnabled, updatesVia }),
+    ...getResponseHeaders({ isContainer, etag, contentType, resourceUrl, wacAllow, connegEnabled, mashlibEnabled, updatesVia }),
     ...getCorsHeaders(origin)
   };
 }
@@ -120,7 +120,7 @@ export function getAllHeaders({ isContainer = false, etag = null, contentType = 
  * @param {object} options
  * @returns {object}
  */
-export function getNotFoundHeaders({ resourceUrl = null, origin = null, connegEnabled = false }) {
+export function getNotFoundHeaders({ resourceUrl = null, origin = null, connegEnabled = false, mashlibEnabled = false }) {
   // Determine if this would be a container based on URL ending with /
   const isContainer = resourceUrl?.endsWith('/') || false;
   const aclUrl = resourceUrl ? getAclUrl(resourceUrl, isContainer) : null;
@@ -134,7 +134,7 @@ export function getNotFoundHeaders({ resourceUrl = null, origin = null, connegEn
     'Accept-Patch': 'text/n3, application/sparql-update',
     'Accept-Put': acceptHeaders['Accept-Put'] || 'application/ld+json, */*',
     'Allow': 'GET, HEAD, PUT, PATCH, OPTIONS' + (isContainer ? ', POST' : ''),
-    'Vary': connegEnabled ? 'Accept, Authorization, Origin' : 'Authorization, Origin'
+    'Vary': getVaryHeader(connegEnabled, mashlibEnabled)
   };
 
   if (isContainer && acceptHeaders['Accept-Post']) {
