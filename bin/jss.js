@@ -327,7 +327,7 @@ const inviteCmd = program
 inviteCmd
   .command('create')
   .description('Create a new invite code')
-  .option('-u, --uses <number>', 'Maximum uses (default: 1)', parseInt, 1)
+  .option('-u, --uses <number>', 'Maximum uses (default: 1)', (v) => parseInt(v, 10), 1)
   .option('-n, --note <text>', 'Optional note/description')
   .option('-r, --root <path>', 'Data directory')
   .action(async (options) => {
