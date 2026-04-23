@@ -24,10 +24,12 @@ function getQuotaPath(podName) {
 export async function loadQuota(podName) {
   try {
     const data = await fs.readFile(getQuotaPath(podName), 'utf-8');
+    // Empty/partial file can appear mid-write from a racing saveQuota on older
+    // writes; treat as uninitialized and let the next save repair it.
+    if (!data.trim()) return { limit: 0, used: 0 };
     return JSON.parse(data);
   } catch (err) {
-    if (err.code === 'ENOENT') {
-      // No quota file - return defaults (will be initialized on first write)
+    if (err.code === 'ENOENT' || err instanceof SyntaxError) {
       return { limit: 0, used: 0 };
     }
     throw err;
@@ -40,7 +42,12 @@ export async function loadQuota(podName) {
  * @param {object} quota - Quota data
  */
 export async function saveQuota(podName, quota) {
-  await fs.writeFile(getQuotaPath(podName), JSON.stringify(quota, null, 2));
+  // Atomic write: fs.writeFile truncates before writing, which lets concurrent
+  // readers see an empty file. Write to a temp file and rename (POSIX-atomic).
+  const finalPath = getQuotaPath(podName);
+  const tmpPath = `${finalPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+  await fs.writeFile(tmpPath, JSON.stringify(quota, null, 2));
+  await fs.rename(tmpPath, finalPath);
 }
 
 /**
