@@ -189,10 +189,26 @@ function jsonLdToQuads(jsonLd, baseUri) {
 
   const context = mergedContext;
 
-  for (const node of nodes) {
+  // BFS over nodes so that nested node objects (e.g. CID `service[]` entries
+  // with their own @id/@type/properties) are emitted as their own subjects
+  // rather than collapsed to a bare URI reference.
+  //
+  // Two notes on the traversal shape:
+  //  - Index-based iteration avoids O(n) array.shift() per step.
+  //  - We deliberately do NOT skip re-emission when the same @id appears
+  //    twice. Duplicate triples are harmless in RDF, and documents built
+  //    from PATCH merges or multi-doc inputs can legitimately carry
+  //    multiple objects for the same subject. The `enqueuedNested` set
+  //    (by object identity) is used only to prevent the same nested
+  //    object from being enqueued twice — i.e. cycle protection, not
+  //    emission deduplication.
+  const enqueuedNested = new WeakSet();
+  const queue = [...nodes];
+  for (let i = 0; i < queue.length; i++) {
+    const node = queue[i];
     if (!node['@id']) continue;
-
     const subjectUri = resolveUri(node['@id'], baseUri);
+
     const subject = subjectUri.startsWith('_:')
       ? blankNode(subjectUri.slice(2))
       : namedNode(subjectUri);
@@ -226,6 +242,20 @@ function jsonLdToQuads(jsonLd, baseUri) {
         const object = valueToTerm(v, baseUri, context, isIdType);
         if (object) {
           quads.push(quad(subject, predicate, object));
+        }
+        // If v is a nested node (object with @id and at least one non-@value
+        // own property beyond @id), enqueue it so its triples are also
+        // emitted. Object-identity tracking (WeakSet) prevents the same
+        // nested object from being enqueued twice, which would otherwise
+        // loop for graphs that reuse an object reference (cycles).
+        if (v && typeof v === 'object' && !Array.isArray(v) &&
+            v['@id'] && v['@value'] === undefined &&
+            !enqueuedNested.has(v)) {
+          const hasOwnClaims = Object.keys(v).some(k => k !== '@id');
+          if (hasOwnClaims) {
+            enqueuedNested.add(v);
+            queue.push(v);
+          }
         }
       }
     }
@@ -378,9 +408,14 @@ function resolveUri(uri, baseUri) {
 }
 
 /**
- * Expand prefixed URI using context
+ * Expand prefixed URI using context.
+ *
+ * The `seen` parameter guards against cycles in user-supplied contexts
+ * (e.g., `foo -> bar -> foo`). Without this a request carrying a malicious
+ * JSON-LD context could cause unbounded recursion / stack overflow on the
+ * server during conneg conversion — a remote DoS.
  */
-function expandUri(uri, context) {
+function expandUri(uri, context, seen) {
   if (uri.includes('://')) {
     return uri;
   }
@@ -388,19 +423,29 @@ function expandUri(uri, context) {
   if (uri.includes(':')) {
     const [prefix, local] = uri.split(':', 2);
     const ns = context[prefix] || COMMON_PREFIXES[prefix];
-    if (ns) {
+    // Only concat when the prefix maps to a string namespace. A user-supplied
+    // context can legally define a prefix-looking key as a term-definition
+    // object; string-concatenating that would produce "[object Object]…".
+    if (typeof ns === 'string') {
       return ns + local;
     }
   }
 
-  // Check if it's a term in context
+  // Check if it's a term in context. A context value can itself be a
+  // CURIE (`cid:service`) that still needs prefix expansion, so recurse —
+  // but only when we haven't already followed this term on the current
+  // expansion chain.
   if (context[uri]) {
+    const chain = seen || new Set();
+    if (chain.has(uri)) return uri;
+    chain.add(uri);
     const expansion = context[uri];
     if (typeof expansion === 'string') {
-      return expansion;
+      return expansion === uri ? uri : expandUri(expansion, context, chain);
     }
     if (expansion['@id']) {
-      return expansion['@id'];
+      const id = expansion['@id'];
+      return id === uri ? uri : expandUri(id, context, chain);
     }
   }
 
