@@ -8,12 +8,25 @@ import { join } from 'path';
 import { getDataRoot } from '../utils/url.js';
 
 const QUOTA_FILE = '.quota.json';
+// Temp files created by saveQuota live next to the quota file; they must be
+// excluded from disk-usage reconciliation so an orphan (e.g. from a crash
+// between writeFile and rename) doesn't inflate pod usage.
+const QUOTA_TMP_PREFIX = `${QUOTA_FILE}.tmp.`;
 
 /**
  * Get quota file path for a pod
  */
 function getQuotaPath(podName) {
   return join(getDataRoot(), podName, QUOTA_FILE);
+}
+
+/**
+ * Coerce a parsed quota object to a sane shape so all callers can do
+ * arithmetic on it without worrying about undefined/NaN/negative values.
+ */
+function sanitizeQuota(q) {
+  const toNum = (v) => (Number.isFinite(v) && v >= 0 ? v : 0);
+  return { limit: toNum(q?.limit), used: toNum(q?.used) };
 }
 
 /**
@@ -28,7 +41,7 @@ export async function loadQuota(podName) {
     // racing non-atomic save on older versions). Treat as missing and
     // reconcile against on-disk usage so we don't under-count.
     if (!data.trim()) return { limit: 0, used: await calculatePodSize(podName) };
-    return JSON.parse(data);
+    return sanitizeQuota(JSON.parse(data));
   } catch (err) {
     if (err.code === 'ENOENT') return { limit: 0, used: 0 };
     if (err instanceof SyntaxError) {
@@ -92,8 +105,9 @@ async function calculateDirSize(dirPath) {
     for (const entry of entries) {
       const fullPath = join(dirPath, entry.name);
 
-      // Skip quota file itself
+      // Skip the quota file and any orphaned temp files from saveQuota.
       if (entry.name === QUOTA_FILE) continue;
+      if (entry.name.startsWith(QUOTA_TMP_PREFIX)) continue;
 
       if (entry.isDirectory()) {
         total += await calculateDirSize(fullPath);
@@ -122,12 +136,11 @@ async function calculateDirSize(dirPath) {
 export async function checkQuota(podName, additionalBytes, defaultQuota) {
   let quota = await loadQuota(podName);
 
-  // Initialize if no quota set. Preserve `used` so reconciled usage from a
-  // recovered corrupt/empty file is not reset to 0, but guard against a
-  // parseable-but-malformed file where `used` is missing, negative, or NaN.
+  // Initialize if no quota set. loadQuota already sanitizes shape, so `used`
+  // is a finite non-negative number here — preserve it so reconciled usage
+  // from a recovered corrupt/empty file is not reset to 0.
   if (quota.limit === 0 && defaultQuota > 0) {
-    const used = Number.isFinite(quota.used) && quota.used >= 0 ? quota.used : 0;
-    quota = { limit: defaultQuota, used };
+    quota = { limit: defaultQuota, used: quota.used };
     await saveQuota(podName, quota);
   }
 

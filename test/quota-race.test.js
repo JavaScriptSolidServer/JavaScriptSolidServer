@@ -16,7 +16,8 @@ import {
   updateQuotaUsage,
   loadQuota,
   saveQuota,
-  checkQuota
+  checkQuota,
+  calculatePodSize
 } from '../src/storage/quota.js';
 
 const POD = 'testpod';
@@ -76,14 +77,36 @@ describe('quota — concurrent updates (#309)', () => {
     } finally { await cleanup(); }
   });
 
-  it('checkQuota normalizes non-numeric used to 0 on re-initialize', async () => {
+  it('loadQuota sanitizes malformed fields (missing/null/negative)', async () => {
     const quotaPath = path.join(TEST_ROOT, POD, '.quota.json');
-    // Parseable but malformed — `used` is missing.
-    await fs.writeFile(quotaPath, '{"limit":0}');
-    const defaultQuota = 10 * 1024 * 1024;
-    const { quota } = await checkQuota(POD, 0, defaultQuota);
-    assert.strictEqual(quota.limit, defaultQuota);
-    assert.strictEqual(quota.used, 0, 'used must not be undefined/NaN');
+    const cases = [
+      '{"limit":0}',
+      '{"limit":null,"used":null}',
+      '{"limit":-10,"used":-5}',
+      '{"limit":"100","used":"50"}'
+    ];
+    for (const body of cases) {
+      await fs.writeFile(quotaPath, body);
+      const q = await loadQuota(POD);
+      assert.strictEqual(Number.isFinite(q.limit) && q.limit >= 0, true, `limit for ${body}`);
+      assert.strictEqual(Number.isFinite(q.used) && q.used >= 0, true, `used for ${body}`);
+    }
+  });
+
+  it('calculatePodSize ignores orphaned quota temp files', async () => {
+    // Simulate an orphan from a crashed saveQuota (process died between
+    // writeFile and rename) — must not be counted toward pod usage.
+    const resource = path.join(TEST_ROOT, POD, 'data.txt');
+    const orphan = path.join(TEST_ROOT, POD, '.quota.json.tmp.999.1.abc');
+    await fs.writeFile(resource, 'x'.repeat(50));
+    await fs.writeFile(orphan, 'x'.repeat(9999));
+    try {
+      const size = await calculatePodSize(POD);
+      assert.strictEqual(size, 50, 'orphan temp file must not be counted');
+    } finally {
+      await fs.remove(resource);
+      await fs.remove(orphan);
+    }
   });
 
   it('checkQuota preserves reconciled usage when re-initializing limit', async () => {
