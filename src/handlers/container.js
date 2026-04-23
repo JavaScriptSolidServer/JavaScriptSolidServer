@@ -5,7 +5,7 @@ import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
-import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conneg.js';
+import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 
 /**
@@ -138,10 +138,10 @@ export async function handlePost(request, reply) {
   const headers = getAllHeaders({
     isContainer: isCreatingContainer,
     origin,
-    connegEnabled
+    connegEnabled,
+    mashlibEnabled: request.mashlibEnabled
   });
   headers['Location'] = resourceUrl;
-  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 

@@ -10,7 +10,6 @@ import {
   canAcceptInput,
   toJsonLd,
   fromJsonLd,
-  getVaryHeader,
   RDF_TYPES
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
@@ -247,9 +246,9 @@ export async function handleGet(request, reply) {
         contentType: 'text/html',
         origin,
         resourceUrl,
-        connegEnabled
+        connegEnabled,
+        mashlibEnabled: request.mashlibEnabled
       });
-      headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
       headers['X-Frame-Options'] = 'DENY';
       headers['Content-Security-Policy'] = "frame-ancestors 'none'";
       headers['Cache-Control'] = 'no-store';
@@ -282,9 +281,9 @@ export async function handleGet(request, reply) {
           contentType: 'text/turtle',
           origin,
           resourceUrl,
-          connegEnabled
+          connegEnabled,
+          mashlibEnabled: request.mashlibEnabled
         });
-        headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
         headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
         Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -301,7 +300,8 @@ export async function handleGet(request, reply) {
       contentType: 'application/ld+json',
       origin,
       resourceUrl,
-      connegEnabled
+      connegEnabled,
+      mashlibEnabled: request.mashlibEnabled
     });
     headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
@@ -325,9 +325,9 @@ export async function handleGet(request, reply) {
       contentType: 'text/html',
       origin,
       resourceUrl,
-      connegEnabled
+      connegEnabled,
+      mashlibEnabled: request.mashlibEnabled
     });
-    headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
     headers['X-Frame-Options'] = 'DENY';
     headers['Content-Security-Policy'] = "frame-ancestors 'none'";
     // Don't cache the HTML wrapper - always negotiate fresh
@@ -407,9 +407,9 @@ export async function handleGet(request, reply) {
             contentType: 'text/turtle',
             origin,
             resourceUrl,
-            connegEnabled
+            connegEnabled,
+            mashlibEnabled: request.mashlibEnabled
           });
-          headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
           headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
           Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -438,9 +438,9 @@ export async function handleGet(request, reply) {
           contentType: outputType,
           origin,
           resourceUrl,
-          connegEnabled
+          connegEnabled,
+          mashlibEnabled: request.mashlibEnabled
         });
-        headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
         headers['Cache-Control'] = RDF_CACHE_CONTROL;
 
         Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
@@ -467,9 +467,9 @@ export async function handleGet(request, reply) {
     contentType: actualContentType,
     origin,
     resourceUrl,
-    connegEnabled
+    connegEnabled,
+    mashlibEnabled: request.mashlibEnabled
   });
-  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
   if (isRdfContentType(actualContentType)) {
     headers['Cache-Control'] = RDF_CACHE_CONTROL;
   }
@@ -686,9 +686,8 @@ export async function handlePut(request, reply) {
   }
 
   const origin = request.headers.origin;
-  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl, connegEnabled });
+  const headers = getAllHeaders({ isContainer: false, origin, resourceUrl, connegEnabled, mashlibEnabled: request.mashlibEnabled });
   headers['Location'] = resourceUrl;
-  headers['Vary'] = getVaryHeader(connegEnabled, request.mashlibEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 

@@ -44,18 +44,18 @@ describe('Vary / Cache-Control consistency (#315)', () => {
       'text/turtle',                        // Turtle conversion
       'application/ld+json'                 // native JSON-LD
     ];
-    const varys = [];
+    const varyValues = [];
     for (const accept of accepts) {
       const res = await request('/varytest/public/card.jsonld', { headers: { Accept: accept } });
-      varys.push({ accept, vary: res.headers.get('vary') });
+      varyValues.push({ accept, vary: res.headers.get('vary') });
     }
     // All three variants must carry the same Vary — inconsistent Vary is
     // what confused browser caches into serving the wrong variant.
-    const unique = new Set(varys.map((v) => v.vary));
-    assert.strictEqual(unique.size, 1,
-      `expected identical Vary across variants, got: ${JSON.stringify(varys)}`);
-    const vary = [...unique][0];
-    assert.ok(vary, `expected Vary header across variants, got: ${JSON.stringify(varys)}`);
+    const uniqueVaryValues = new Set(varyValues.map((v) => v.vary));
+    assert.strictEqual(uniqueVaryValues.size, 1,
+      `expected identical Vary across variants, got: ${JSON.stringify(varyValues)}`);
+    const vary = [...uniqueVaryValues][0];
+    assert.ok(vary, `expected Vary header across variants, got: ${JSON.stringify(varyValues)}`);
     assert.match(vary, /Accept/, 'Vary must include Accept (conneg active)');
     assert.match(vary, /Authorization/, 'Vary must include Authorization (WAC)');
     assert.match(vary, /Origin/, 'Vary must include Origin (CORS)');
@@ -70,11 +70,14 @@ describe('Vary / Cache-Control consistency (#315)', () => {
   });
 
   it('RDF data variants force revalidation (no stale bodies across auth changes)', async () => {
+    // Full expected policy — pinning every directive so a regression that
+    // drops `private` or `must-revalidate` (both needed to prevent auth-state
+    // leakage and force freshness) fails the test.
+    const expected = 'private, no-cache, must-revalidate';
     for (const accept of ['text/turtle', 'application/ld+json']) {
       const res = await request('/varytest/public/card.jsonld', { headers: { Accept: accept } });
-      const cc = res.headers.get('cache-control');
-      assert.ok(cc, `expected Cache-Control on ${accept} variant`);
-      assert.match(cc, /no-cache|no-store/, `Cache-Control "${cc}" must prevent stale reuse (Accept: ${accept})`);
+      assert.strictEqual(res.headers.get('cache-control'), expected,
+        `Cache-Control mismatch on Accept: ${accept}`);
       // ETag is preserved so revalidation is cheap (304).
       assert.ok(res.headers.get('etag'), `expected ETag on ${accept} variant`);
     }
@@ -101,12 +104,11 @@ describe('Vary / Cache-Control consistency (#315)', () => {
       auth: 'varytest'
     });
 
+    const expected = 'private, no-cache, must-revalidate';
     for (const accept of ['text/turtle', 'application/ld+json']) {
       const res = await request('/varytest/public/', { headers: { Accept: accept } });
-      const cc = res.headers.get('cache-control');
-      assert.ok(cc, `expected Cache-Control on ${accept} island variant, got headers: ${[...res.headers].map(([k, v]) => `${k}=${v}`).join(', ')}`);
-      assert.match(cc, /no-cache|no-store/,
-        `Cache-Control "${cc}" must prevent stale reuse (Accept: ${accept})`);
+      assert.strictEqual(res.headers.get('cache-control'), expected,
+        `Cache-Control mismatch on island variant (Accept: ${accept})`);
     }
   });
 });
