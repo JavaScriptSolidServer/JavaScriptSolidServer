@@ -9,23 +9,25 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs-extra';
+import os from 'os';
 import path from 'path';
 import {
   initializeQuota,
   updateQuotaUsage,
   loadQuota,
-  saveQuota
+  saveQuota,
+  checkQuota
 } from '../src/storage/quota.js';
 
-const TEST_ROOT = path.resolve('./data-quota-race-test');
 const POD = 'testpod';
+let TEST_ROOT;
 let originalDataRoot;
 
 describe('quota — concurrent updates (#309)', () => {
   before(async () => {
     originalDataRoot = process.env.DATA_ROOT;
+    TEST_ROOT = await fs.mkdtemp(path.join(os.tmpdir(), 'jss-quota-'));
     process.env.DATA_ROOT = TEST_ROOT;
-    await fs.emptyDir(TEST_ROOT);
     await fs.ensureDir(path.join(TEST_ROOT, POD));
     await initializeQuota(POD, 50 * 1024 * 1024);
   });
@@ -47,18 +49,41 @@ describe('quota — concurrent updates (#309)', () => {
     assert.ok(final.used > 0);
   });
 
-  it('loadQuota tolerates an empty quota file (repair path)', async () => {
+  async function withResourceAndBrokenQuota(brokenContent) {
+    const resourcePath = path.join(TEST_ROOT, POD, 'resource.txt');
     const quotaPath = path.join(TEST_ROOT, POD, '.quota.json');
-    await fs.writeFile(quotaPath, '');
-    const q = await loadQuota(POD);
-    assert.deepStrictEqual(q, { limit: 0, used: 0 });
+    const size = 321;
+    await fs.writeFile(resourcePath, 'x'.repeat(size));
+    await fs.writeFile(quotaPath, brokenContent);
+    return { size, cleanup: () => fs.remove(resourcePath) };
+  }
+
+  it('loadQuota reconciles usage from disk when quota file is empty', async () => {
+    const { size, cleanup } = await withResourceAndBrokenQuota('');
+    try {
+      const q = await loadQuota(POD);
+      assert.strictEqual(q.limit, 0);
+      assert.strictEqual(q.used, size);
+    } finally { await cleanup(); }
   });
 
-  it('loadQuota tolerates a corrupt (partial JSON) quota file', async () => {
-    const quotaPath = path.join(TEST_ROOT, POD, '.quota.json');
-    await fs.writeFile(quotaPath, '{"limit":524');
-    const q = await loadQuota(POD);
-    assert.deepStrictEqual(q, { limit: 0, used: 0 });
+  it('loadQuota reconciles usage from disk when quota file is corrupt', async () => {
+    const { size, cleanup } = await withResourceAndBrokenQuota('{"limit":524');
+    try {
+      const q = await loadQuota(POD);
+      assert.strictEqual(q.limit, 0);
+      assert.strictEqual(q.used, size);
+    } finally { await cleanup(); }
+  });
+
+  it('checkQuota preserves reconciled usage when re-initializing limit', async () => {
+    const { size, cleanup } = await withResourceAndBrokenQuota('');
+    try {
+      const defaultQuota = 10 * 1024 * 1024;
+      const { quota } = await checkQuota(POD, 0, defaultQuota);
+      assert.strictEqual(quota.limit, defaultQuota);
+      assert.strictEqual(quota.used, size, 'reconciled usage must not be reset to 0');
+    } finally { await cleanup(); }
   });
 
   it('saveQuota is atomic — concurrent read during save never sees empty file', async () => {

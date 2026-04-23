@@ -24,13 +24,15 @@ function getQuotaPath(podName) {
 export async function loadQuota(podName) {
   try {
     const data = await fs.readFile(getQuotaPath(podName), 'utf-8');
-    // Empty/partial file can appear mid-write from a racing saveQuota on older
-    // writes; treat as uninitialized and let the next save repair it.
-    if (!data.trim()) return { limit: 0, used: 0 };
+    // Empty/partial file can appear if a write was interrupted (or from a
+    // racing non-atomic save on older versions). Treat as missing and
+    // reconcile against on-disk usage so we don't under-count.
+    if (!data.trim()) return { limit: 0, used: await calculatePodSize(podName) };
     return JSON.parse(data);
   } catch (err) {
-    if (err.code === 'ENOENT' || err instanceof SyntaxError) {
-      return { limit: 0, used: 0 };
+    if (err.code === 'ENOENT') return { limit: 0, used: 0 };
+    if (err instanceof SyntaxError) {
+      return { limit: 0, used: await calculatePodSize(podName) };
     }
     throw err;
   }
@@ -119,9 +121,11 @@ async function calculateDirSize(dirPath) {
 export async function checkQuota(podName, additionalBytes, defaultQuota) {
   let quota = await loadQuota(podName);
 
-  // Initialize if no quota set
+  // Initialize if no quota set. Preserve `used` so reconciled usage from a
+  // recovered corrupt/empty file is not reset to 0.
   if (quota.limit === 0 && defaultQuota > 0) {
-    quota = await initializeQuota(podName, defaultQuota);
+    quota = { limit: defaultQuota, used: quota.used };
+    await saveQuota(podName, quota);
   }
 
   // No quota enforcement if limit is 0
