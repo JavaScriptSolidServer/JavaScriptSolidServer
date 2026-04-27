@@ -210,6 +210,7 @@ const BOOLEAN_KEYS = new Set([
   'tunnel',
   'activitypub',
   'inviteOnly',
+  'multiuser',
   'singleUser',
   'webidTls',
   'public',

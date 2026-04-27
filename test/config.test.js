@@ -13,7 +13,7 @@ import { loadConfig } from '../src/config.js';
 
 describe('config — env var boolean coercion', () => {
   // Save/restore the env vars we touch so this test is hermetic.
-  const KEYS = ['JSS_SINGLE_USER_PASSWORD', 'JSS_IDP', 'JSS_BASE_DOMAIN'];
+  const KEYS = ['JSS_SINGLE_USER_PASSWORD', 'JSS_IDP', 'JSS_BASE_DOMAIN', 'JSS_MULTIUSER'];
   const original = {};
   before(() => { for (const k of KEYS) original[k] = process.env[k]; });
   after(() => {
@@ -52,5 +52,15 @@ describe('config — env var boolean coercion', () => {
     process.env.JSS_IDP = 'false';
     const cfg = await loadConfig({}, null);
     assert.strictEqual(cfg.idp, false);
+  });
+
+  it('coerces JSS_MULTIUSER to a boolean (regression for missed entry)', async () => {
+    process.env.JSS_MULTIUSER = 'false';
+    const cfg = await loadConfig({}, null);
+    assert.strictEqual(cfg.multiuser, false,
+      'multiuser must coerce to boolean false, not the string "false" (truthy)');
+    process.env.JSS_MULTIUSER = 'true';
+    const cfg2 = await loadConfig({}, null);
+    assert.strictEqual(cfg2.multiuser, true);
   });
 });
