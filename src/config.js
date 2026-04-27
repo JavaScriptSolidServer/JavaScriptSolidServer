@@ -355,6 +355,10 @@ export async function saveConfig(config, configFile) {
   // Remove derived/runtime values
   delete toSave.ssl;
   delete toSave.logger;
+  // Never persist secrets to a static config file. The password is
+  // expected to come from --single-user-password or
+  // JSS_SINGLE_USER_PASSWORD at runtime, not be written into .jss/config.
+  delete toSave.singleUserPassword;
 
   await fs.ensureDir(path.dirname(configFile));
   await fs.writeFile(configFile, JSON.stringify(toSave, null, 2));
@@ -371,6 +375,12 @@ export function printConfig(config) {
   console.log(`  Root:          ${path.resolve(config.root)}`);
   console.log(`  SSL:           ${config.ssl ? 'enabled' : 'disabled'}`);
   console.log(`  Multi-user:    ${config.multiuser}`);
+  if (config.singleUser) {
+    const pwSource = config.singleUserPassword
+      ? 'provided'
+      : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
+    console.log(`  Single-user:   ${config.singleUserName} (password: ${pwSource})`);
+  }
   console.log(`  Conneg:        ${config.conneg}`);
   console.log(`  Notifications: ${config.notifications}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
