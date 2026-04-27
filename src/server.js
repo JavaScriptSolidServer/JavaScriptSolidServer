@@ -613,10 +613,20 @@ export function createServer(options = {}) {
     const existing = await findByUsername(username);
     if (existing) return; // already seeded — idempotent
 
-    let password = providedPassword;
+    // Treat anything that isn't a non-empty string as "not provided" so
+    // a misconfigured env coercion or stray boolean can't reach bcrypt.
+    let password = (typeof providedPassword === 'string' && providedPassword.length > 0)
+      ? providedPassword
+      : null;
+
     if (!password) {
       if (process.stdin.isTTY && process.stdout.isTTY) {
-        password = await promptPasswordOnce(`[jss] Set initial IDP password for "${username}": `);
+        try {
+          password = await promptPasswordOnce(`[jss] Set initial IDP password for "${username}": `);
+        } catch (err) {
+          fastify.log.warn({ err }, `Password prompt failed for "${username}"`);
+          return;
+        }
       } else {
         fastify.log.warn(
           `--single-user --idp: no password provided. Set --single-user-password or ` +
@@ -627,7 +637,7 @@ export function createServer(options = {}) {
       }
     }
 
-    if (!password) {
+    if (typeof password !== 'string' || password.length === 0) {
       fastify.log.warn(`Empty password — skipping IDP account creation for "${username}".`);
       return;
     }
@@ -641,25 +651,51 @@ export function createServer(options = {}) {
   }
 
   /**
-   * Read a password from stdin without echoing it. Cross-platform without
-   * extra dependencies — overrides readline's _writeToOutput so typed
-   * characters aren't echoed back to the terminal.
+   * Read a password from stdin without echoing it. Uses the public
+   * `emitKeypressEvents` + raw-mode keypress API rather than overriding
+   * the underscored `_writeToOutput` on a `readline.Interface`, which is
+   * a private/unstable hook.
    */
   async function promptPasswordOnce(prompt) {
-    const { createInterface } = await import('node:readline');
-    return new Promise((resolve) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      rl._writeToOutput = (chunk) => {
-        if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') {
-          process.stdout.write(chunk);
+    const { emitKeypressEvents } = await import('node:readline');
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+      throw new Error('Interactive password prompt requires a TTY');
+    }
+    return new Promise((resolve, reject) => {
+      let password = '';
+      const wasRaw = stdin.isRaw === true;
+      const onKeypress = (str, key = {}) => {
+        if (key.ctrl && key.name === 'c') {
+          cleanup();
+          reject(new Error('Password prompt cancelled'));
+          return;
         }
-        // Suppress everything else so the password isn't echoed.
+        if (key.name === 'return' || key.name === 'enter') {
+          cleanup();
+          resolve(password);
+          return;
+        }
+        if (key.name === 'backspace' || key.name === 'delete') {
+          password = password.slice(0, -1);
+          return;
+        }
+        if (!key.ctrl && !key.meta && typeof str === 'string' && str.length > 0) {
+          password += str;
+        }
       };
-      process.stdout.write(prompt);
-      rl.question('', (answer) => {
-        rl.close();
-        resolve(answer);
-      });
+      const cleanup = () => {
+        stdin.removeListener('keypress', onKeypress);
+        if (!wasRaw) stdin.setRawMode(false);
+        stdout.write('\n');
+        stdin.pause();
+      };
+      emitKeypressEvents(stdin);
+      stdout.write(prompt);
+      if (!wasRaw) stdin.setRawMode(true);
+      stdin.resume();
+      stdin.on('keypress', onKeypress);
     });
   }
 

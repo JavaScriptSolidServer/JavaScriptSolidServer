@@ -75,9 +75,10 @@ export const defaults = {
   // Single-user mode (personal pod server)
   singleUser: false,
   singleUserName: 'me',
-  // Initial IDP password seeded on first single-user pod creation. If not
-  // set and --idp is enabled, the server prompts on TTY or fails clearly
-  // on non-TTY so the pod isn't unloggable.
+  // Initial IDP password seeded on first single-user pod creation. If
+  // unset and --idp is enabled, the server prompts on a TTY or logs a
+  // warning and continues startup on non-TTY (so the pod is created but
+  // is not yet loggable until a password is set).
   singleUserPassword: null,
 
   // WebID-TLS client certificate authentication
@@ -190,14 +191,51 @@ export function parseSize(str) {
 }
 
 /**
+ * Config keys whose values are genuinely boolean. Only these get the
+ * "true"/"false" string coercion below — otherwise a user-supplied
+ * password (or any other string-valued option) like "true"/"false"
+ * would silently turn into a boolean and break downstream code (e.g.
+ * bcrypt hashing).
+ */
+const BOOLEAN_KEYS = new Set([
+  'ssl',
+  'conneg',
+  'subdomains',
+  'mashlib',
+  'mashlibCdn',
+  'git',
+  'nostr',
+  'webrtc',
+  'terminal',
+  'tunnel',
+  'activitypub',
+  'inviteOnly',
+  'singleUser',
+  'webidTls',
+  'public',
+  'readOnly',
+  'liveReload',
+  'pay',
+  'mongo',
+  'idp',
+  'notifications',
+  'logger',
+  'quiet'
+]);
+
+/**
  * Parse a value from environment variable string
  */
 function parseEnvValue(value, key) {
   if (value === undefined) return undefined;
 
-  // Boolean values
-  if (value.toLowerCase() === 'true') return true;
-  if (value.toLowerCase() === 'false') return false;
+  // Boolean values — only for known boolean keys; everything else
+  // stays a string so passwords / tokens / arbitrary text aren't
+  // silently coerced to booleans.
+  if (BOOLEAN_KEYS.has(key)) {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
 
   // Numeric values for known numeric keys
   if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost' || key === 'payRate') && !isNaN(value)) {

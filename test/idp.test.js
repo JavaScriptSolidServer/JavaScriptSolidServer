@@ -719,6 +719,23 @@ describe('Identity Provider - Credentials Endpoint', () => {
 // disabled in single-user mode and there's no pre-existing account.
 // Regression for #323.
 describe('Identity Provider — single-user password seeding (#323)', () => {
+  // Save/restore DATA_ROOT and stdin.isTTY around each test so we don't
+  // leak global state into other tests in the same `node --test` run.
+  let originalDataRoot;
+  let originalIsTTY;
+  before(() => {
+    originalDataRoot = process.env.DATA_ROOT;
+    originalIsTTY = process.stdin.isTTY;
+    // Force non-TTY so the no-password test never blocks on an
+    // unanswerable prompt when the suite is run from an interactive shell.
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+  });
+  after(() => {
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
+    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
+  });
+
   it('seeds an IDP account when singleUserPassword is provided', async () => {
     const dir = './test-data-su-pw-provided';
     await fs.remove(dir);
@@ -736,9 +753,9 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
       forceCloseConnections: true,
     });
     try {
+      // createServer already sets DATA_ROOT when `root` is provided;
+      // import accounts.js after listen() so it picks up the right path.
       await server.listen({ port, host: TEST_HOST });
-      // Set DATA_ROOT for the dynamically-imported accounts module.
-      process.env.DATA_ROOT = path.resolve(dir);
       const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
       const account = await findByUsername('me');
       assert.ok(account, 'IDP account for single-user "me" should exist');
@@ -753,8 +770,8 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
   });
 
   it('skips seeding (no error) when no password and not on a TTY', async () => {
-    // In CI / `npm test`, stdin is not a TTY — the seed step should warn
-    // and skip rather than block on an unanswerable prompt.
+    // The before() hook stubs stdin.isTTY=false so the seed step warns
+    // and skips rather than blocking on an unanswerable prompt.
     const dir = './test-data-su-pw-missing';
     await fs.remove(dir);
     await fs.ensureDir(dir);
@@ -772,7 +789,6 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
     });
     try {
       await server.listen({ port, host: TEST_HOST });
-      process.env.DATA_ROOT = path.resolve(dir);
       const { findByUsername } = await import('../src/idp/accounts.js');
       const account = await findByUsername('me');
       assert.strictEqual(account, null, 'no account should be seeded without a password');
@@ -810,7 +826,6 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
       s1 = await startOnce();
       await s1.close();
       s2 = await startOnce();
-      process.env.DATA_ROOT = path.resolve(dir);
       const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
       const account = await findByUsername('me');
       assert.ok(account, 'account from first run should still exist');
