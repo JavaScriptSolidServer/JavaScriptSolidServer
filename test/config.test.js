@@ -1,7 +1,7 @@
 /**
  * Config / env-var parsing tests.
  *
- * Regression coverage for the env-coercion fix in #324: only known
+ * Regression coverage for the env-coercion fix in #323: only known
  * boolean keys may have their string values coerced to booleans.
  * Otherwise an env var like JSS_SINGLE_USER_PASSWORD="true" would silently
  * become a real boolean and break downstream code (bcrypt, etc.).

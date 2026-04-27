@@ -376,10 +376,22 @@ export function printConfig(config) {
   console.log(`  SSL:           ${config.ssl ? 'enabled' : 'disabled'}`);
   console.log(`  Multi-user:    ${config.multiuser}`);
   if (config.singleUser) {
-    const pwSource = config.singleUserPassword
-      ? 'provided'
-      : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
-    console.log(`  Single-user:   ${config.singleUserName} (password: ${pwSource})`);
+    let details = `${config.singleUserName}`;
+    // Password seeding only runs when --idp is on AND the pod isn't the
+    // root-level case ('/'). Reflect both gates in the printed line so
+    // operators don't see a misleading "missing — login disabled" when
+    // login isn't governed by an IDP password at all.
+    if (config.idp) {
+      if (config.singleUserName === '/' || !config.singleUserName) {
+        details += ' (root pod; password not seeded)';
+      } else {
+        const pwSource = config.singleUserPassword
+          ? 'provided'
+          : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
+        details += ` (password: ${pwSource})`;
+      }
+    }
+    console.log(`  Single-user:   ${details}`);
   }
   console.log(`  Conneg:        ${config.conneg}`);
   console.log(`  Notifications: ${config.notifications}`);

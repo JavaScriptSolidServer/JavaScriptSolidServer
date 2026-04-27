@@ -849,6 +849,47 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
     }
   });
 
+  it('seeds with the legacy WebID when /profile/card (no .jsonld) already exists', async () => {
+    // Older JSS versions used /profile/card without the extension. A
+    // legacy pod must keep that URL — seeding an account whose WebID
+    // points at /profile/card.jsonld#me would create a credential bound
+    // to a document the user doesn't actually have.
+    const dir = './test-data-su-pw-legacy';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    // Pre-seed a legacy-layout pod so the server treats it as already
+    // existing on startup (no fresh creation).
+    const legacyProfileDir = path.join(dir, 'me/profile');
+    await fs.ensureDir(legacyProfileDir);
+    await fs.writeFile(path.join(legacyProfileDir, 'card'), '<html></html>');
+
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'legacy-pw',
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      const { findByUsername } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'account should be seeded against the legacy pod');
+      assert.ok(
+        account.webId.endsWith('/me/profile/card#me'),
+        `legacy pod must keep /profile/card#me WebID, got ${account.webId}`
+      );
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
   it('does not seed when --idp is off', async () => {
     const dir = './test-data-su-pw-no-idp';
     await fs.remove(dir);

@@ -562,15 +562,21 @@ export function createServer(options = {}) {
       const isRootPod = !singleUserName || singleUserName === '/';
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
-      const webId = `${podUri}profile/card.jsonld#me`;
       const displayName = isRootPod ? 'me' : singleUserName;
 
       // Check if pod already exists. Accept either the new `card.jsonld`
       // or legacy extensionless `card` layout so we don't re-seed a pod
-      // that was created by an older JSS version.
-      const profileExists =
-        await storage.exists(`${podPath}profile/card.jsonld`) ||
-        await storage.exists(`${podPath}profile/card`);
+      // that was created by an older JSS version. Compute the effective
+      // WebID against whichever profile file actually resolves — a
+      // legacy pod must keep its `/profile/card#me` WebID, otherwise the
+      // seeded IDP account would point at a non-existent document.
+      const hasJsonLd = await storage.exists(`${podPath}profile/card.jsonld`);
+      const hasLegacy = !hasJsonLd && await storage.exists(`${podPath}profile/card`);
+      const profileFile = hasJsonLd ? 'profile/card.jsonld'
+                          : hasLegacy ? 'profile/card'
+                          : 'profile/card.jsonld'; // fresh pod default
+      const webId = `${podUri}${profileFile}#me`;
+      const profileExists = hasJsonLd || hasLegacy;
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
