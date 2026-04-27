@@ -721,11 +721,16 @@ describe('Identity Provider - Credentials Endpoint', () => {
 describe('Identity Provider — single-user password seeding (#323)', () => {
   // Save/restore DATA_ROOT and stdin.isTTY around each test so we don't
   // leak global state into other tests in the same `node --test` run.
+  // For isTTY we capture the *property descriptor* so we can correctly
+  // restore an inherited (prototype) accessor — Object.defineProperty
+  // would otherwise leave a shadowing own-property behind.
   let originalDataRoot;
-  let originalIsTTY;
+  let originalIsTTYDescriptor;
+  let originalIsTTYWasOwn;
   before(() => {
     originalDataRoot = process.env.DATA_ROOT;
-    originalIsTTY = process.stdin.isTTY;
+    originalIsTTYWasOwn = Object.prototype.hasOwnProperty.call(process.stdin, 'isTTY');
+    originalIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
     // Force non-TTY so the no-password test never blocks on an
     // unanswerable prompt when the suite is run from an interactive shell.
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
@@ -733,7 +738,13 @@ describe('Identity Provider — single-user password seeding (#323)', () => {
   after(() => {
     if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
     else process.env.DATA_ROOT = originalDataRoot;
-    Object.defineProperty(process.stdin, 'isTTY', { value: originalIsTTY, configurable: true });
+    if (originalIsTTYWasOwn && originalIsTTYDescriptor) {
+      Object.defineProperty(process.stdin, 'isTTY', originalIsTTYDescriptor);
+    } else {
+      // Property was inherited; remove our shadowing own-property so
+      // the prototype's accessor is visible again.
+      delete process.stdin.isTTY;
+    }
   });
 
   it('seeds an IDP account when singleUserPassword is provided', async () => {

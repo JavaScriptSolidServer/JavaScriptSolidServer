@@ -681,7 +681,12 @@ export function createServer(options = {}) {
           password = password.slice(0, -1);
           return;
         }
-        if (!key.ctrl && !key.meta && typeof str === 'string' && str.length > 0) {
+        // Only accept printable input — \P{C} excludes control codes,
+        // so escape sequences from arrow keys, function keys, etc. don't
+        // sneak invisible bytes into the password buffer.
+        if (!key.ctrl && !key.meta &&
+            typeof str === 'string' && str.length > 0 &&
+            /^\P{C}+$/u.test(str)) {
           password += str;
         }
       };
