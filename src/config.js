@@ -75,6 +75,10 @@ export const defaults = {
   // Single-user mode (personal pod server)
   singleUser: false,
   singleUserName: 'me',
+  // Initial IDP password seeded on first single-user pod creation. If not
+  // set and --idp is enabled, the server prompts on TTY or fails clearly
+  // on non-TTY so the pod isn't unloggable.
+  singleUserPassword: null,
 
   // WebID-TLS client certificate authentication
   webidTls: false,
@@ -154,6 +158,7 @@ const envMap = {
   JSS_INVITE_ONLY: 'inviteOnly',
   JSS_SINGLE_USER: 'singleUser',
   JSS_SINGLE_USER_NAME: 'singleUserName',
+  JSS_SINGLE_USER_PASSWORD: 'singleUserPassword',
   JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
   JSS_PUBLIC: 'public',

@@ -713,3 +713,138 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
   });
 });
+
+// Single-user + --idp must seed an IDP account so the operator can log in.
+// Without this, the pod is created but is unloggable: registration is
+// disabled in single-user mode and there's no pre-existing account.
+// Regression for #323.
+describe('Identity Provider — single-user password seeding (#323)', () => {
+  it('seeds an IDP account when singleUserPassword is provided', async () => {
+    const dir = './test-data-su-pw-provided';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'hunter2-test',
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      // Set DATA_ROOT for the dynamically-imported accounts module.
+      process.env.DATA_ROOT = path.resolve(dir);
+      const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'IDP account for single-user "me" should exist');
+      assert.strictEqual(account.username, 'me');
+      assert.ok(account.webId.includes('/me/profile/card.jsonld#me'));
+      const authed = await authenticate('me', 'hunter2-test');
+      assert.ok(authed, 'should authenticate with the seeded password');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('skips seeding (no error) when no password and not on a TTY', async () => {
+    // In CI / `npm test`, stdin is not a TTY — the seed step should warn
+    // and skip rather than block on an unanswerable prompt.
+    const dir = './test-data-su-pw-missing';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      // singleUserPassword intentionally omitted
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      process.env.DATA_ROOT = path.resolve(dir);
+      const { findByUsername } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.strictEqual(account, null, 'no account should be seeded without a password');
+      // Pod itself must still exist — server starts up regardless.
+      const profileExists = await fs.pathExists(path.join(dir, 'me/profile/card.jsonld'));
+      assert.ok(profileExists, 'pod should still be created');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('is idempotent — restarting does not duplicate or error', async () => {
+    const dir = './test-data-su-pw-idempotent';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const startOnce = async () => {
+      const s = createServer({
+        logger: false,
+        root: dir,
+        idp: true,
+        idpIssuer: baseUrl,
+        singleUser: true,
+        singleUserName: 'me',
+        singleUserPassword: 'idem-pw',
+        forceCloseConnections: true,
+      });
+      await s.listen({ port, host: TEST_HOST });
+      return s;
+    };
+    let s1, s2;
+    try {
+      s1 = await startOnce();
+      await s1.close();
+      s2 = await startOnce();
+      process.env.DATA_ROOT = path.resolve(dir);
+      const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'account from first run should still exist');
+      // Original password still valid (we didn't overwrite on the second run).
+      const authed = await authenticate('me', 'idem-pw');
+      assert.ok(authed);
+    } finally {
+      if (s2) await s2.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('does not seed when --idp is off', async () => {
+    const dir = './test-data-su-pw-no-idp';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: false,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'should-be-ignored',
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      // No .idp directory should exist when idp is disabled.
+      const idpDirExists = await fs.pathExists(path.join(dir, '.idp'));
+      assert.strictEqual(idpDirExists, false, 'no .idp directory when --idp off');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+});

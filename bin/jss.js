@@ -84,6 +84,7 @@ program
   .option('--no-invite-only', 'Allow open registration')
   .option('--single-user', 'Single-user mode (creates pod on startup, disables registration)')
   .option('--single-user-name <name>', 'Username for single-user mode (default: me)')
+  .option('--single-user-password <pw>', 'Initial IDP password to seed when creating the single-user pod (or set JSS_SINGLE_USER_PASSWORD)')
   .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')
   .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
@@ -164,6 +165,7 @@ program
         webidTls: config.webidTls,
         singleUser: config.singleUser,
         singleUserName: config.singleUserName,
+        singleUserPassword: config.singleUserPassword,
         public: config.public,
         readOnly: config.readOnly,
         liveReload: config.liveReload,

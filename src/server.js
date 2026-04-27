@@ -94,6 +94,7 @@ export function createServer(options = {}) {
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
   const singleUserName = options.singleUserName ?? 'me';
+  const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
   // WebID-TLS client certificate authentication is OFF by default
@@ -583,6 +584,82 @@ export function createServer(options = {}) {
         }
         fastify.log.info(`Single-user pod created at ${podUri}`);
       }
+
+      // Seed an IDP account so the operator can actually log in. Without
+      // this, single-user + --idp produces a pod but no credential, and
+      // registration is intentionally disabled in single-user mode — so
+      // the pod is unloggable until a password is set externally (#323).
+      if (idpEnabled && !isRootPod) {
+        await seedSingleUserIdpAccount({
+          fastify,
+          username: singleUserName,
+          webId,
+          podName: singleUserName,
+          providedPassword: singleUserPassword
+        });
+      }
+    });
+  }
+
+  /**
+   * Seed an IDP account for the single-user pod owner if one doesn't
+   * already exist. Password sources, in priority order:
+   *   1. `--single-user-password` / `JSS_SINGLE_USER_PASSWORD`
+   *   2. interactive prompt (TTY only)
+   *   3. error — server stays up but logs that login won't work yet
+   */
+  async function seedSingleUserIdpAccount({ fastify, username, webId, podName, providedPassword }) {
+    const { findByUsername, createAccount } = await import('./idp/accounts.js');
+    const existing = await findByUsername(username);
+    if (existing) return; // already seeded — idempotent
+
+    let password = providedPassword;
+    if (!password) {
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        password = await promptPasswordOnce(`[jss] Set initial IDP password for "${username}": `);
+      } else {
+        fastify.log.warn(
+          `--single-user --idp: no password provided. Set --single-user-password or ` +
+          `JSS_SINGLE_USER_PASSWORD before starting (or run on a TTY to be prompted). ` +
+          `Login is currently not possible for "${username}".`
+        );
+        return;
+      }
+    }
+
+    if (!password) {
+      fastify.log.warn(`Empty password — skipping IDP account creation for "${username}".`);
+      return;
+    }
+
+    try {
+      await createAccount({ username, password, webId, podName });
+      fastify.log.info(`IDP account seeded for single-user "${username}".`);
+    } catch (err) {
+      fastify.log.error({ err }, `Failed to seed IDP account for "${username}"`);
+    }
+  }
+
+  /**
+   * Read a password from stdin without echoing it. Cross-platform without
+   * extra dependencies — overrides readline's _writeToOutput so typed
+   * characters aren't echoed back to the terminal.
+   */
+  async function promptPasswordOnce(prompt) {
+    const { createInterface } = await import('node:readline');
+    return new Promise((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      rl._writeToOutput = (chunk) => {
+        if (chunk === '\n' || chunk === '\r' || chunk === '\r\n') {
+          process.stdout.write(chunk);
+        }
+        // Suppress everything else so the password isn't echoed.
+      };
+      process.stdout.write(prompt);
+      rl.question('', (answer) => {
+        rl.close();
+        resolve(answer);
+      });
     });
   }
 
