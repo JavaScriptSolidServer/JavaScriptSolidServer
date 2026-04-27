@@ -201,6 +201,9 @@ export JSS_ACTIVITYPUB=true
 export JSS_AP_USERNAME=alice
 export JSS_PUBLIC=true
 export JSS_READ_ONLY=true
+export JSS_SINGLE_USER=true
+export JSS_SINGLE_USER_NAME=me
+export JSS_SINGLE_USER_PASSWORD=choose-a-good-one  # seeds IDP account on first start
 export JSS_LIVE_RELOAD=true
 export JSS_SOLIDOS_UI=true
 export JSS_PAY=true
@@ -256,7 +259,12 @@ For personal pod servers where only one user needs access:
 
 ```bash
 # Basic single-user mode (creates pod at /me/)
+# On first run JSS will prompt for an initial password (TTY only).
 jss start --single-user --idp
+
+# Provide the initial IDP password non-interactively (systemd, containers, CI):
+jss start --single-user --idp --single-user-password 'choose-a-good-one'
+JSS_SINGLE_USER_PASSWORD='choose-a-good-one' jss start --single-user --idp
 
 # Custom username
 jss start --single-user --single-user-name alice --idp
@@ -270,9 +278,18 @@ JSS_SINGLE_USER=true jss start --idp
 
 **Features:**
 - Pod auto-created on first startup with full structure (inbox, public, private, profile)
+- IDP account auto-seeded so the operator can log in immediately
 - Registration endpoint disabled (returns 403)
-- Login still works for the single user
+- Login works for the single user via password (`POST /idp/credentials`) or any other configured method
 - Proper ACLs generated automatically
+
+**Initial password sources, in priority order:**
+1. `--single-user-password <pw>` CLI flag
+2. `JSS_SINGLE_USER_PASSWORD` env var
+3. Interactive no-echo prompt (TTY only)
+4. None — the server starts and warns; the pod is created but isn't loggable until you restart with `--single-user-password <pw>`, set `JSS_SINGLE_USER_PASSWORD`, or run on a TTY to be prompted. (`jss passwd <user>` does not work here — it returns "User not found" until an account exists.)
+
+The password is only consulted on the first start — once an account exists, subsequent restarts skip the seed step and never overwrite it. The password is never written to the saved config file (`.jss/config`).
 
 
 ## Invite-Only Registration

@@ -94,6 +94,7 @@ export function createServer(options = {}) {
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
   const singleUserName = options.singleUserName ?? 'me';
+  const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
   // WebID-TLS client certificate authentication is OFF by default
@@ -561,15 +562,21 @@ export function createServer(options = {}) {
       const isRootPod = !singleUserName || singleUserName === '/';
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
-      const webId = `${podUri}profile/card.jsonld#me`;
       const displayName = isRootPod ? 'me' : singleUserName;
 
       // Check if pod already exists. Accept either the new `card.jsonld`
       // or legacy extensionless `card` layout so we don't re-seed a pod
-      // that was created by an older JSS version.
-      const profileExists =
-        await storage.exists(`${podPath}profile/card.jsonld`) ||
-        await storage.exists(`${podPath}profile/card`);
+      // that was created by an older JSS version. Compute the effective
+      // WebID against whichever profile file actually resolves — a
+      // legacy pod must keep its `/profile/card#me` WebID, otherwise the
+      // seeded IDP account would point at a non-existent document.
+      const hasJsonLd = await storage.exists(`${podPath}profile/card.jsonld`);
+      const hasLegacy = !hasJsonLd && await storage.exists(`${podPath}profile/card`);
+      const profileFile = hasJsonLd ? 'profile/card.jsonld'
+                          : hasLegacy ? 'profile/card'
+                          : 'profile/card.jsonld'; // fresh pod default
+      const webId = `${podUri}${profileFile}#me`;
+      const profileExists = hasJsonLd || hasLegacy;
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
@@ -583,6 +590,123 @@ export function createServer(options = {}) {
         }
         fastify.log.info(`Single-user pod created at ${podUri}`);
       }
+
+      // Seed an IDP account so the operator can actually log in. Without
+      // this, single-user + --idp produces a pod but no credential, and
+      // registration is intentionally disabled in single-user mode — so
+      // the pod is unloggable until a password is set externally (#323).
+      if (idpEnabled && !isRootPod) {
+        await seedSingleUserIdpAccount({
+          fastify,
+          username: singleUserName,
+          webId,
+          podName: singleUserName,
+          providedPassword: singleUserPassword
+        });
+      }
+    });
+  }
+
+  /**
+   * Seed an IDP account for the single-user pod owner if one doesn't
+   * already exist. Password sources, in priority order:
+   *   1. `--single-user-password` / `JSS_SINGLE_USER_PASSWORD`
+   *   2. interactive prompt (TTY only)
+   *   3. error — server stays up but logs that login won't work yet
+   */
+  async function seedSingleUserIdpAccount({ fastify, username, webId, podName, providedPassword }) {
+    const { findByUsername, createAccount } = await import('./idp/accounts.js');
+    const existing = await findByUsername(username);
+    if (existing) return; // already seeded — idempotent
+
+    // Treat anything that isn't a non-empty string as "not provided" so
+    // a misconfigured env coercion or stray boolean can't reach bcrypt.
+    let password = (typeof providedPassword === 'string' && providedPassword.length > 0)
+      ? providedPassword
+      : null;
+
+    if (!password) {
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        try {
+          password = await promptPasswordOnce(`[jss] Set initial IDP password for "${username}": `);
+        } catch (err) {
+          fastify.log.warn({ err }, `Password prompt failed for "${username}"`);
+          return;
+        }
+      } else {
+        fastify.log.warn(
+          `--single-user --idp: no password provided. Set --single-user-password or ` +
+          `JSS_SINGLE_USER_PASSWORD before starting (or run on a TTY to be prompted). ` +
+          `Login is currently not possible for "${username}".`
+        );
+        return;
+      }
+    }
+
+    if (typeof password !== 'string' || password.length === 0) {
+      fastify.log.warn(`Empty password — skipping IDP account creation for "${username}".`);
+      return;
+    }
+
+    try {
+      await createAccount({ username, password, webId, podName });
+      fastify.log.info(`IDP account seeded for single-user "${username}".`);
+    } catch (err) {
+      fastify.log.error({ err }, `Failed to seed IDP account for "${username}"`);
+    }
+  }
+
+  /**
+   * Read a password from stdin without echoing it. Uses the public
+   * `emitKeypressEvents` + raw-mode keypress API rather than overriding
+   * the underscored `_writeToOutput` on a `readline.Interface`, which is
+   * a private/unstable hook.
+   */
+  async function promptPasswordOnce(prompt) {
+    const { emitKeypressEvents } = await import('node:readline');
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+      throw new Error('Interactive password prompt requires a TTY');
+    }
+    return new Promise((resolve, reject) => {
+      let password = '';
+      const wasRaw = stdin.isRaw === true;
+      const onKeypress = (str, key = {}) => {
+        if (key.ctrl && key.name === 'c') {
+          cleanup();
+          reject(new Error('Password prompt cancelled'));
+          return;
+        }
+        if (key.name === 'return' || key.name === 'enter') {
+          cleanup();
+          resolve(password);
+          return;
+        }
+        if (key.name === 'backspace' || key.name === 'delete') {
+          password = password.slice(0, -1);
+          return;
+        }
+        // Only accept printable input — \P{C} excludes control codes,
+        // so escape sequences from arrow keys, function keys, etc. don't
+        // sneak invisible bytes into the password buffer.
+        if (!key.ctrl && !key.meta &&
+            typeof str === 'string' && str.length > 0 &&
+            /^\P{C}+$/u.test(str)) {
+          password += str;
+        }
+      };
+      const cleanup = () => {
+        stdin.removeListener('keypress', onKeypress);
+        if (!wasRaw) stdin.setRawMode(false);
+        stdout.write('\n');
+        stdin.pause();
+      };
+      emitKeypressEvents(stdin);
+      stdout.write(prompt);
+      if (!wasRaw) stdin.setRawMode(true);
+      stdin.resume();
+      stdin.on('keypress', onKeypress);
     });
   }
 

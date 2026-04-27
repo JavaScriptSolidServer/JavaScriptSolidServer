@@ -713,3 +713,205 @@ describe('Identity Provider - Credentials Endpoint', () => {
     });
   });
 });
+
+// Single-user + --idp must seed an IDP account so the operator can log in.
+// Without this, the pod is created but is unloggable: registration is
+// disabled in single-user mode and there's no pre-existing account.
+// Regression for #323.
+describe('Identity Provider — single-user password seeding (#323)', () => {
+  // Save/restore DATA_ROOT and stdin.isTTY around this suite so we don't
+  // leak global state into other tests in the same `node --test` run.
+  // For isTTY we capture the *property descriptor* so we can correctly
+  // restore an inherited (prototype) accessor — Object.defineProperty
+  // would otherwise leave a shadowing own-property behind.
+  let originalDataRoot;
+  let originalIsTTYDescriptor;
+  let originalIsTTYWasOwn;
+  before(() => {
+    originalDataRoot = process.env.DATA_ROOT;
+    originalIsTTYWasOwn = Object.prototype.hasOwnProperty.call(process.stdin, 'isTTY');
+    originalIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
+    // Force non-TTY so the no-password test never blocks on an
+    // unanswerable prompt when the suite is run from an interactive shell.
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
+  });
+  after(() => {
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
+    if (originalIsTTYWasOwn && originalIsTTYDescriptor) {
+      Object.defineProperty(process.stdin, 'isTTY', originalIsTTYDescriptor);
+    } else {
+      // Property was inherited; remove our shadowing own-property so
+      // the prototype's accessor is visible again.
+      delete process.stdin.isTTY;
+    }
+  });
+
+  it('seeds an IDP account when singleUserPassword is provided', async () => {
+    const dir = './test-data-su-pw-provided';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'hunter2-test',
+      forceCloseConnections: true,
+    });
+    try {
+      // createServer already sets DATA_ROOT when `root` is provided;
+      // import accounts.js after listen() so it picks up the right path.
+      await server.listen({ port, host: TEST_HOST });
+      const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'IDP account for single-user "me" should exist');
+      assert.strictEqual(account.username, 'me');
+      assert.ok(account.webId.includes('/me/profile/card.jsonld#me'));
+      const authed = await authenticate('me', 'hunter2-test');
+      assert.ok(authed, 'should authenticate with the seeded password');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('skips seeding (no error) when no password and not on a TTY', async () => {
+    // The before() hook stubs stdin.isTTY=false so the seed step warns
+    // and skips rather than blocking on an unanswerable prompt.
+    const dir = './test-data-su-pw-missing';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      // singleUserPassword intentionally omitted
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      const { findByUsername } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.strictEqual(account, null, 'no account should be seeded without a password');
+      // Pod itself must still exist — server starts up regardless.
+      const profileExists = await fs.pathExists(path.join(dir, 'me/profile/card.jsonld'));
+      assert.ok(profileExists, 'pod should still be created');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('is idempotent — restarting does not duplicate or error', async () => {
+    const dir = './test-data-su-pw-idempotent';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const startOnce = async () => {
+      const s = createServer({
+        logger: false,
+        root: dir,
+        idp: true,
+        idpIssuer: baseUrl,
+        singleUser: true,
+        singleUserName: 'me',
+        singleUserPassword: 'idem-pw',
+        forceCloseConnections: true,
+      });
+      await s.listen({ port, host: TEST_HOST });
+      return s;
+    };
+    let s1, s2;
+    try {
+      s1 = await startOnce();
+      await s1.close();
+      s2 = await startOnce();
+      const { findByUsername, authenticate } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'account from first run should still exist');
+      // Original password still valid (we didn't overwrite on the second run).
+      const authed = await authenticate('me', 'idem-pw');
+      assert.ok(authed);
+    } finally {
+      if (s2) await s2.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('seeds with the legacy WebID when /profile/card (no .jsonld) already exists', async () => {
+    // Older JSS versions used /profile/card without the extension. A
+    // legacy pod must keep that URL — seeding an account whose WebID
+    // points at /profile/card.jsonld#me would create a credential bound
+    // to a document the user doesn't actually have.
+    const dir = './test-data-su-pw-legacy';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    // Pre-seed a legacy-layout pod so the server treats it as already
+    // existing on startup (no fresh creation).
+    const legacyProfileDir = path.join(dir, 'me/profile');
+    await fs.ensureDir(legacyProfileDir);
+    await fs.writeFile(path.join(legacyProfileDir, 'card'), '<html></html>');
+
+    const port = await getAvailablePort();
+    const baseUrl = `http://${TEST_HOST}:${port}`;
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'legacy-pw',
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      const { findByUsername } = await import('../src/idp/accounts.js');
+      const account = await findByUsername('me');
+      assert.ok(account, 'account should be seeded against the legacy pod');
+      assert.ok(
+        account.webId.endsWith('/me/profile/card#me'),
+        `legacy pod must keep /profile/card#me WebID, got ${account.webId}`
+      );
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+
+  it('does not seed when --idp is off', async () => {
+    const dir = './test-data-su-pw-no-idp';
+    await fs.remove(dir);
+    await fs.ensureDir(dir);
+    const port = await getAvailablePort();
+    const server = createServer({
+      logger: false,
+      root: dir,
+      idp: false,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'should-be-ignored',
+      forceCloseConnections: true,
+    });
+    try {
+      await server.listen({ port, host: TEST_HOST });
+      // No .idp directory should exist when idp is disabled.
+      const idpDirExists = await fs.pathExists(path.join(dir, '.idp'));
+      assert.strictEqual(idpDirExists, false, 'no .idp directory when --idp off');
+    } finally {
+      await server.close();
+      await fs.remove(dir);
+    }
+  });
+});
