@@ -719,7 +719,7 @@ describe('Identity Provider - Credentials Endpoint', () => {
 // disabled in single-user mode and there's no pre-existing account.
 // Regression for #323.
 describe('Identity Provider — single-user password seeding (#323)', () => {
-  // Save/restore DATA_ROOT and stdin.isTTY around each test so we don't
+  // Save/restore DATA_ROOT and stdin.isTTY around this suite so we don't
   // leak global state into other tests in the same `node --test` run.
   // For isTTY we capture the *property descriptor* so we can correctly
   // restore an inherited (prototype) accessor — Object.defineProperty

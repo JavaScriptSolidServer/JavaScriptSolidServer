@@ -287,7 +287,7 @@ JSS_SINGLE_USER=true jss start --idp
 1. `--single-user-password <pw>` CLI flag
 2. `JSS_SINGLE_USER_PASSWORD` env var
 3. Interactive no-echo prompt (TTY only)
-4. None — server starts and warns; the pod is created but isn't loggable until a password is set later via `jss passwd <user>`
+4. None — the server starts and warns; the pod is created but isn't loggable until you restart with `--single-user-password <pw>`, set `JSS_SINGLE_USER_PASSWORD`, or run on a TTY to be prompted. (`jss passwd <user>` does not work here — it returns "User not found" until an account exists.)
 
 The password is only consulted on the first start — once an account exists, subsequent restarts skip the seed step and never overwrite it. The password is never written to the saved config file (`.jss/config`).
 
