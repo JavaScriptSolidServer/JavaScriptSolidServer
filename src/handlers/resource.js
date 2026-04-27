@@ -149,17 +149,18 @@ export async function handleGet(request, reply) {
       const content = await storage.read(indexPath);
       const indexStats = await storage.stat(indexPath);
 
-      // Check if RDF format requested via content negotiation
+      // Pick the negotiated RDF type using q-aware Accept parsing. The
+      // naive `acceptHeader.includes('text/turtle')` we used to do here
+      // ignored q-weights — `Accept: application/ld+json, text/turtle;q=0.1`
+      // would still pick Turtle even though JSON-LD was preferred (#325).
       const acceptHeader = request.headers.accept || '';
-      const wantsTurtle = connegEnabled && (
-        acceptHeader.includes('text/turtle') ||
-        acceptHeader.includes('text/n3') ||
-        acceptHeader.includes('application/n-triples')
-      );
-      const wantsJsonLd = connegEnabled && (
-        acceptHeader.includes('application/ld+json') ||
-        acceptHeader.includes('application/json')
-      );
+      const negotiated = connegEnabled
+        ? selectContentType(acceptHeader, true)
+        : null;
+      const wantsTurtle = negotiated === RDF_TYPES.TURTLE
+        || negotiated === RDF_TYPES.N3
+        || negotiated === 'application/n-triples';
+      const wantsJsonLd = negotiated === RDF_TYPES.JSON_LD;
 
       if (wantsTurtle || wantsJsonLd) {
         // Extract JSON-LD from HTML data island
@@ -257,13 +258,14 @@ export async function handleGet(request, reply) {
       return reply.type('text/html').send(html);
     }
 
-    // Check if Turtle/N3 format is requested via content negotiation
+    // Pick the negotiated RDF type using q-aware Accept parsing (#325).
     const acceptHeader = request.headers.accept || '';
-    const wantsTurtle = connegEnabled && (
-      acceptHeader.includes('text/turtle') ||
-      acceptHeader.includes('text/n3') ||
-      acceptHeader.includes('application/n-triples')
-    );
+    const negotiated = connegEnabled
+      ? selectContentType(acceptHeader, true)
+      : null;
+    const wantsTurtle = negotiated === RDF_TYPES.TURTLE
+      || negotiated === RDF_TYPES.N3
+      || negotiated === 'application/n-triples';
 
     if (wantsTurtle) {
       // Convert container JSON-LD to Turtle
@@ -383,11 +385,14 @@ export async function handleGet(request, reply) {
   if (connegEnabled) {
     const contentStr = content.toString();
     const acceptHeader = request.headers.accept || '';
-    // Serve Turtle if: URL ends with .ttl OR Accept header requests it
-    const wantsTurtle = urlPath.endsWith('.ttl') ||
-                        acceptHeader.includes('text/turtle') ||
-                        acceptHeader.includes('text/n3') ||
-                        acceptHeader.includes('application/n-triples');
+    // Serve Turtle if: URL ends with .ttl OR Accept's q-weighted top
+    // RDF type is Turtle/N3 (#325 — naive substring matching ignored
+    // q-weights and would pick Turtle whenever it appeared in Accept).
+    const negotiated = selectContentType(acceptHeader, true);
+    const wantsTurtle = urlPath.endsWith('.ttl')
+      || negotiated === RDF_TYPES.TURTLE
+      || negotiated === RDF_TYPES.N3
+      || negotiated === 'application/n-triples';
 
     // Check if this is HTML with JSON-LD data island
     const isHtmlWithDataIsland = contentStr.trimStart().startsWith('<!DOCTYPE') ||
@@ -505,24 +510,31 @@ export async function handleHead(request, reply) {
   let contentType;
 
   if (stats.isDirectory) {
-    // For directories with index.html, determine content type based on Accept header
     const indexPath = storagePath.endsWith('/') ? `${storagePath}index.html` : `${storagePath}/index.html`;
     const indexExists = await storage.exists(indexPath);
+    const acceptHeader = request.headers.accept || '';
 
-    if (indexExists && connegEnabled) {
-      const acceptHeader = request.headers.accept || '';
-      const wantsTurtle = acceptHeader.includes('text/turtle') ||
-                          acceptHeader.includes('text/n3') ||
-                          acceptHeader.includes('application/n-triples');
-      const wantsJsonLd = acceptHeader.includes('application/ld+json') ||
-                          acceptHeader.includes('application/json');
+    if (connegEnabled) {
+      // HEAD must mirror what GET would emit; otherwise client caches and
+      // RDF-aware tooling key off a content-type that doesn't match the
+      // body they'll see on the next GET (#325). Use q-aware Accept
+      // parsing for both the index.html and listing branches.
+      const negotiated = selectContentType(acceptHeader, true);
+      const wantsTurtle = negotiated === RDF_TYPES.TURTLE
+        || negotiated === RDF_TYPES.N3
+        || negotiated === 'application/n-triples';
+      const wantsJsonLd = negotiated === RDF_TYPES.JSON_LD;
 
       if (wantsTurtle) {
         contentType = 'text/turtle';
       } else if (wantsJsonLd) {
-        contentType = 'application/ld+json';
+        // For an index.html container, only override to JSON-LD if the
+        // Accept header explicitly asked for JSON; otherwise fall back
+        // to text/html so HEAD matches the index.html that GET serves.
+        const explicitJson = /\b(application\/ld\+json|application\/json)\b/i.test(acceptHeader);
+        contentType = (indexExists && !explicitJson) ? 'text/html' : 'application/ld+json';
       } else {
-        contentType = 'text/html';
+        contentType = indexExists ? 'text/html' : 'application/ld+json';
       }
     } else if (indexExists) {
       contentType = 'text/html';
