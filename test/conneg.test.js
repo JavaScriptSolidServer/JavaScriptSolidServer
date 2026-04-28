@@ -12,16 +12,19 @@ import {
   stopTestServer,
   request,
   createTestPod,
+  getBaseUrl,
   assertStatus,
   assertHeader,
   assertHeaderContains
 } from './helpers.js';
 
+let connegPod;
+
 describe('Content Negotiation (conneg enabled)', () => {
   before(async () => {
     // Start server with conneg ENABLED
     await startTestServer({ conneg: true });
-    await createTestPod('connegtest');
+    connegPod = await createTestPod('connegtest');
   });
 
   after(async () => {
@@ -192,6 +195,108 @@ describe('Content Negotiation (conneg enabled)', () => {
       const acceptPost = res.headers.get('Accept-Post');
       assert.ok(acceptPost && acceptPost.includes('text/turtle'),
         'Accept-Post should include text/turtle');
+    });
+  });
+
+  describe('ACL conneg (#327 regression)', () => {
+    before(async () => {
+      const baseUrl = getBaseUrl();
+      const acl = {
+        '@context': {
+          'acl': 'http://www.w3.org/ns/auth/acl#',
+          'foaf': 'http://xmlns.com/foaf/0.1/'
+        },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': {
+              '@id': connegPod.webId
+            },
+            'acl:accessTo': {
+              '@id': `${baseUrl}/connegtest/`
+            },
+            'acl:mode': [
+              {
+                '@id': 'acl:Read'
+              },
+              {
+                '@id': 'acl:Write'
+              },
+              {
+                '@id': 'acl:Control'
+              }
+            ],
+            'acl:default': {
+              '@id': `${baseUrl}/connegtest/`
+            }
+          },
+          {
+            '@id': '#public',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': {
+              '@id': 'foaf:Agent'
+            },
+            'acl:accessTo': {
+              '@id': `${baseUrl}/connegtest/`
+            },
+            'acl:mode': [
+              {
+                '@id': 'acl:Read'
+              }
+            ]
+          }
+        ]
+      };
+
+      const putRes = await request('/connegtest/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'connegtest'
+      });
+
+      assert.ok(putRes.status < 300, `PUT .acl should succeed, got ${putRes.status}`);
+    });
+
+    it('should return Turtle for .acl files with Accept: text/turtle', async () => {
+      const res = await request('/connegtest/.acl', {
+        headers: { 'Accept': 'text/turtle' },
+        auth: 'connegtest'
+      });
+
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'text/turtle');
+
+      const turtle = await res.text();
+
+      assert.ok(turtle.includes('acl:'), 'Should have acl: prefix');
+      assert.ok(turtle.includes('Authorization'), 'Should have Authorization nodes');
+      assert.ok(turtle.includes('accessTo') || turtle.includes('acl:accessTo'),
+        'Should have acl:accessTo predicate');
+      assert.ok(turtle.includes('mode') || turtle.includes('acl:mode'),
+        'Should have acl:mode predicate');
+      assert.ok(turtle.includes('foaf:Agent') || turtle.includes('http://xmlns.com/foaf/0.1/Agent'),
+        'Should preserve foaf:Agent CURIE/object @id values');
+    });
+
+    it('should return JSON-LD for .acl with Accept: application/ld+json', async () => {
+      const res = await request('/connegtest/.acl', {
+        headers: { 'Accept': 'application/ld+json' },
+        auth: 'connegtest'
+      });
+
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'application/ld+json');
+
+      const data = await res.json();
+      assert.ok(data['@graph'], 'ACL should have @graph');
+      assert.ok(Array.isArray(data['@graph']), '@graph should be array');
+      assert.ok(data['@graph'].length > 0, '@graph should have authorization nodes');
+      assert.ok(data['@graph'].some(node => 
+        node['@type']?.includes('Authorization') || 
+        node['@type'] === 'acl:Authorization'
+      ), 'Should have Authorization nodes');
     });
   });
 });

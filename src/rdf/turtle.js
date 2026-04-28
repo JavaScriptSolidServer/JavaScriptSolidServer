@@ -181,8 +181,13 @@ function jsonLdToQuads(jsonLd, baseUri) {
     if (doc['@context']) {
       mergedContext = { ...mergedContext, ...doc['@context'] };
     }
-    // Each document with @id is a node (no @graph needed)
-    if (doc['@id']) {
+    if (doc['@graph']) {
+      // JSON-LD @graph container (e.g. ACL files produced by serializeAcl)
+      // The @context is already merged above so prefix expansion will work.
+      for (const node of doc['@graph']) {
+        if (node['@id']) nodes.push(node);
+      }
+    } else if (doc['@id']) {
       nodes.push(doc);
     }
   }
@@ -301,7 +306,7 @@ function valueToTerm(value, baseUri, context, isIdType = false) {
   if (typeof value === 'string') {
     // If context says this should be a URI, treat it as a named node
     if (isIdType) {
-      const uri = resolveUri(value, baseUri);
+      const uri = resolveUri(expandUri(value, context), baseUri);
       return namedNode(uri);
     }
     return literal(value);
@@ -318,9 +323,10 @@ function valueToTerm(value, baseUri, context, isIdType = false) {
 
   // Object values
   if (typeof value === 'object') {
-    // @id reference
+    // @id reference — expand CURIEs (e.g. "acl:Read") before resolving
     if (value['@id']) {
-      const uri = resolveUri(value['@id'], baseUri);
+      const expanded = expandUri(value['@id'], context);
+      const uri = resolveUri(expanded, baseUri);
       return uri.startsWith('_:')
         ? blankNode(uri.slice(2))
         : namedNode(uri);
