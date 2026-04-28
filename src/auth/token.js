@@ -11,43 +11,26 @@ import crypto from 'crypto';
 import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
 import { verifyNostrAuth, hasNostrAuth } from './nostr.js';
 import { webIdTlsAuth, hasClientCertificate } from './webid-tls.js';
+import { resolveTokenSecret } from './token-secret.js';
 
-// Secret for signing tokens
-// SECURITY: In production, TOKEN_SECRET must be set via environment variable
-const getSecret = () => {
-  if (process.env.TOKEN_SECRET) {
-    return process.env.TOKEN_SECRET;
-  }
-
-  // In production (NODE_ENV=production), require explicit secret
-  if (process.env.NODE_ENV === 'production') {
-    console.error('SECURITY ERROR: TOKEN_SECRET environment variable must be set in production');
-    console.error('Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-    process.exit(1);
-  }
-
-  // In development, generate a random secret per process (tokens won't survive restarts)
-  const devSecret = crypto.randomBytes(32).toString('hex');
-  console.warn('WARNING: No TOKEN_SECRET set. Using random secret (tokens will not survive restarts).');
-  console.warn('Set TOKEN_SECRET environment variable for persistent tokens.');
-  return devSecret;
-};
-
-// Initialize secret once at module load
-const SECRET = getSecret();
+// Initialize secret once at module load. See token-secret.js for the
+// resolution order (env → ~/.jss/token.secret → exit-or-ephemeral).
+const SECRET = resolveTokenSecret();
 
 /**
  * Create a simple token for a WebID
  * @param {string} webId - The WebID to create token for
- * @param {number} expiresIn - Expiration time in seconds (default 1 hour)
+ * @param {number} [expiresIn] - Expiration time in seconds (default: no expiry)
  * @returns {string} Token string
  */
-export function createToken(webId, expiresIn = 3600) {
+export function createToken(webId, expiresIn) {
   const payload = {
     webId,
     iat: Math.floor(Date.now() / 1000),
-    exp: Math.floor(Date.now() / 1000) + expiresIn
   };
+  if (expiresIn !== undefined && expiresIn > 0) {
+    payload.exp = Math.floor(Date.now() / 1000) + expiresIn;
+  }
 
   const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
   const signature = crypto
@@ -65,7 +48,7 @@ export function createToken(webId, expiresIn = 3600) {
  * JWT tokens (3-part) require async verification via verifyTokenAsync().
  *
  * @param {string} token - The token to verify
- * @returns {{webId: string, iat: number, exp: number} | null} Decoded payload or null
+ * @returns {{webId: string, iat: number, exp?: number} | null} Decoded payload or null
  */
 export function verifyToken(token) {
   if (!token || typeof token !== 'string') {

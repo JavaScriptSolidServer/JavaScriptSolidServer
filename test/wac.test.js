@@ -335,3 +335,148 @@ describe('WAC Integration', () => {
     });
   });
 });
+
+describe('WAC Conditions', () => {
+  describe('parseAcl with conditions', () => {
+    it('should parse a PaymentCondition', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#paid',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+          'acl:accessTo': { '@id': 'https://alice.example/premium/article.jsonld' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': {
+            '@type': 'PaymentCondition',
+            'amount': '1000',
+            'currency': 'sats'
+          }
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/premium/.acl');
+
+      assert.strictEqual(auths.length, 1);
+      assert.strictEqual(auths[0].conditions.length, 1);
+      assert.strictEqual(auths[0].conditions[0].type, 'PaymentCondition');
+      assert.strictEqual(auths[0].conditions[0].amount, '1000');
+      assert.strictEqual(auths[0].conditions[0].currency, 'sats');
+    });
+
+    it('should parse multiple conditions', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#restricted',
+          '@type': 'acl:Authorization',
+          'acl:agent': { '@id': 'https://bob.example/#me' },
+          'acl:accessTo': { '@id': 'https://alice.example/resource' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': [
+            { '@type': 'PaymentCondition', 'amount': '500', 'currency': 'sats' },
+            { '@type': 'ClientCondition', 'client': 'https://trusted.app/pane.js' }
+          ]
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+
+      assert.strictEqual(auths[0].conditions.length, 2);
+      assert.strictEqual(auths[0].conditions[0].type, 'PaymentCondition');
+      assert.strictEqual(auths[0].conditions[1].type, 'ClientCondition');
+    });
+
+    it('should parse authorization without conditions', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#public',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'http://xmlns.com/foaf/0.1/Agent' },
+          'acl:accessTo': { '@id': 'https://alice.example/public/' },
+          'acl:mode': [{ '@id': 'acl:Read' }]
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+
+      assert.strictEqual(auths[0].conditions.length, 0);
+    });
+  });
+
+  describe('fail-closed conditions', () => {
+    it('should parse unsupported condition types', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#restricted',
+          '@type': 'acl:Authorization',
+          'acl:agent': { '@id': 'https://bob.example/#me' },
+          'acl:accessTo': { '@id': 'https://alice.example/resource' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': {
+            '@type': 'UnknownFutureCondition',
+            'foo': 'bar'
+          }
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/.acl');
+
+      assert.strictEqual(auths[0].conditions.length, 1);
+      assert.strictEqual(auths[0].conditions[0].type, 'UnknownFutureCondition');
+    });
+
+    it('should parse zero-cost PaymentCondition', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#gate',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+          'acl:accessTo': { '@id': 'https://alice.example/members/' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': {
+            '@type': 'PaymentCondition',
+            'amount': '0',
+            'currency': 'sats'
+          }
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/members/.acl');
+      const condition = auths[0].conditions[0];
+
+      assert.strictEqual(condition.type, 'PaymentCondition');
+      assert.strictEqual(condition.amount, '0');
+    });
+
+    it('should parse PaymentCondition with all fields', async () => {
+      const acl = {
+        '@context': { 'acl': 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [{
+          '@id': '#paid',
+          '@type': 'acl:Authorization',
+          'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+          'acl:accessTo': { '@id': 'https://alice.example/premium/article.jsonld' },
+          'acl:mode': [{ '@id': 'acl:Read' }],
+          'acl:condition': {
+            '@type': 'PaymentCondition',
+            'amount': '1000',
+            'currency': 'sats',
+            'protocol': 'lightning'
+          }
+        }]
+      };
+
+      const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/premium/.acl');
+      const condition = auths[0].conditions[0];
+
+      assert.strictEqual(condition.type, 'PaymentCondition');
+      assert.strictEqual(condition.amount, '1000');
+      assert.strictEqual(condition.currency, 'sats');
+      assert.strictEqual(condition.protocol, 'lightning');
+    });
+  });
+});

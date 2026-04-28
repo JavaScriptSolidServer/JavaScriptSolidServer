@@ -59,8 +59,8 @@ export async function dbPlugin(fastify, options) {
     if (podName) {
       // Build expected WebID for both path and subdomain modes
       const expectedWebId = request.subdomainsEnabled && request.baseDomain
-        ? `${request.protocol}://${podName}.${request.baseDomain}/profile/card#me`
-        : `${request.protocol}://${request.hostname}/${podName}/profile/card#me`;
+        ? `${request.protocol}://${podName}.${request.baseDomain}/profile/card.jsonld#me`
+        : `${request.protocol}://${request.hostname}/${podName}/profile/card.jsonld#me`;
       if (webId !== expectedWebId) {
         return reply.code(403).send({ error: 'Forbidden', message: 'You can only write to your own /db/ space' });
       }

@@ -173,7 +173,7 @@ describe('Authentication', () => {
           {
             '@id': '#owner',
             '@type': 'acl:Authorization',
-            'acl:agent': { '@id': `${baseUrl}/authuser1/profile/card#me` },
+            'acl:agent': { '@id': `${baseUrl}/authuser1/profile/card.jsonld#me` },
             'acl:accessTo': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
             'acl:default': { '@id': `${baseUrl}/authuser1/authenticated-only/` },
             'acl:mode': [

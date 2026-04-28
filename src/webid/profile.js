@@ -1,7 +1,10 @@
 /**
  * WebID Profile generation
- * Creates profile documents following Solid conventions
- * Profile is HTML with embedded JSON-LD structured data
+ *
+ * Creates profile documents following Solid conventions. Default profile
+ * shape is now plain JSON-LD at `profile/card.jsonld` — operators who
+ * want a human-readable HTML shell can serve their own `index.html` with
+ * an embedded `<script type="application/ld+json">` data island.
  */
 
 const FOAF = 'http://xmlns.com/foaf/0.1/';
@@ -9,6 +12,8 @@ const SOLID = 'http://www.w3.org/ns/solid/terms#';
 const SCHEMA = 'http://schema.org/';
 const LDP = 'http://www.w3.org/ns/ldp#';
 const PIM = 'http://www.w3.org/ns/pim/space#';
+const CID = 'https://www.w3.org/ns/cid/v1#';
+const LWS = 'https://www.w3.org/ns/lws#';
 
 /**
  * Generate JSON-LD data for a WebID profile
@@ -21,7 +26,9 @@ const PIM = 'http://www.w3.org/ns/pim/space#';
  */
 export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
-  const profileDoc = webId.split('#')[0];
+  // Document URL is the WebID without its fragment; service entries use
+  // fragment ids resolved against it.
+  const docUrl = webId.split('#')[0];
 
   return {
     '@context': {
@@ -30,110 +37,64 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'schema': SCHEMA,
       'pim': PIM,
       'ldp': LDP,
+      'cid': CID,
+      'lws': LWS,
       'inbox': { '@id': 'ldp:inbox', '@type': '@id' },
       'storage': { '@id': 'pim:storage', '@type': '@id' },
       'oidcIssuer': { '@id': 'solid:oidcIssuer', '@type': '@id' },
       'preferencesFile': { '@id': 'pim:preferencesFile', '@type': '@id' },
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' },
-      'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' }
+      'isPrimaryTopicOf': { '@id': 'foaf:isPrimaryTopicOf', '@type': '@id' },
+      'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' },
+      'service': { '@id': 'cid:service', '@container': '@set' },
+      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' }
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
     'foaf:name': name,
-    'mainEntityOfPage': profileDoc,
+    'isPrimaryTopicOf': '',
+    'mainEntityOfPage': '',
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,
-    'preferencesFile': `${pod}Settings/Preferences.ttl`,
-    'publicTypeIndex': `${pod}Settings/publicTypeIndex.ttl`,
-    'privateTypeIndex': `${pod}Settings/privateTypeIndex.ttl`
+    'preferencesFile': `${pod}settings/prefs.jsonld`,
+    'publicTypeIndex': `${pod}settings/publicTypeIndex.jsonld`,
+    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`,
+    // LWS 1.0 Controlled Identifier service entry — mirrors `oidcIssuer` so
+    // LWS-aware verifiers can establish trust. Additive; the legacy
+    // `solid:oidcIssuer` predicate stays for existing Solid clients.
+    'service': [
+      {
+        '@id': `${docUrl}#oidc`,
+        '@type': 'lws:OpenIdProvider',
+        'serviceEndpoint': issuer
+      }
+    ]
   };
 }
 
 /**
- * Generate HTML profile with embedded JSON-LD data island
- * The page uses mashlib + solidos-lite to render the profile from the data island
+ * Generate the profile document as a plain JSON-LD object.
+ *
+ * Previously returned an HTML shell with an embedded data island; that
+ * shell still exists for hand-curated personal sites, but server-default
+ * profiles are now plain JSON-LD for predictability and easier
+ * post-processing by clients.
+ *
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI
  * @param {string} options.issuer - OIDC issuer URI
- * @returns {string} HTML document with JSON-LD data island
+ * @returns {object} JSON-LD profile document
  */
 export function generateProfile({ webId, name, podUri, issuer }) {
-  const jsonLd = generateProfileJsonLd({ webId, name, podUri, issuer });
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(name)}'s Profile</title>
-  <link rel="stylesheet" href="https://javascriptsolidserver.github.io/mashlib-jss/dist/mash.css">
-  <script type="application/ld+json">
-${JSON.stringify(jsonLd, null, 2)}
-  </script>
-  <style>
-    body { margin: 0; font-family: system-ui, sans-serif; }
-    .loading { padding: 2rem; text-align: center; color: #666; }
-  </style>
-</head>
-<body>
-  <div class="TabulatorOutline" id="DummyUUID" role="main">
-    <table id="outline"></table>
-    <div id="GlobalDashboard"></div>
-  </div>
-  <div class="loading" id="loading">Loading profile...</div>
-
-  <script src="https://javascriptsolidserver.github.io/mashlib-jss/dist/mashlib.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/solidos-lite/solidos-lite.js"></script>
-  <script>
-  document.addEventListener('DOMContentLoaded', function() {
-    const loadingEl = document.getElementById('loading');
-
-    // Initialize solidos-lite to handle data islands
-    const success = SolidOSLite.init({ verbose: false });
-    if (!success) {
-      loadingEl.textContent = 'Failed to initialize. Please try refreshing.';
-      return;
-    }
-
-    // Parse data islands into the RDF store
-    SolidOSLite.parseAllIslands();
-
-    // Mark this document as already fetched
-    const pageBase = window.location.href.split('?')[0].split('#')[0];
-    const fetcher = SolidLogic.store.fetcher;
-    fetcher.requested[pageBase] = 'done';
-    fetcher.requested[pageBase.replace(/\\/$/, '')] = 'done';
-
-    // Navigate to #me
-    const subject = $rdf.sym(pageBase + '#me');
-    const outliner = panes.getOutliner(document);
-    outliner.GotoSubject(subject, true, undefined, true, undefined);
-
-    loadingEl.style.display = 'none';
-  });
-  </script>
-</body>
-</html>`;
+  return generateProfileJsonLd({ webId, name, podUri, issuer });
 }
 
 /**
- * Escape HTML entities
- */
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/**
- * Generate preferences file as JSON-LD
- * Uses mashlib-compatible paths (Settings/Preferences.ttl)
+ * Generate preferences file as JSON-LD.
  * @param {object} options
  * @param {string} options.webId - Full WebID URI
  * @param {string} options.podUri - Pod root URI
@@ -149,24 +110,32 @@ export function generatePreferences({ webId, podUri }) {
       'publicTypeIndex': { '@id': 'solid:publicTypeIndex', '@type': '@id' },
       'privateTypeIndex': { '@id': 'solid:privateTypeIndex', '@type': '@id' }
     },
-    '@id': `${pod}Settings/Preferences.ttl`,
-    'publicTypeIndex': `${pod}Settings/publicTypeIndex.ttl`,
-    'privateTypeIndex': `${pod}Settings/privateTypeIndex.ttl`
+    '@id': `${pod}settings/prefs.jsonld`,
+    'publicTypeIndex': `${pod}settings/publicTypeIndex.jsonld`,
+    'privateTypeIndex': `${pod}settings/privateTypeIndex.jsonld`
   };
 }
 
 /**
- * Generate an empty type index
+ * Generate an empty type index.
+ * Per the Solid Type Indexes spec, a public index is additionally typed
+ * `solid:ListedDocument` and a private one `solid:UnlistedDocument`.
  * @param {string} uri - URI of the type index
+ * @param {object} [opts]
+ * @param {boolean} [opts.listed] - true for publicTypeIndex, false for privateTypeIndex.
+ *   If omitted, only `solid:TypeIndex` is set (back-compat).
  * @returns {object} JSON-LD type index document
  */
-export function generateTypeIndex(uri) {
+export function generateTypeIndex(uri, opts = {}) {
+  const types = ['solid:TypeIndex'];
+  if (opts.listed === true) types.push('solid:ListedDocument');
+  else if (opts.listed === false) types.push('solid:UnlistedDocument');
   return {
     '@context': {
       'solid': SOLID
     },
     '@id': uri,
-    '@type': 'solid:TypeIndex'
+    '@type': types.length === 1 ? types[0] : types
   };
 }
 

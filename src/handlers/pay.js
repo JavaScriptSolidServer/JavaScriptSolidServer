@@ -28,10 +28,44 @@
 import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
 import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
-import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, sha256Hex } from '../mrc20.js';
-import { loadTrail, transferToken } from '../token.js';
+import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, btAddress } from '../mrc20.js';
+import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript, btDeriveChainedPrivkey } from '../token.js';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import fs from 'fs-extra';
 import path from 'path';
+
+// --- Pod keypair for deposit addresses (stored outside web-accessible tree) ---
+const keypairFile = () => path.join(process.env.DATA_ROOT || './data', '.private/keypair.json');
+
+async function loadOrCreateKeypair() {
+  try {
+    const data = await fs.readFile(keypairFile(), 'utf8');
+    return JSON.parse(data);
+  } catch {
+    const privkey = secp256k1.utils.randomPrivateKey();
+    const pubkey = secp256k1.getPublicKey(privkey, true);
+    const kp = { privkey: bytesToHex(privkey), pubkey: bytesToHex(pubkey) };
+    await fs.ensureDir(path.dirname(keypairFile()));
+    await fs.writeFile(keypairFile(), JSON.stringify(kp, null, 2));
+    return kp;
+  }
+}
+
+// --- Pod UTXO tracking (stored outside web-accessible tree) ---
+const utxoFile = () => path.join(process.env.DATA_ROOT || './data', '.private/utxos.json');
+
+async function loadUtxos() {
+  try {
+    const data = await fs.readFile(utxoFile(), 'utf8');
+    return JSON.parse(data);
+  } catch { return []; }
+}
+
+async function saveUtxos(utxos) {
+  await fs.ensureDir(path.dirname(utxoFile()));
+  await fs.writeFile(utxoFile(), JSON.stringify(utxos, null, 2));
+}
 
 const DEFAULT_COST = 1; // satoshis per request
 
@@ -176,6 +210,10 @@ function classifyDepositObject(obj) {
   if (obj.state?.profile === 'mono.mrc20.v0.1' && obj.prevState) {
     return { type: 'mrc20', state: obj.state, prevState: obj.prevState, anchor: obj.anchor };
   }
+  // Claim deposit: user sent sats to pod's address, claiming with txid
+  if (obj.txid && obj.vout !== undefined) {
+    return { type: 'claim', txid: obj.txid, vout: parseInt(obj.vout, 10), chain: obj.chain };
+  }
   // Fall back to TXO URI in .txo field
   if (obj.txo) {
     return { type: 'sats', txo: obj.txo };
@@ -244,6 +282,28 @@ export function createPayHandler(options = {}) {
       return reply.send(info);
     }
 
+    // --- GET /pay/.address — deposit address (optional per-user tweak) ---
+    if (url === '/pay/.address' && request.method === 'GET') {
+      const chain = request.query?.chain || (payChains ? payChains[0] : 'tbtc4');
+      if (!CHAIN_REGISTRY[chain]) {
+        return reply.code(400).send({ error: `Unsupported chain: ${chain}` });
+      }
+      if (payChains && !payChains.includes(chain)) {
+        return reply.code(400).send({ error: `Chain not enabled: ${chain}`, enabledChains: payChains });
+      }
+      const kp = await loadOrCreateKeypair();
+      const network = chain === 'btc' ? 'mainnet' : (chain === 'tbtc3' ? 'testnet' : 'testnet4');
+      const user = request.query?.user?.trim().toLowerCase() || null;
+      if (user && !/^did:nostr:[0-9a-f]{64}$/.test(user)) {
+        return reply.code(400).send({ error: 'Invalid user DID. Expected: did:nostr:<64-hex>' });
+      }
+      const states = user ? [user] : [];
+      const address = btAddress(kp.pubkey, states, network);
+      const response = { address, chain, pubkey: kp.pubkey };
+      if (user) response.user = user;
+      return reply.send(response);
+    }
+
     // --- GET /pay/.balance ---
     if (url === '/pay/.balance' && request.method === 'GET') {
       const pubkey = await getNostrPubkey(request);
@@ -251,6 +311,49 @@ export function createPayHandler(options = {}) {
         return reply.code(401).send({ error: 'NIP-98 authentication required' });
       }
       const didUri = pubkeyToDidNostr(pubkey);
+
+      // Auto-detect deposits to user's tweaked address (Phase 3)
+      if (payChains) {
+        try {
+          const kp = await loadOrCreateKeypair();
+          const utxos = await loadUtxos();
+          const ledger = await readLedger();
+          let credited = 0;
+
+          for (const chainId of payChains) {
+            const chain = CHAIN_REGISTRY[chainId];
+            const network = chainId === 'btc' ? 'mainnet' : (chainId === 'tbtc3' ? 'testnet' : 'testnet4');
+            const userAddr = btAddress(kp.pubkey, [didUri], network);
+
+            const resp = await fetch(`${chain.explorer}/address/${userAddr}/utxo`);
+            if (!resp.ok) continue;
+            const addrUtxos = await resp.json();
+
+            for (const u of addrUtxos) {
+              if (utxos.find(x => x.txid === u.txid && x.vout === u.vout)) continue;
+              // New UTXO — fetch tx for scriptpubkey, then auto-credit
+              let scriptpubkey = '';
+              try {
+                const txResp = await fetch(`${chain.explorer}/tx/${u.txid}`);
+                if (txResp.ok) {
+                  const txData = await txResp.json();
+                  scriptpubkey = txData.vout?.[u.vout]?.scriptpubkey || '';
+                }
+              } catch { /* best effort */ }
+              const currency = chain.unit;
+              credit(ledger, didUri, u.value, currency);
+              utxos.push({ txid: u.txid, vout: u.vout, amount: u.value, scriptpubkey, chain: chainId, tweak: didUri, spent: false });
+              credited += u.value;
+            }
+          }
+
+          if (credited > 0) {
+            await writeLedger(ledger);
+            await saveUtxos(utxos);
+          }
+        } catch { /* scan failure is non-fatal */ }
+      }
+
       const ledger = await readLedger();
       const response = {
         did: didUri,
@@ -370,11 +473,79 @@ export function createPayHandler(options = {}) {
         });
       }
 
+      // --- Claim deposit: user sent sats to pod's address ---
+      if (deposit.type === 'claim') {
+        const kp = await loadOrCreateKeypair();
+        const chainId = deposit.chain || (payChains ? payChains[0] : 'tbtc4');
+        if (payChains && !payChains.includes(chainId)) {
+          return reply.code(400).send({ error: `Chain '${chainId}' not enabled`, enabledChains: payChains });
+        }
+        const chain = CHAIN_REGISTRY[chainId];
+        if (!chain) {
+          return reply.code(400).send({ error: `Unknown chain: ${chainId}` });
+        }
+
+        // Derive address — try per-user tweaked address first, fall back to generic
+        const network = chainId === 'btc' ? 'mainnet' : (chainId === 'tbtc3' ? 'testnet' : 'testnet4');
+        const didUri = pubkeyToDidNostr(pubkey);
+        const userAddress = btAddress(kp.pubkey, [didUri], network);
+        const podAddress = btAddress(kp.pubkey, [], network);
+
+        // Fetch transaction from mempool
+        let txData;
+        try {
+          const txResp = await fetch(`${chain.explorer}/tx/${deposit.txid}`);
+          if (!txResp.ok) {
+            return reply.code(400).send({ error: 'Transaction not found' });
+          }
+          txData = await txResp.json();
+        } catch (err) {
+          return reply.code(502).send({ error: `Failed to verify transaction: ${err.message}` });
+        }
+        const output = txData.vout?.[deposit.vout];
+        if (!output) {
+          return reply.code(400).send({ error: `Output ${deposit.vout} not found` });
+        }
+
+        // Verify output pays our address (per-user tweaked or generic pod address)
+        const outputAddr = output.scriptpubkey_address;
+        const tweak = outputAddr === userAddress ? didUri : null;
+        if (outputAddr !== userAddress && outputAddr !== podAddress) {
+          return reply.code(400).send({ error: 'Output does not pay this pod\'s address', expected: { user: userAddress, pod: podAddress } });
+        }
+
+        const amount = output.value;
+        const currency = chain.unit;
+
+        // Replay protection + UTXO tracking
+        const utxos = await loadUtxos();
+        if (utxos.find(u => u.txid === deposit.txid && u.vout === deposit.vout)) {
+          return reply.code(400).send({ error: 'This output has already been claimed' });
+        }
+        utxos.push({ txid: deposit.txid, vout: deposit.vout, amount, scriptpubkey: output.scriptpubkey, chain: chainId, tweak, spent: false });
+        await saveUtxos(utxos);
+
+        const ledger = await readLedger();
+        const newBalance = credit(ledger, didUri, amount, currency);
+        await writeLedger(ledger);
+
+        return reply.send({
+          did: didUri,
+          deposited: amount,
+          balance: newBalance,
+          unit: currency,
+          chain: chainId,
+          txid: deposit.txid,
+          address: podAddress
+        });
+      }
+
       return reply.code(400).send({
-        error: 'Invalid deposit format. Send a TXO URI string or MRC20 state proof.',
+        error: 'Invalid deposit format. Send a TXO URI string, MRC20 state proof, or claim {txid, vout}.',
         formats: {
           sats: 'POST body: "<txid>:<vout>" or {"txo": "<txid>:<vout>"}',
-          mrc20: 'POST body: {"type": "mrc20", "state": {...}, "prevState": {...}}'
+          mrc20: 'POST body: {"type": "mrc20", "state": {...}, "prevState": {...}}',
+          claim: 'POST body: {"txid": "...", "vout": 0, "chain": "tbtc4"}'
         }
       });
     }
@@ -507,7 +678,11 @@ export function createPayHandler(options = {}) {
 
       const didUri = pubkeyToDidNostr(pubkey);
       const ledger = await readLedger();
-      const balance = getBalance(ledger, didUri);
+      if (body?.currency && (!payChains || !payChains.includes(body.currency))) {
+        return reply.code(400).send({ error: `Unsupported currency: ${body.currency}`, enabledChains: payChains || [] });
+      }
+      const currency = body?.currency || null;
+      const balance = getBalance(ledger, didUri, currency);
 
       // Calculate withdrawal amount
       let satCost, tokenAmount;
@@ -562,7 +737,7 @@ export function createPayHandler(options = {}) {
       }
 
       // Debit balance
-      debit(ledger, didUri, satCost);
+      debit(ledger, didUri, satCost, currency);
       await writeLedger(ledger);
 
       return reply.send({
@@ -570,8 +745,8 @@ export function createPayHandler(options = {}) {
         ticker: payToken,
         cost: satCost,
         rate: payRate,
-        balance: getBalance(ledger, didUri),
-        unit: 'sat',
+        balance: getBalance(ledger, didUri, currency),
+        unit: currency || 'sat',
         txid: result.txid,
         proof: {
           state: result.state,
@@ -582,6 +757,143 @@ export function createPayHandler(options = {}) {
             network: result.trail.network
           }
         }
+      });
+    }
+
+    // --- POST /pay/.withdraw-sats — withdraw sats as a TXO voucher ---
+    if (url === '/pay/.withdraw-sats' && request.method === 'POST') {
+      const pubkey = await getNostrPubkey(request);
+      if (!pubkey) {
+        return reply.code(401).send({ error: 'NIP-98 authentication required' });
+      }
+
+      let body = request.body;
+      try {
+        if (Buffer.isBuffer(body)) body = JSON.parse(body.toString('utf8'));
+        if (typeof body === 'string') body = JSON.parse(body);
+      } catch {
+        return reply.code(400).send({ error: 'Invalid JSON body' });
+      }
+
+      const withdrawAmount = parseInt(body?.amount, 10);
+      const chainId = body?.chain || (payChains ? payChains[0] : 'tbtc4');
+      if (!withdrawAmount || withdrawAmount <= 0) {
+        return reply.code(400).send({ error: 'Specify amount to withdraw' });
+      }
+      if (payChains && !payChains.includes(chainId)) {
+        return reply.code(400).send({ error: `Chain '${chainId}' not enabled` });
+      }
+      const chain = CHAIN_REGISTRY[chainId];
+      if (!chain) {
+        return reply.code(400).send({ error: `Unknown chain: ${chainId}` });
+      }
+      const currency = chain.unit;
+
+      // Check user balance
+      const didUri = pubkeyToDidNostr(pubkey);
+      const ledger = await readLedger();
+      const balance = getBalance(ledger, didUri, currency);
+      if (balance < withdrawAmount) {
+        return reply.code(402).send({ error: 'Insufficient balance', balance, requested: withdrawAmount, unit: currency });
+      }
+
+      // Find unspent UTXOs for this chain
+      const utxos = await loadUtxos();
+      const available = utxos.filter(u => u.chain === chainId && !u.spent);
+      if (available.length === 0) {
+        return reply.code(400).send({ error: 'No UTXOs available for withdrawal' });
+      }
+
+      // Load pod keypair
+      const kp = await loadOrCreateKeypair();
+
+      // Select UTXOs — group by tweak so we can sign with one key
+      // Prefer untweaked UTXOs first, then tweaked ones
+      const fee = 300;
+      const needed = withdrawAmount + fee;
+      let selected = [];
+      let total = 0;
+      let selectedTweak = null;
+
+      // Try untweaked first
+      for (const utxo of available.filter(u => !u.tweak)) {
+        selected.push(utxo);
+        total += utxo.amount;
+        if (total >= needed) break;
+      }
+      // If not enough, try tweaked (same tweak group only)
+      if (total < needed) {
+        const tweaked = available.filter(u => u.tweak);
+        selected = [];
+        total = 0;
+        selectedTweak = null;
+        for (const utxo of tweaked) {
+          if (selectedTweak && utxo.tweak !== selectedTweak) continue;
+          selected.push(utxo);
+          selectedTweak = utxo.tweak;
+          total += utxo.amount;
+          if (total >= needed) break;
+        }
+      }
+      if (total < needed) {
+        return reply.code(400).send({ error: 'Not enough UTXO value for withdrawal + fee', available: total, needed });
+      }
+
+      // Derive signing key (tweaked if UTXOs are tweaked)
+      const privkeyBytes = selectedTweak
+        ? btDeriveChainedPrivkey(hexToBytes(kp.privkey), [selectedTweak])
+        : hexToBytes(kp.privkey);
+
+      // Generate a new keypair for the voucher recipient
+      const voucherPrivkey = secp256k1.utils.randomPrivateKey();
+      const voucherPubkey = secp256k1.getPublicKey(voucherPrivkey, true);
+      const voucherXonly = voucherPubkey.slice(1);
+      const voucherScript = p2trScript(voucherXonly);
+
+      // Build outputs: voucher + change back to pod
+      const outputs = [{ amount: withdrawAmount, scriptPubKey: voucherScript }];
+      const change = total - withdrawAmount - fee;
+      const podXonly = hexToBytes(kp.pubkey).slice(1);
+      if (change > 546) {
+        outputs.push({ amount: change, scriptPubKey: p2trScript(podXonly) });
+      }
+
+      // Build inputs
+      const inputs = selected.map(u => ({
+        txid: u.txid, vout: u.vout, amount: u.amount, scriptPubKey: hexToBytes(u.scriptpubkey)
+      }));
+
+      // Build and broadcast
+      let newTxid;
+      try {
+        const rawTx = buildTransaction(inputs, outputs, privkeyBytes);
+        newTxid = await broadcastTx(rawTx, chain.explorer.replace(/\/api$/, ''));
+      } catch (err) {
+        return reply.code(500).send({ error: `Broadcast failed: ${err.message}` });
+      }
+
+      // Debit user balance
+      const debitResult = debit(ledger, didUri, withdrawAmount, currency);
+      if (!debitResult.success) {
+        return reply.code(402).send({ error: 'Balance changed during withdrawal', balance: debitResult.balance });
+      }
+      await writeLedger(ledger);
+
+      // Mark UTXOs as spent, add change UTXO
+      for (const u of selected) { u.spent = true; }
+      if (change > 546) {
+        utxos.push({ txid: newTxid, vout: 1, amount: change, scriptpubkey: '5120' + bytesToHex(podXonly), chain: chainId, spent: false });
+      }
+      await saveUtxos(utxos);
+
+      // Return voucher URI
+      const voucherUri = `txo:${chainId}:${newTxid}:0?amount=${withdrawAmount}&key=${bytesToHex(voucherPrivkey)}`;
+      return reply.send({
+        voucher: voucherUri,
+        txid: newTxid,
+        amount: withdrawAmount,
+        unit: currency,
+        balance: getBalance(ledger, didUri, currency)
       });
     }
 

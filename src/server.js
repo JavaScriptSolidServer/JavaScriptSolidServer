@@ -18,6 +18,10 @@ import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
+import { webrtcPlugin } from './webrtc/index.js';
+import { tunnelPlugin } from './tunnel/index.js';
+import { terminalPlugin } from './terminal/index.js';
+import { registerErrorHandler } from './utils/error-handler.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -60,20 +64,25 @@ export function createServer(options = {}) {
   const subdomainsEnabled = options.subdomains ?? false;
   const baseDomain = options.baseDomain || null;
   // Mashlib data browser is OFF by default
-  // mashlibCdn: if true, load from CDN; if false, serve locally
-  // mashlibModule: URL to ES module entry point (alternative to classic mashlib)
+  // mashlibCdn: load from CDN; mashlibModule: URL to ES module entry point
   const mashlibModule = options.mashlibModule ?? false;
-  const mashlibEnabled = options.mashlib || !!mashlibModule;
   const mashlibCdn = options.mashlibCdn ?? false;
+  const mashlibEnabled = mashlibCdn || !!mashlibModule;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
-  // SolidOS UI (modern Nextcloud-style interface) - requires mashlib
-  const solidosUiEnabled = options.solidosUi ?? false;
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
   // Nostr relay is OFF by default
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
   const nostrMaxEvents = options.nostrMaxEvents ?? 1000;
+  // WebRTC signaling is OFF by default
+  const webrtcEnabled = options.webrtc ?? false;
+  const webrtcPath = options.webrtcPath ?? '/.webrtc';
+  // Terminal (WebSocket shell) is OFF by default
+  const terminalEnabled = options.terminal ?? false;
+  // Tunnel proxy is OFF by default
+  const tunnelEnabled = options.tunnel ?? false;
+  const tunnelPath = options.tunnelPath ?? '/.tunnel';
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -85,6 +94,7 @@ export function createServer(options = {}) {
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
   const singleUserName = options.singleUserName ?? 'me';
+  const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
   // WebID-TLS client certificate authentication is OFF by default
@@ -146,6 +156,7 @@ export function createServer(options = {}) {
   }
 
   const fastify = Fastify(fastifyOptions);
+  registerErrorHandler(fastify);
 
   // Add raw body parser for all content types
   fastify.addContentTypeParser('*', { parseAs: 'buffer' }, (req, body, done) => {
@@ -171,10 +182,11 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
   fastify.decorateRequest('mashlibModule', null);
-  fastify.decorateRequest('solidosUiEnabled', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('config', null);
   fastify.decorateRequest('liveReloadEnabled', null);
+  fastify.decorateRequest('singleUser', null);
+  fastify.decorateRequest('singleUserName', null);
   fastify.addHook('onRequest', async (request) => {
     request.connegEnabled = connegEnabled;
     request.notificationsEnabled = notificationsEnabled || liveReloadEnabled;
@@ -185,10 +197,11 @@ export function createServer(options = {}) {
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
     request.mashlibModule = mashlibModule;
-    request.solidosUiEnabled = solidosUiEnabled;
     request.defaultQuota = defaultQuota;
     request.config = { public: options.public, readOnly: options.readOnly };
     request.liveReloadEnabled = liveReloadEnabled;
+    request.singleUser = singleUser;
+    request.singleUserName = singleUserName;
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {
@@ -240,6 +253,21 @@ export function createServer(options = {}) {
     });
   }
 
+  // Register WebRTC signaling if enabled
+  if (webrtcEnabled) {
+    fastify.register(webrtcPlugin, { path: webrtcPath });
+  }
+
+  // Register terminal (WebSocket shell) if enabled
+  if (terminalEnabled) {
+    fastify.register(terminalPlugin, { path: '/.terminal', public: options.public || false });
+  }
+
+  // Register tunnel proxy if enabled
+  if (tunnelEnabled) {
+    fastify.register(tunnelPlugin, { path: tunnelPath });
+  }
+
   // Register ActivityPub plugin if enabled
   if (activitypubEnabled) {
     fastify.register(activityPubPlugin, {
@@ -289,12 +317,12 @@ export function createServer(options = {}) {
     // Note: OPTIONS requests are handled by handleOptions to include Accept-* headers
   });
 
-  // ActivityPub actor endpoint - dedicated route for /profile/card with AP Accept header
+  // ActivityPub actor endpoint - dedicated route for /profile/card.jsonld with AP Accept header
   // Registered before wildcard routes to take priority
   if (activitypubEnabled) {
     fastify.route({
       method: 'GET',
-      url: '/profile/card',
+      url: '/profile/card.jsonld',
       handler: async (request, reply) => {
         const accept = request.headers.accept || '';
         const wantsAP = accept.includes('activity+json') ||
@@ -331,6 +359,18 @@ export function createServer(options = {}) {
       return;
     }
 
+    // Allow WebRTC and tunnel endpoints through when enabled
+    const urlNoQuery = request.url.split('?')[0];
+    if (tunnelEnabled && (urlNoQuery === tunnelPath || urlNoQuery.startsWith('/tunnel/'))) {
+      return;
+    }
+    if (webrtcEnabled && urlNoQuery === webrtcPath) {
+      return;
+    }
+    if (terminalEnabled && urlNoQuery === '/.terminal') {
+      return;
+    }
+
     const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
@@ -356,9 +396,13 @@ export function createServer(options = {}) {
       const requiredMode = needsWrite ? AccessMode.WRITE : AccessMode.READ;
 
       // Run WAC authorization with the correct mode for git operations
-      const { authorized, webId, wacAllow, authError } = await authorize(request, reply, { requiredMode });
+      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply, { requiredMode });
       request.webId = webId;
       request.wacAllow = wacAllow;
+
+      if (paymentRequired) {
+        return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
+      }
 
       if (!authorized) {
         const message = needsWrite ? 'Write access required for push' : 'Read access required for clone';
@@ -383,21 +427,22 @@ export function createServer(options = {}) {
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
-    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, solidos-ui, well-known, notifications, nostr, git, and AP
+    // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
-    const apPaths = ['/inbox', '/profile/card/inbox', '/profile/card/outbox', '/profile/card/followers', '/profile/card/following',
+    const apPaths = ['/inbox', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
       '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials',
       '/oauth/authorize', '/oauth/token'];
     // Check if request wants ActivityPub content for profile
     const accept = request.headers.accept || '';
     const wantsAP = accept.includes('activity+json') || accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
-    const isProfileAP = activitypubEnabled && wantsAP && (request.url === '/profile/card' || request.url.startsWith('/profile/card?'));
+    const isProfileAP = activitypubEnabled && wantsAP && (request.url === '/profile/card.jsonld' || request.url.startsWith('/profile/card.jsonld?'));
     if (request.url === '/.pods' ||
         request.url === '/.notifications' ||
         request.method === 'OPTIONS' ||
+        request.url === '/idp' ||
         request.url.startsWith('/idp/') ||
+        request.url.startsWith('/idp?') ||
         request.url.startsWith('/.well-known/') ||
-        request.url.startsWith('/solidos-ui/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
@@ -405,11 +450,14 @@ export function createServer(options = {}) {
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
+        (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
+        (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
+        (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
 
-    const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
+    const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } = await authorize(request, reply);
 
     // Store webId and wacAllow on request for handlers to use
     request.webId = webId;
@@ -418,6 +466,21 @@ export function createServer(options = {}) {
     // Set WAC-Allow header for all responses (handlers may override)
     reply.header('WAC-Allow', wacAllow);
 
+    // Set payment headers for paid access
+    if (paid !== undefined) {
+      reply.header('X-Cost', String(paid));
+      reply.header('X-Balance', String(balance));
+      if (currency) reply.header('X-Pay-Currency', currency);
+    }
+
+    // Handle payment-gated resources
+    if (paymentRequired) {
+      return reply.code(402).send({
+        type: 'PaymentRequired',
+        ...paymentRequired
+      });
+    }
+
     if (!authorized) {
       return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);
     }
@@ -425,82 +488,32 @@ export function createServer(options = {}) {
 
   // Pod creation endpoint with rate limiting
   // Limit: 1 pod per IP per day to prevent resource exhaustion and namespace squatting
-  fastify.post('/.pods', {
-    config: {
-      rateLimit: {
-        max: 1,
-        timeWindow: '1 day',
-        keyGenerator: (request) => request.ip
-      }
-    }
-  }, handleCreatePod);
-
-  // Mashlib static files (served from root like NSS does)
-  if (mashlibEnabled) {
-    if (mashlibCdn) {
-      // CDN mode: redirect chunk requests to CDN
-      // Mashlib uses code splitting, so it loads chunks like 789.mashlib.min.js
-      const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
-      const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
-
-      fastify.addHook('onRequest', async (request, reply) => {
-        if (chunkPattern.test(request.url)) {
-          const filename = request.url.split('/').pop();
-          return reply.redirect(302, `${cdnBase}/${filename}`);
+  // Disabled in single-user mode
+  if (singleUser) {
+    fastify.post('/.pods', async (request, reply) => {
+      return reply.code(403).send({ error: 'Forbidden', message: 'Pod creation disabled in single-user mode' });
+    });
+  } else {
+    fastify.post('/.pods', {
+      config: {
+        rateLimit: {
+          max: 1,
+          timeWindow: '1 day',
+          keyGenerator: (request) => request.ip
         }
-      });
-    } else {
-      // Local mode: serve from local files
-      const mashlibDir = join(__dirname, 'mashlib-local', 'dist');
-      const mashlibFiles = {
-        '/mashlib.min.js': { file: 'mashlib.min.js', type: 'application/javascript' },
-        '/mashlib.min.js.map': { file: 'mashlib.min.js.map', type: 'application/json' },
-        '/mash.css': { file: 'mash.css', type: 'text/css' },
-        '/mash.css.map': { file: 'mash.css.map', type: 'application/json' },
-        '/841.mashlib.min.js': { file: '841.mashlib.min.js', type: 'application/javascript' },
-        '/841.mashlib.min.js.map': { file: '841.mashlib.min.js.map', type: 'application/json' }
-      };
-
-      for (const [path, config] of Object.entries(mashlibFiles)) {
-        fastify.get(path, async (request, reply) => {
-          try {
-            const content = await readFile(join(mashlibDir, config.file));
-            return reply.type(config.type).send(content);
-          } catch {
-            return reply.code(404).send({ error: 'Not Found' });
-          }
-        });
       }
-    }
+    }, handleCreatePod);
   }
 
-  // SolidOS UI static files (modern Nextcloud-style interface)
-  // Serves from /solidos-ui/* - requires mashlib to be enabled as well
-  if (solidosUiEnabled && mashlibEnabled) {
-    const solidosUiDir = join(__dirname, 'mashlib-local', 'dist', 'solidos-ui');
+  // Mashlib CDN mode: redirect chunk requests to CDN
+  if (mashlibEnabled && mashlibCdn) {
+    const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
+    const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
 
-    // Serve all files under /solidos-ui/* path
-    fastify.get('/solidos-ui/*', async (request, reply) => {
-      try {
-        // Get the path after /solidos-ui/
-        const filePath = request.url.replace('/solidos-ui/', '').split('?')[0];
-        const fullPath = join(solidosUiDir, filePath);
-
-        // Determine content type based on extension
-        const ext = filePath.split('.').pop()?.toLowerCase();
-        const contentTypes = {
-          'js': 'application/javascript',
-          'css': 'text/css',
-          'map': 'application/json',
-          'html': 'text/html'
-        };
-        const contentType = contentTypes[ext] || 'application/octet-stream';
-
-        const content = await readFile(fullPath);
-        return reply.type(contentType).send(content);
-      } catch (err) {
-        request.log.error(err, 'Failed to serve solidos-ui file');
-        return reply.code(404).send({ error: 'Not Found' });
+    fastify.addHook('onRequest', async (request, reply) => {
+      if (chunkPattern.test(request.url)) {
+        const filename = request.url.split('/').pop();
+        return reply.redirect(302, `${cdnBase}/${filename}`);
       }
     });
   }
@@ -549,11 +562,21 @@ export function createServer(options = {}) {
       const isRootPod = !singleUserName || singleUserName === '/';
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
-      const webId = `${podUri}profile/card#me`;
       const displayName = isRootPod ? 'me' : singleUserName;
 
-      // Check if pod already exists (profile/card is the indicator)
-      const profileExists = await storage.exists(`${podPath}profile/card`);
+      // Check if pod already exists. Accept either the new `card.jsonld`
+      // or legacy extensionless `card` layout so we don't re-seed a pod
+      // that was created by an older JSS version. Compute the effective
+      // WebID against whichever profile file actually resolves — a
+      // legacy pod must keep its `/profile/card#me` WebID, otherwise the
+      // seeded IDP account would point at a non-existent document.
+      const hasJsonLd = await storage.exists(`${podPath}profile/card.jsonld`);
+      const hasLegacy = !hasJsonLd && await storage.exists(`${podPath}profile/card`);
+      const profileFile = hasJsonLd ? 'profile/card.jsonld'
+                          : hasLegacy ? 'profile/card'
+                          : 'profile/card.jsonld'; // fresh pod default
+      const webId = `${podUri}${profileFile}#me`;
+      const profileExists = hasJsonLd || hasLegacy;
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
@@ -567,6 +590,123 @@ export function createServer(options = {}) {
         }
         fastify.log.info(`Single-user pod created at ${podUri}`);
       }
+
+      // Seed an IDP account so the operator can actually log in. Without
+      // this, single-user + --idp produces a pod but no credential, and
+      // registration is intentionally disabled in single-user mode — so
+      // the pod is unloggable until a password is set externally (#323).
+      if (idpEnabled && !isRootPod) {
+        await seedSingleUserIdpAccount({
+          fastify,
+          username: singleUserName,
+          webId,
+          podName: singleUserName,
+          providedPassword: singleUserPassword
+        });
+      }
+    });
+  }
+
+  /**
+   * Seed an IDP account for the single-user pod owner if one doesn't
+   * already exist. Password sources, in priority order:
+   *   1. `--single-user-password` / `JSS_SINGLE_USER_PASSWORD`
+   *   2. interactive prompt (TTY only)
+   *   3. error — server stays up but logs that login won't work yet
+   */
+  async function seedSingleUserIdpAccount({ fastify, username, webId, podName, providedPassword }) {
+    const { findByUsername, createAccount } = await import('./idp/accounts.js');
+    const existing = await findByUsername(username);
+    if (existing) return; // already seeded — idempotent
+
+    // Treat anything that isn't a non-empty string as "not provided" so
+    // a misconfigured env coercion or stray boolean can't reach bcrypt.
+    let password = (typeof providedPassword === 'string' && providedPassword.length > 0)
+      ? providedPassword
+      : null;
+
+    if (!password) {
+      if (process.stdin.isTTY && process.stdout.isTTY) {
+        try {
+          password = await promptPasswordOnce(`[jss] Set initial IDP password for "${username}": `);
+        } catch (err) {
+          fastify.log.warn({ err }, `Password prompt failed for "${username}"`);
+          return;
+        }
+      } else {
+        fastify.log.warn(
+          `--single-user --idp: no password provided. Set --single-user-password or ` +
+          `JSS_SINGLE_USER_PASSWORD before starting (or run on a TTY to be prompted). ` +
+          `Login is currently not possible for "${username}".`
+        );
+        return;
+      }
+    }
+
+    if (typeof password !== 'string' || password.length === 0) {
+      fastify.log.warn(`Empty password — skipping IDP account creation for "${username}".`);
+      return;
+    }
+
+    try {
+      await createAccount({ username, password, webId, podName });
+      fastify.log.info(`IDP account seeded for single-user "${username}".`);
+    } catch (err) {
+      fastify.log.error({ err }, `Failed to seed IDP account for "${username}"`);
+    }
+  }
+
+  /**
+   * Read a password from stdin without echoing it. Uses the public
+   * `emitKeypressEvents` + raw-mode keypress API rather than overriding
+   * the underscored `_writeToOutput` on a `readline.Interface`, which is
+   * a private/unstable hook.
+   */
+  async function promptPasswordOnce(prompt) {
+    const { emitKeypressEvents } = await import('node:readline');
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+      throw new Error('Interactive password prompt requires a TTY');
+    }
+    return new Promise((resolve, reject) => {
+      let password = '';
+      const wasRaw = stdin.isRaw === true;
+      const onKeypress = (str, key = {}) => {
+        if (key.ctrl && key.name === 'c') {
+          cleanup();
+          reject(new Error('Password prompt cancelled'));
+          return;
+        }
+        if (key.name === 'return' || key.name === 'enter') {
+          cleanup();
+          resolve(password);
+          return;
+        }
+        if (key.name === 'backspace' || key.name === 'delete') {
+          password = password.slice(0, -1);
+          return;
+        }
+        // Only accept printable input — \P{C} excludes control codes,
+        // so escape sequences from arrow keys, function keys, etc. don't
+        // sneak invisible bytes into the password buffer.
+        if (!key.ctrl && !key.meta &&
+            typeof str === 'string' && str.length > 0 &&
+            /^\P{C}+$/u.test(str)) {
+          password += str;
+        }
+      };
+      const cleanup = () => {
+        stdin.removeListener('keypress', onKeypress);
+        if (!wasRaw) stdin.setRawMode(false);
+        stdout.write('\n');
+        stdin.pause();
+      };
+      emitKeypressEvents(stdin);
+      stdout.write(prompt);
+      if (!wasRaw) stdin.setRawMode(true);
+      stdin.resume();
+      stdin.on('keypress', onKeypress);
     });
   }
 
@@ -581,22 +721,22 @@ export function createServer(options = {}) {
     await storage.createContainer('/inbox/');
     await storage.createContainer('/public/');
     await storage.createContainer('/private/');
-    await storage.createContainer('/Settings/');
+    await storage.createContainer('/settings/');
     await storage.createContainer('/profile/');
 
     // Generate profile
-    const profileHtml = generateProfile({ webId, name: displayName, podUri, issuer });
-    await storage.write('/profile/card', profileHtml);
+    const profile = generateProfile({ webId, name: displayName, podUri, issuer });
+    await storage.write('/profile/card.jsonld', serialize(profile));
 
     // Preferences and type indexes
     const prefs = generatePreferences({ webId, podUri });
-    await storage.write('/Settings/Preferences.ttl', serialize(prefs));
+    await storage.write('/settings/prefs.jsonld', serialize(prefs));
 
-    const publicTypeIndex = generateTypeIndex(`${podUri}Settings/publicTypeIndex.ttl`);
-    await storage.write('/Settings/publicTypeIndex.ttl', serialize(publicTypeIndex));
+    const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`, { listed: true });
+    await storage.write('/settings/publicTypeIndex.jsonld', serialize(publicTypeIndex));
 
-    const privateTypeIndex = generateTypeIndex(`${podUri}Settings/privateTypeIndex.ttl`);
-    await storage.write('/Settings/privateTypeIndex.ttl', serialize(privateTypeIndex));
+    const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
+    await storage.write('/settings/privateTypeIndex.jsonld', serialize(privateTypeIndex));
 
     // ACL files
     const rootAcl = generateOwnerAcl(podUri, webId, true);
@@ -605,8 +745,12 @@ export function createServer(options = {}) {
     const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
     await storage.write('/private/.acl', serializeAcl(privateAcl));
 
-    const settingsAcl = generatePrivateAcl(`${podUri}Settings/`, webId);
-    await storage.write('/Settings/.acl', serializeAcl(settingsAcl));
+    const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+    await storage.write('/settings/.acl', serializeAcl(settingsAcl));
+
+    // publicTypeIndex: public read, overrides the private default inherited from /settings/
+    const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+    await storage.write('/settings/publicTypeIndex.jsonld.acl', serializeAcl(publicTypeIndexAcl));
 
     const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
     await storage.write('/inbox/.acl', serializeAcl(inboxAcl));

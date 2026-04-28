@@ -16,7 +16,7 @@ import path from 'path';
  */
 export const defaults = {
   // Server
-  port: 3000,
+  port: 4443,
   host: '0.0.0.0',
   root: './data',
 
@@ -43,9 +43,6 @@ export const defaults = {
   mashlibVersion: '2.0.0',
   mashlibModule: false,
 
-  // SolidOS UI (modern Nextcloud-style interface)
-  solidosUi: false,
-
   // Git HTTP backend
   git: false,
 
@@ -53,6 +50,17 @@ export const defaults = {
   nostr: false,
   nostrPath: '/relay',
   nostrMaxEvents: 1000,
+
+  // WebRTC signaling
+  webrtc: false,
+  webrtcPath: '/.webrtc',
+
+  // Terminal (WebSocket shell access)
+  terminal: false,
+
+  // Tunnel (decentralized ngrok)
+  tunnel: false,
+  tunnelPath: '/.tunnel',
 
   // ActivityPub federation
   activitypub: false,
@@ -67,6 +75,11 @@ export const defaults = {
   // Single-user mode (personal pod server)
   singleUser: false,
   singleUserName: 'me',
+  // Initial IDP password seeded on first single-user pod creation. If
+  // unset and --idp is enabled, the server prompts on a TTY or logs a
+  // warning and continues startup on non-TTY (so the pod is created but
+  // is not yet loggable until a password is set).
+  singleUserPassword: null,
 
   // WebID-TLS client certificate authentication
   webidTls: false,
@@ -129,11 +142,15 @@ const envMap = {
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
   JSS_MASHLIB_MODULE: 'mashlibModule',
-  JSS_SOLIDOS_UI: 'solidosUi',
   JSS_GIT: 'git',
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
+  JSS_WEBRTC: 'webrtc',
+  JSS_WEBRTC_PATH: 'webrtcPath',
+  JSS_TERMINAL: 'terminal',
+  JSS_TUNNEL: 'tunnel',
+  JSS_TUNNEL_PATH: 'tunnelPath',
   JSS_ACTIVITYPUB: 'activitypub',
   JSS_AP_USERNAME: 'apUsername',
   JSS_AP_DISPLAY_NAME: 'apDisplayName',
@@ -142,6 +159,7 @@ const envMap = {
   JSS_INVITE_ONLY: 'inviteOnly',
   JSS_SINGLE_USER: 'singleUser',
   JSS_SINGLE_USER_NAME: 'singleUserName',
+  JSS_SINGLE_USER_PASSWORD: 'singleUserPassword',
   JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
   JSS_PUBLIC: 'public',
@@ -173,14 +191,52 @@ export function parseSize(str) {
 }
 
 /**
+ * Config keys whose values are genuinely boolean. Only these get the
+ * "true"/"false" string coercion below — otherwise a user-supplied
+ * password (or any other string-valued option) like "true"/"false"
+ * would silently turn into a boolean and break downstream code (e.g.
+ * bcrypt hashing).
+ */
+const BOOLEAN_KEYS = new Set([
+  'ssl',
+  'conneg',
+  'subdomains',
+  'mashlib',
+  'mashlibCdn',
+  'git',
+  'nostr',
+  'webrtc',
+  'terminal',
+  'tunnel',
+  'activitypub',
+  'inviteOnly',
+  'multiuser',
+  'singleUser',
+  'webidTls',
+  'public',
+  'readOnly',
+  'liveReload',
+  'pay',
+  'mongo',
+  'idp',
+  'notifications',
+  'logger',
+  'quiet'
+]);
+
+/**
  * Parse a value from environment variable string
  */
 function parseEnvValue(value, key) {
   if (value === undefined) return undefined;
 
-  // Boolean values
-  if (value.toLowerCase() === 'true') return true;
-  if (value.toLowerCase() === 'false') return false;
+  // Boolean values — only for known boolean keys; everything else
+  // stays a string so passwords / tokens / arbitrary text aren't
+  // silently coerced to booleans.
+  if (BOOLEAN_KEYS.has(key)) {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
 
   // Numeric values for known numeric keys
   if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost' || key === 'payRate') && !isNaN(value)) {
@@ -299,6 +355,10 @@ export async function saveConfig(config, configFile) {
   // Remove derived/runtime values
   delete toSave.ssl;
   delete toSave.logger;
+  // Never persist secrets to a static config file. The password is
+  // expected to come from --single-user-password or
+  // JSS_SINGLE_USER_PASSWORD at runtime, not be written into .jss/config.
+  delete toSave.singleUserPassword;
 
   await fs.ensureDir(path.dirname(configFile));
   await fs.writeFile(configFile, JSON.stringify(toSave, null, 2));
@@ -315,12 +375,29 @@ export function printConfig(config) {
   console.log(`  Root:          ${path.resolve(config.root)}`);
   console.log(`  SSL:           ${config.ssl ? 'enabled' : 'disabled'}`);
   console.log(`  Multi-user:    ${config.multiuser}`);
+  if (config.singleUser) {
+    let details = `${config.singleUserName}`;
+    // Password seeding only runs when --idp is on AND the pod isn't the
+    // root-level case ('/'). Reflect both gates in the printed line so
+    // operators don't see a misleading "missing — login disabled" when
+    // login isn't governed by an IDP password at all.
+    if (config.idp) {
+      if (config.singleUserName === '/' || !config.singleUserName) {
+        details += ' (root pod; password not seeded)';
+      } else {
+        const pwSource = config.singleUserPassword
+          ? 'provided'
+          : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
+        details += ` (password: ${pwSource})`;
+      }
+    }
+    console.log(`  Single-user:   ${details}`);
+  }
   console.log(`  Conneg:        ${config.conneg}`);
   console.log(`  Notifications: ${config.notifications}`);
   console.log(`  IdP:           ${config.idp ? (config.idpIssuer || 'enabled') : 'disabled'}`);
   console.log(`  Subdomains:    ${config.subdomains ? (config.baseDomain || 'enabled') : 'disabled'}`);
-  console.log(`  Mashlib:       ${config.mashlibModule ? `module (${config.mashlibModule})` : config.mashlibCdn ? `CDN v${config.mashlibVersion}` : config.mashlib ? 'local' : 'disabled'}`);
-  console.log(`  SolidOS UI:    ${config.solidosUi ? 'enabled' : 'disabled'}`);
+  console.log(`  Mashlib:       ${config.mashlibModule ? `module (${config.mashlibModule})` : config.mashlibCdn ? `CDN v${config.mashlibVersion}` : 'disabled'}`);
   if (config.pay) {
     console.log(`  Pay:           ${config.payCost} sat/req`);
     if (config.payToken) console.log(`  Token:         ${config.payToken} @ ${config.payRate} sat/token`);

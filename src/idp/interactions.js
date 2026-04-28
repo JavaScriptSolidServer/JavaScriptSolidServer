@@ -329,9 +329,21 @@ export async function handleAbort(request, reply, provider) {
  * Handle GET /idp/register
  * Shows registration page
  */
-export async function handleRegisterGet(request, reply, inviteOnly = false) {
+export async function handleRegisterGet(request, reply, issuer, inviteOnly = false) {
   const uid = request.query.uid || null;
-  return reply.type('text/html').send(registerPage(uid, null, null, inviteOnly));
+  const ctx = previewContext(request, issuer);
+  return reply.type('text/html').send(registerPage(uid, null, null, inviteOnly, ctx));
+}
+
+// Live-preview context for the register page: lets the client-side script
+// build the WebID + storage URL the user is about to claim, before submit.
+function previewContext(request, issuer) {
+  const baseUri = (issuer || `${request.protocol}://${request.hostname}`).replace(/\/$/, '');
+  return {
+    baseUri,
+    subdomainsEnabled: !!request.subdomainsEnabled,
+    baseDomain: request.baseDomain || null,
+  };
 }
 
 /**
@@ -340,6 +352,7 @@ export async function handleRegisterGet(request, reply, inviteOnly = false) {
  */
 export async function handleRegisterPost(request, reply, issuer, inviteOnly = false) {
   const uid = request.query.uid || null;
+  const ctx = previewContext(request, issuer);
 
   // Parse body
   let parsedBody = request.body || {};
@@ -348,7 +361,7 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   if (Buffer.isBuffer(parsedBody)) {
     // Security: check body size
     if (parsedBody.length > MAX_BODY_SIZE) {
-      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly));
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly, ctx));
     }
     const bodyStr = parsedBody.toString();
     if (contentType.includes('application/json')) {
@@ -364,7 +377,7 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   } else if (typeof parsedBody === 'string') {
     // Security: check body size
     if (parsedBody.length > MAX_BODY_SIZE) {
-      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly));
+      return reply.code(413).type('text/html').send(registerPage(null, 'Request body exceeds maximum size.', null, inviteOnly, ctx));
     }
     const params = new URLSearchParams(parsedBody);
     parsedBody = Object.fromEntries(params.entries());
@@ -376,56 +389,74 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
   if (inviteOnly) {
     const inviteResult = await validateInvite(invite);
     if (!inviteResult.valid) {
-      return reply.code(403).type('text/html').send(registerPage(uid, inviteResult.error, null, inviteOnly));
+      return reply.code(403).type('text/html').send(registerPage(uid, inviteResult.error, null, inviteOnly, ctx));
     }
   }
 
   // Validate input
   if (!username || !password) {
-    return reply.type('text/html').send(registerPage(uid, 'Username and password are required', null, inviteOnly));
+    return reply.type('text/html').send(registerPage(uid, 'Username and password are required', null, inviteOnly, ctx));
   }
 
-  // Validate username format
-  const usernameRegex = /^[a-z0-9]+$/;
+  // Validate username format. Must start and end alphanumeric; the middle
+  // can contain dot, dash, underscore — covers `alice-smith`, `alice.smith`,
+  // `alice_work`, and so on. No leading/trailing separators (avoids the
+  // `.hidden` / trailing-dot footguns), no `..` (path traversal hygiene
+  // even though storage already guards against it).
+  //
+  // In subdomain mode the username becomes a single-level subdomain — DNS
+  // hostnames don't allow `.` or `_`, and `server.js` already refuses to
+  // route multi-level subdomains as pods. So we restrict to alphanumeric +
+  // hyphen there to keep the username and the pod actually addressable.
+  const subdomainMode = !!(request.subdomainsEnabled && request.baseDomain);
+  const usernameRegex = subdomainMode
+    ? /^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])?$/
+    : /^[a-z0-9]([a-z0-9._-]{1,30}[a-z0-9])?$/;
   if (!usernameRegex.test(username)) {
-    return reply.type('text/html').send(registerPage(uid, 'Username must contain only lowercase letters and numbers', null, inviteOnly));
+    const msg = subdomainMode
+      ? 'Username must be lowercase letters, numbers, or - (subdomain mode disallows . and _)'
+      : 'Username must be lowercase letters, numbers, or . _ - (start and end alphanumeric)';
+    return reply.type('text/html').send(registerPage(uid, msg, null, inviteOnly, ctx));
+  }
+  if (username.includes('..')) {
+    return reply.type('text/html').send(registerPage(uid, 'Username cannot contain ".."', null, inviteOnly, ctx));
   }
 
   if (username.length < 3) {
-    return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters', null, inviteOnly));
+    return reply.type('text/html').send(registerPage(uid, 'Username must be at least 3 characters', null, inviteOnly, ctx));
   }
 
   // Password strength validation
   if (password.length < 8) {
-    return reply.type('text/html').send(registerPage(uid, 'Password must be at least 8 characters', null, inviteOnly));
+    return reply.type('text/html').send(registerPage(uid, 'Password must be at least 8 characters', null, inviteOnly, ctx));
   }
 
   if (password !== confirmPassword) {
-    return reply.type('text/html').send(registerPage(uid, 'Passwords do not match', null, inviteOnly));
+    return reply.type('text/html').send(registerPage(uid, 'Passwords do not match', null, inviteOnly, ctx));
   }
 
   try {
-    // Build URLs - WebID follows standard Solid convention: /profile/card#me
+    // Build URLs. WebID is the JSON-LD profile with an #me fragment.
     const subdomainsEnabled = request.subdomainsEnabled;
     const baseDomain = request.baseDomain;
     const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
 
     let podUri, webId;
     if (subdomainsEnabled && baseDomain) {
-      // Subdomain mode: alice.example.com/profile/card#me
+      // Subdomain mode: alice.example.com/profile/card.jsonld#me
       podUri = `${request.protocol}://${username}.${baseDomain}/`;
-      webId = `${podUri}profile/card#me`;
+      webId = `${podUri}profile/card.jsonld#me`;
     } else {
-      // Path mode: example.com/alice/profile/card#me
+      // Path mode: example.com/alice/profile/card.jsonld#me
       podUri = `${baseUrl}/${username}/`;
-      webId = `${podUri}profile/card#me`;
+      webId = `${podUri}profile/card.jsonld#me`;
     }
 
     // Check if pod already exists
     const podPath = `${username}/`;
     const podExists = await storage.exists(podPath);
     if (podExists) {
-      return reply.type('text/html').send(registerPage(uid, 'Username is already taken', null, inviteOnly));
+      return reply.type('text/html').send(registerPage(uid, 'Username is already taken', null, inviteOnly, ctx));
     }
 
     // Create pod structure
@@ -445,11 +476,11 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
     if (uid) {
       return reply.redirect(`/idp/interaction/${uid}`);
     } else {
-      return reply.type('text/html').send(registerPage(null, null, `Account created! You can now sign in as "${username}".`, inviteOnly));
+      return reply.type('text/html').send(registerPage(null, null, `Account created! You can now sign in as "${username}".`, inviteOnly, ctx));
     }
   } catch (err) {
     request.log.error(err, 'Registration error');
-    return reply.type('text/html').send(registerPage(uid, err.message, null, inviteOnly));
+    return reply.type('text/html').send(registerPage(uid, err.message, null, inviteOnly, ctx));
   }
 }
 

@@ -6,14 +6,17 @@
  * Usage:
  *   jss start [options]    Start the server
  *   jss init               Initialize configuration
+ *   jss passwd <username>  Change user password
  */
 
 import { Command } from 'commander';
 import { createServer } from '../src/server.js';
 import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js';
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
+import { findByUsername, updatePassword, deleteAccount } from '../src/idp/accounts.js';
 import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
 import { parseSize } from '../src/config.js';
+import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -53,18 +56,24 @@ program
   .option('--subdomains', 'Enable subdomain-based pods (XSS protection)')
   .option('--no-subdomains', 'Disable subdomain-based pods')
   .option('--base-domain <domain>', 'Base domain for subdomain pods (e.g., "example.com")')
-  .option('--mashlib', 'Enable Mashlib data browser (local mode, requires mashlib in node_modules)')
-  .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode, no local files needed)')
+  .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode)')
   .option('--mashlib-module <url>', 'Enable ES module data browser from a URL')
   .option('--no-mashlib', 'Disable Mashlib data browser')
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
-  .option('--solidos-ui', 'Enable modern Nextcloud-style UI (requires --mashlib)')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
   .option('--nostr', 'Enable Nostr relay')
   .option('--no-nostr', 'Disable Nostr relay')
   .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
   .option('--nostr-max-events <n>', 'Max events in relay memory (default: 1000)', parseInt)
+  .option('--webrtc', 'Enable WebRTC signaling server')
+  .option('--no-webrtc', 'Disable WebRTC signaling server')
+  .option('--webrtc-path <path>', 'WebRTC signaling WebSocket path (default: /.webrtc)')
+  .option('--terminal', 'Enable WebSocket terminal (shell access)')
+  .option('--no-terminal', 'Disable WebSocket terminal')
+  .option('--tunnel', 'Enable tunnel proxy (decentralized ngrok)')
+  .option('--no-tunnel', 'Disable tunnel proxy')
+  .option('--tunnel-path <path>', 'Tunnel WebSocket path (default: /.tunnel)')
   .option('--activitypub', 'Enable ActivityPub federation')
   .option('--no-activitypub', 'Disable ActivityPub federation')
   .option('--ap-username <name>', 'ActivityPub username (default: me)')
@@ -75,6 +84,7 @@ program
   .option('--no-invite-only', 'Allow open registration')
   .option('--single-user', 'Single-user mode (creates pod on startup, disables registration)')
   .option('--single-user-name <name>', 'Username for single-user mode (default: me)')
+  .option('--single-user-password <pw>', 'Initial IDP password to seed when creating the single-user pod (or set JSS_SINGLE_USER_PASSWORD)')
   .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')
   .option('--public', 'Allow unauthenticated access (skip WAC, open read/write)')
@@ -137,11 +147,15 @@ program
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
         mashlibModule: config.mashlibModule,
-        solidosUi: config.solidosUi,
         git: config.git,
         nostr: config.nostr,
         nostrPath: config.nostrPath,
         nostrMaxEvents: config.nostrMaxEvents,
+        webrtc: config.webrtc,
+        webrtcPath: config.webrtcPath,
+        terminal: config.terminal,
+        tunnel: config.tunnel,
+        tunnelPath: config.tunnelPath,
         activitypub: config.activitypub,
         apUsername: config.apUsername,
         apDisplayName: config.apDisplayName,
@@ -151,6 +165,7 @@ program
         webidTls: config.webidTls,
         singleUser: config.singleUser,
         singleUserName: config.singleUserName,
+        singleUserPassword: config.singleUserPassword,
         public: config.public,
         readOnly: config.readOnly,
         liveReload: config.liveReload,
@@ -183,9 +198,11 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
-        if (config.solidosUi) console.log('  SolidOS UI: enabled (modern interface)');
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
+        if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
+        if (config.terminal) console.log('  Terminal: enabled (/.terminal)');
+        if (config.tunnel) console.log(`  Tunnel: enabled (${config.tunnelPath || '/.tunnel'})`);
         if (config.activitypub) console.log(`  ActivityPub: enabled (@${config.apUsername || 'me'})`);
         if (config.singleUser) console.log(`  Single-user: ${config.singleUserName || 'me'} (registration disabled)`);
         else if (config.inviteOnly) console.log('  Registration: invite-only');
@@ -312,7 +329,7 @@ const inviteCmd = program
 inviteCmd
   .command('create')
   .description('Create a new invite code')
-  .option('-u, --uses <number>', 'Maximum uses (default: 1)', parseInt, 1)
+  .option('-u, --uses <number>', 'Maximum uses (default: 1)', (v) => parseInt(v, 10), 1)
   .option('-n, --note <text>', 'Optional note/description')
   .option('-r, --root <path>', 'Data directory')
   .action(async (options) => {
@@ -607,6 +624,160 @@ tokenCmd
       process.exit(1);
     }
   });
+
+/**
+ * Passwd command - change a user's password
+ */
+program
+  .command('passwd <username>')
+  .description('Change password for a user account')
+  .option('-p, --password <password>', 'New password (non-interactive)')
+  .option('-g, --generate', 'Generate a random password')
+  .option('-r, --root <path>', 'Data directory')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const account = await findByUsername(username);
+      if (!account) {
+        console.error(`Error: User not found: ${username}`);
+        process.exit(1);
+      }
+
+      // Determine new password
+      let newPassword;
+
+      if (options.generate) {
+        newPassword = crypto.randomBytes(16).toString('base64url');
+      } else if (options.password) {
+        newPassword = options.password;
+      } else {
+        // Interactive prompt
+        newPassword = await promptPassword('New password: ');
+        const confirmation = await promptPassword('Confirm password: ');
+        if (newPassword !== confirmation) {
+          console.error('Error: Passwords do not match');
+          process.exit(1);
+        }
+      }
+
+      if (!newPassword) {
+        console.error('Error: Password cannot be empty');
+        process.exit(1);
+      }
+
+      await updatePassword(account.id, newPassword);
+
+      if (options.generate) {
+        console.log(`\nPassword updated for ${account.username}`);
+        console.log(`Generated password: ${newPassword}\n`);
+      } else {
+        console.log(`\nPassword updated for ${account.username}\n`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Account commands - manage user accounts
+ */
+const accountCmd = program
+  .command('account')
+  .description('Manage user accounts');
+
+accountCmd
+  .command('delete <username>')
+  .description('Delete a user account from the IdP')
+  .option('-r, --root <path>',  'Data directory')
+  .option('-y, --yes',          'Skip the confirmation prompt')
+  .option('--purge',            'Also delete pod data at <dataRoot>/<username>/')
+  .action(async (username, options) => {
+    try {
+      if (options.root) {
+        process.env.DATA_ROOT = path.resolve(options.root);
+      }
+
+      const account = await findByUsername(username);
+      if (!account) {
+        console.error(`Error: User not found: ${username}`);
+        process.exit(1);
+      }
+
+      if (!options.yes) {
+        const summary = `Delete account '${account.username}' (${account.webId})${options.purge ? ' AND purge pod data' : ''}?`;
+        const ok = await confirm(summary, false);
+        if (!ok) {
+          console.log('Cancelled.');
+          process.exit(0);
+        }
+      }
+
+      await deleteAccount(account.id);
+
+      if (options.purge) {
+        const dataRoot = process.env.DATA_ROOT || './data';
+        const podPath = path.join(dataRoot, account.username);
+        await fs.remove(podPath);
+        console.log(`\nDeleted account ${account.username}. Pod data removed from ${podPath}.\n`);
+      } else {
+        console.log(`\nDeleted account ${account.username}. Pod data preserved at <dataRoot>/${account.username}/ (use --purge to remove).\n`);
+      }
+    } catch (err) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
+    }
+  });
+
+/**
+ * Helper: Prompt for a password (hidden input)
+ */
+async function promptPassword(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise((resolve) => {
+    // Disable echo for password input
+    if (process.stdin.isTTY) {
+      process.stdout.write(`  ${question}`);
+      const stdin = process.openStdin();
+      process.stdin.setRawMode(true);
+      let password = '';
+      const onData = (ch) => {
+        const c = ch.toString('utf8');
+        if (c === '\n' || c === '\r' || c === '\u0004') {
+          process.stdin.setRawMode(false);
+          process.stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          rl.close();
+          resolve(password);
+        } else if (c === '\u0003') {
+          // Ctrl+C
+          process.exit(0);
+        } else if (c === '\u007f' || c === '\b') {
+          // Backspace
+          if (password.length > 0) {
+            password = password.slice(0, -1);
+          }
+        } else {
+          password += c;
+        }
+      };
+      process.stdin.on('data', onData);
+    } else {
+      // Non-TTY: read line normally (piped input)
+      rl.question(`  ${question}`, (answer) => {
+        rl.close();
+        resolve(answer.trim());
+      });
+    }
+  });
+}
 
 /**
  * Helper: Prompt for input

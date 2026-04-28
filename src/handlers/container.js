@@ -5,7 +5,7 @@ import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
-import { canAcceptInput, toJsonLd, getVaryHeader, RDF_TYPES } from '../rdf/conneg.js';
+import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 
 /**
@@ -138,10 +138,10 @@ export async function handlePost(request, reply) {
   const headers = getAllHeaders({
     isContainer: isCreatingContainer,
     origin,
-    connegEnabled
+    connegEnabled,
+    mashlibEnabled: request.mashlibEnabled
   });
   headers['Location'] = resourceUrl;
-  headers['Vary'] = getVaryHeader(connegEnabled);
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
@@ -165,28 +165,28 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   const podPath = `/${name}/`;
 
   // Create pod directory structure
-  // Uses 'Settings' (capital S) for mashlib compatibility
+  // Pod settings directory
   await storage.createContainer(podPath);
   await storage.createContainer(`${podPath}inbox/`);
   await storage.createContainer(`${podPath}public/`);
   await storage.createContainer(`${podPath}private/`);
-  await storage.createContainer(`${podPath}Settings/`);
+  await storage.createContainer(`${podPath}settings/`);
   await storage.createContainer(`${podPath}profile/`);
 
-  // Generate and write WebID profile at /profile/card (standard Solid location)
-  const profileHtml = generateProfile({ webId, name, podUri, issuer });
-  await storage.write(`${podPath}profile/card`, profileHtml);
+  // Generate and write WebID profile at /profile/card.jsonld
+  const profile = generateProfile({ webId, name, podUri, issuer });
+  await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
 
-  // Generate and write preferences (mashlib-compatible paths)
+  // Generate and write preferences
   const prefs = generatePreferences({ webId, podUri });
-  await storage.write(`${podPath}Settings/Preferences.ttl`, serialize(prefs));
+  await storage.write(`${podPath}settings/prefs.jsonld`, serialize(prefs));
 
-  // Generate and write type indexes with .ttl extension for mashlib
-  const publicTypeIndex = generateTypeIndex(`${podUri}Settings/publicTypeIndex.ttl`);
-  await storage.write(`${podPath}Settings/publicTypeIndex.ttl`, serialize(publicTypeIndex));
+  // Generate and write type indexes
+  const publicTypeIndex = generateTypeIndex(`${podUri}settings/publicTypeIndex.jsonld`, { listed: true });
+  await storage.write(`${podPath}settings/publicTypeIndex.jsonld`, serialize(publicTypeIndex));
 
-  const privateTypeIndex = generateTypeIndex(`${podUri}Settings/privateTypeIndex.ttl`);
-  await storage.write(`${podPath}Settings/privateTypeIndex.ttl`, serialize(privateTypeIndex));
+  const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
+  await storage.write(`${podPath}settings/privateTypeIndex.jsonld`, serialize(privateTypeIndex));
 
   // Create default ACL files
   // Pod root: owner full control, public read
@@ -197,9 +197,13 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
-  // Settings folder: owner only
-  const settingsAcl = generatePrivateAcl(`${podUri}Settings/`, webId);
-  await storage.write(`${podPath}Settings/.acl`, serializeAcl(settingsAcl));
+  // settings folder: owner only (contains private preferences)
+  const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+  await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
+
+  // publicTypeIndex: public read, overrides the private default inherited from /settings/
+  const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+  await storage.write(`${podPath}settings/publicTypeIndex.jsonld.acl`, serializeAcl(publicTypeIndexAcl));
 
   // Inbox: owner full, public append
   const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
@@ -229,13 +233,13 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
  *
  * Creates the following structure:
  *   /{name}/
- *   /{name}/profile/card     - WebID profile
- *   /{name}/inbox/           - Notifications
- *   /{name}/public/          - Public files
- *   /{name}/private/         - Private files
- *   /{name}/settings/prefs   - Preferences
- *   /{name}/settings/publicTypeIndex
- *   /{name}/settings/privateTypeIndex
+ *   /{name}/profile/card.jsonld          - WebID profile
+ *   /{name}/inbox/                       - Notifications
+ *   /{name}/public/                      - Public files
+ *   /{name}/private/                     - Private files
+ *   /{name}/settings/prefs.jsonld        - Preferences
+ *   /{name}/settings/publicTypeIndex.jsonld
+ *   /{name}/settings/privateTypeIndex.jsonld
  */
 export async function handleCreatePod(request, reply) {
   // Read-only mode - block pod creation
@@ -272,23 +276,22 @@ export async function handleCreatePod(request, reply) {
     return reply.code(409).send({ error: 'Pod already exists' });
   }
 
-  // Build URIs
-  // WebID follows standard Solid convention: /alice/profile/card#me
+  // Build URIs. WebID is the JSON-LD profile with an #me fragment.
   const subdomainsEnabled = request.subdomainsEnabled;
   const baseDomain = request.baseDomain;
 
   let baseUri, podUri, webId;
   if (subdomainsEnabled && baseDomain) {
-    // Subdomain mode: alice.example.com/profile/card#me
+    // Subdomain mode: alice.example.com/profile/card.jsonld#me
     const podHost = `${name}.${baseDomain}`;
     baseUri = `${request.protocol}://${baseDomain}`;
     podUri = `${request.protocol}://${podHost}/`;
-    webId = `${podUri}profile/card#me`;
+    webId = `${podUri}profile/card.jsonld#me`;
   } else {
-    // Path mode: example.com/alice/profile/card#me
+    // Path mode: example.com/alice/profile/card.jsonld#me
     baseUri = `${request.protocol}://${request.hostname}`;
     podUri = `${baseUri}${podPath}`;
-    webId = `${podUri}profile/card#me`;
+    webId = `${podUri}profile/card.jsonld#me`;
   }
 
   // Issuer needs trailing slash for CTH compatibility
@@ -310,16 +313,18 @@ export async function handleCreatePod(request, reply) {
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
 
-  // If IdP is enabled, create account instead of simple token
+  // If IdP is enabled, create account and return token + login URL
   if (idpEnabled) {
     try {
       const { createAccount } = await import('../idp/accounts.js');
       await createAccount({ username: name, email, password, webId, podName: name });
 
+      const token = createToken(webId);
       return reply.code(201).send({
         name,
         webId,
         podUri,
+        token,
         idpIssuer: issuer,
         loginUrl: `${baseUri}/idp/auth`,
       });

@@ -297,6 +297,70 @@ describe('Content Negotiation (conneg enabled)', () => {
         node['@type']?.includes('Authorization') || 
         node['@type'] === 'acl:Authorization'
       ), 'Should have Authorization nodes');
+  // Regression coverage for #294 — Solid convention dotfiles (.acl, .meta)
+  // were excluded from conneg because getContentType() returned
+  // application/octet-stream for them. Turtle-native clients (umai etc.)
+  // fetching <container>/.meta got JSON-LD back and errored on parse.
+  describe('Solid convention dotfiles (#294)', () => {
+    const metaData = {
+      '@context': { 'ldp': 'http://www.w3.org/ns/ldp#' },
+      '@id': '',
+      '@type': 'ldp:BasicContainer'
+    };
+
+    before(async () => {
+      // Write a JSON-LD .meta file (the format JSS writes internally).
+      await request('/connegtest/public/.meta', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(metaData),
+        auth: 'connegtest'
+      });
+    });
+
+    it('serves .meta as JSON-LD by default', async () => {
+      const res = await request('/connegtest/public/.meta', { auth: 'connegtest' });
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'application/ld+json');
+    });
+
+    it('serves .meta as Turtle when Accept: text/turtle (the umai case)', async () => {
+      const res = await request('/connegtest/public/.meta', {
+        headers: { 'Accept': 'text/turtle' },
+        auth: 'connegtest'
+      });
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'text/turtle');
+      const turtle = await res.text();
+      // First byte after the `@prefix` block must parse as Turtle,
+      // not '{' (the bug signature umai hit).
+      assert.ok(!turtle.trimStart().startsWith('{'),
+        `response looks like JSON, not Turtle: ${turtle.slice(0, 60)}`);
+    });
+
+    it('accepts Turtle PUT to .meta and round-trips to JSON-LD', async () => {
+      const turtle = `
+        @prefix ldp: <http://www.w3.org/ns/ldp#>.
+        <> a ldp:BasicContainer.
+      `;
+      const putRes = await request('/connegtest/public/.meta', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/turtle' },
+        body: turtle,
+        auth: 'connegtest'
+      });
+      assert.ok(putRes.status < 300, `PUT turtle should succeed, got ${putRes.status}`);
+
+      // Default GET now serves the converted-and-stored JSON-LD.
+      const getRes = await request('/connegtest/public/.meta', {
+        headers: { 'Accept': 'application/ld+json' },
+        auth: 'connegtest'
+      });
+      assertStatus(getRes, 200);
+      assertHeaderContains(getRes, 'Content-Type', 'application/ld+json');
+      const body = await getRes.json();
+      assert.ok(body['@context'] || body['@graph'] || body['@type'] || body['@id'],
+        'round-tripped JSON-LD should have at least one @-keyword');
     });
   });
 });
@@ -389,6 +453,98 @@ describe('Content Negotiation (conneg disabled - default)', () => {
         'Accept-Put should include application/ld+json');
       assert.ok(!acceptPut || !acceptPut.includes('text/turtle'),
         'Accept-Put should NOT include text/turtle when conneg disabled');
+    });
+  });
+});
+
+// Regression coverage for #325 — q-weighted Accept and HEAD/GET parity.
+// Previously the conneg dispatcher used naive substring matching on the
+// Accept header, so any Accept that mentioned text/turtle (even at q=0.1
+// alongside q=1.0 application/ld+json) returned Turtle. Separately, HEAD
+// on a container without an index.html hard-coded application/ld+json,
+// so HEAD and GET disagreed on content-type for the same URL.
+describe('Content Negotiation — q-weights and HEAD/GET parity (#325)', () => {
+  before(async () => {
+    await startTestServer({ conneg: true });
+    await createTestPod('qwtest');
+  });
+  after(async () => { await stopTestServer(); });
+
+  function ct(res) {
+    return (res.headers.get('content-type') || '').split(';')[0].trim();
+  }
+
+  describe('container — q-weight respected', () => {
+    it('Accept: jsonld q=1.0, turtle q=0.1 → JSON-LD', async () => {
+      const res = await request('/qwtest/', {
+        headers: { Accept: 'application/ld+json;q=1.0, text/turtle;q=0.1' }
+      });
+      assertStatus(res, 200);
+      assert.strictEqual(ct(res), 'application/ld+json');
+      const body = await res.text();
+      assert.ok(body.trimStart().startsWith('{'),
+        `body should be JSON, got: ${body.slice(0, 80)}`);
+    });
+
+    it('Accept: jsonld, turtle;q=0.5 → JSON-LD wins (downstream repro)', async () => {
+      const res = await request('/qwtest/', {
+        headers: { Accept: 'application/ld+json, text/turtle;q=0.5' }
+      });
+      assert.strictEqual(ct(res), 'application/ld+json');
+      const body = await res.text();
+      assert.ok(body.trimStart().startsWith('{'),
+        `body should be JSON, got: ${body.slice(0, 80)}`);
+    });
+
+    it('Accept: turtle (explicit) → Turtle', async () => {
+      const res = await request('/qwtest/', { headers: { Accept: 'text/turtle' } });
+      assert.strictEqual(ct(res), 'text/turtle');
+      const body = await res.text();
+      assert.ok(body.trimStart().startsWith('@prefix'),
+        `body should be Turtle, got: ${body.slice(0, 80)}`);
+    });
+
+    it('no Accept → JSON-LD (native default)', async () => {
+      const res = await request('/qwtest/');
+      assert.strictEqual(ct(res), 'application/ld+json');
+    });
+  });
+
+  describe('container — HEAD content-type matches GET', () => {
+    const cases = [
+      ['no Accept',         {}],
+      ['jsonld preferred',  { Accept: 'application/ld+json;q=1.0, text/turtle;q=0.1' }],
+      ['turtle preferred',  { Accept: 'text/turtle' }],
+      ['mixed (q=0.5)',     { Accept: 'application/ld+json, text/turtle;q=0.5' }]
+    ];
+    for (const [label, headers] of cases) {
+      it(`HEAD === GET content-type — ${label}`, async () => {
+        const get = await request('/qwtest/', { headers });
+        const head = await request('/qwtest/', { method: 'HEAD', headers });
+        assert.strictEqual(get.status, 200);
+        assert.strictEqual(head.status, 200);
+        assert.strictEqual(ct(head), ct(get),
+          `HEAD ct (${ct(head)}) must equal GET ct (${ct(get)}) for ${label}`);
+      });
+    }
+  });
+
+  describe('container — auth path matches anonymous', () => {
+    it('GET with auth returns same content-type as without auth (turtle case)', async () => {
+      const headers = { Accept: 'text/turtle' };
+      const anon = await request('/qwtest/', { headers });
+      const authed = await request('/qwtest/', { headers, auth: 'qwtest' });
+      assert.strictEqual(ct(anon), 'text/turtle');
+      assert.strictEqual(ct(authed), ct(anon),
+        'authenticated GET must report the same content-type as anonymous');
+    });
+
+    it('GET with auth returns same content-type as without auth (jsonld case)', async () => {
+      const headers = { Accept: 'application/ld+json;q=1.0, text/turtle;q=0.1' };
+      const anon = await request('/qwtest/', { headers });
+      const authed = await request('/qwtest/', { headers, auth: 'qwtest' });
+      assert.strictEqual(ct(anon), 'application/ld+json');
+      assert.strictEqual(ct(authed), ct(anon));
     });
   });
 });

@@ -9,7 +9,7 @@ import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
 import * as storage from '../storage/filesystem.js';
 import { getEffectiveUrlPath } from '../utils/url.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, generateSolidosUiHtml } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashlib/index.js';
 
 /**
  * Build a resource URL for WAC checking, normalizing path-based pod access
@@ -23,17 +23,24 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml, generateSolidos
  * @param {string} urlPath - URL path (e.g. /alice/public/file.ttl)
  * @returns {string} Normalized resource URL
  */
-function buildResourceUrl(request, urlPath) {
+export function buildResourceUrl(request, urlPath) {
+  // Use request.headers.host (includes port) instead of request.hostname (strips port)
+  const host = request.headers.host || request.hostname;
   if (request.subdomainsEnabled && request.baseDomain &&
       request.hostname === request.baseDomain && !request.podName) {
     const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
-    if (pathMatch && !pathMatch[1].startsWith('.')) {
+    // Treat a path segment as a pod name only if it looks like one:
+    //   - not a dotfile (.well-known, .acl, .meta, ...)
+    //   - no dot (pod names are DNS labels; file names have extensions)
+    // This avoids rewriting /mashlib.js to https://mashlib.js.basedomain/
+    // which would fail WAC against the base domain's ACL. (#307)
+    if (pathMatch && !pathMatch[1].startsWith('.') && !pathMatch[1].includes('.')) {
       const podName = pathMatch[1];
       const remainder = pathMatch[2] || '/';
       return `${request.protocol}://${podName}.${request.baseDomain}${remainder}`;
     }
   }
-  return `${request.protocol}://${request.hostname}${urlPath}`;
+  return `${request.protocol}://${host}${urlPath}`;
 }
 
 /**
@@ -102,7 +109,7 @@ export async function authorize(request, reply, options = {}) {
   }
 
   // Check WAC permissions
-  const { allowed, wacAllow } = await checkAccess({
+  const { allowed, wacAllow, paymentRequired, paid, balance, currency } = await checkAccess({
     resourceUrl: checkUrl,
     resourcePath: checkPath,
     isContainer: checkIsContainer,
@@ -110,7 +117,7 @@ export async function authorize(request, reply, options = {}) {
     requiredMode
   });
 
-  return { authorized: allowed, webId, wacAllow, authError };
+  return { authorized: allowed, webId, wacAllow, authError, paymentRequired, paid, balance, currency };
 }
 
 /**
@@ -148,12 +155,9 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     // If mashlib is enabled, serve mashlib instead of static error page
     // Mashlib has built-in login functionality via panes.runDataBrowser()
     if (request.mashlibEnabled) {
-      // Use SolidOS UI if enabled, ES module if configured, otherwise classic mashlib
-      const html = request.solidosUiEnabled
-        ? generateSolidosUiHtml()
-        : request.mashlibModule
-          ? generateModuleDatabrowserHtml(request.mashlibModule)
-          : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
+      const html = request.mashlibModule
+        ? generateModuleDatabrowserHtml(request.mashlibModule)
+        : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
       return reply.code(statusCode).type('text/html').send(html);
     }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
@@ -183,7 +187,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
     ? "This resource is protected. You'll need to sign in to continue."
     : "You're signed in, but you don't have permission to view this resource.";
 
-  const baseUrl = `${request.protocol}://${request.hostname}`;
+  const baseUrl = `${request.protocol}://${request.headers.host || request.hostname}`;
 
   return `<!DOCTYPE html>
 <html lang="en">
