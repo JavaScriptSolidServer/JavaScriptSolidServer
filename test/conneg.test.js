@@ -198,6 +198,73 @@ describe('Content Negotiation (conneg enabled)', () => {
     });
   });
 
+  // Regression coverage for #294 — Solid convention dotfiles (.acl, .meta)
+  // were excluded from conneg because getContentType() returned
+  // application/octet-stream for them. Turtle-native clients (umai etc.)
+  // fetching <container>/.meta got JSON-LD back and errored on parse.
+  describe('Solid convention dotfiles (#294)', () => {
+    const metaData = {
+      '@context': { 'ldp': 'http://www.w3.org/ns/ldp#' },
+      '@id': '',
+      '@type': 'ldp:BasicContainer'
+    };
+
+    before(async () => {
+      // Write a JSON-LD .meta file (the format JSS writes internally).
+      await request('/connegtest/public/.meta', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(metaData),
+        auth: 'connegtest'
+      });
+    });
+
+    it('serves .meta as JSON-LD by default', async () => {
+      const res = await request('/connegtest/public/.meta', { auth: 'connegtest' });
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'application/ld+json');
+    });
+
+    it('serves .meta as Turtle when Accept: text/turtle (the umai case)', async () => {
+      const res = await request('/connegtest/public/.meta', {
+        headers: { 'Accept': 'text/turtle' },
+        auth: 'connegtest'
+      });
+      assertStatus(res, 200);
+      assertHeaderContains(res, 'Content-Type', 'text/turtle');
+      const turtle = await res.text();
+      // First byte after the `@prefix` block must parse as Turtle,
+      // not '{' (the bug signature umai hit).
+      assert.ok(!turtle.trimStart().startsWith('{'),
+        `response looks like JSON, not Turtle: ${turtle.slice(0, 60)}`);
+    });
+
+    it('accepts Turtle PUT to .meta and round-trips to JSON-LD', async () => {
+      const turtle = `
+        @prefix ldp: <http://www.w3.org/ns/ldp#>.
+        <> a ldp:BasicContainer.
+      `;
+      const putRes = await request('/connegtest/public/.meta', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/turtle' },
+        body: turtle,
+        auth: 'connegtest'
+      });
+      assert.ok(putRes.status < 300, `PUT turtle should succeed, got ${putRes.status}`);
+
+      // Default GET now serves the converted-and-stored JSON-LD.
+      const getRes = await request('/connegtest/public/.meta', {
+        headers: { 'Accept': 'application/ld+json' },
+        auth: 'connegtest'
+      });
+      assertStatus(getRes, 200);
+      assertHeaderContains(getRes, 'Content-Type', 'application/ld+json');
+      const body = await getRes.json();
+      assert.ok(body['@context'] || body['@graph'] || body['@type'] || body['@id'],
+        'round-tripped JSON-LD should have at least one @-keyword');
+    });
+  });
+
   describe('ACL conneg (#327 regression)', () => {
     before(async () => {
       const baseUrl = getBaseUrl();
@@ -297,70 +364,6 @@ describe('Content Negotiation (conneg enabled)', () => {
         node['@type']?.includes('Authorization') || 
         node['@type'] === 'acl:Authorization'
       ), 'Should have Authorization nodes');
-  // Regression coverage for #294 — Solid convention dotfiles (.acl, .meta)
-  // were excluded from conneg because getContentType() returned
-  // application/octet-stream for them. Turtle-native clients (umai etc.)
-  // fetching <container>/.meta got JSON-LD back and errored on parse.
-  describe('Solid convention dotfiles (#294)', () => {
-    const metaData = {
-      '@context': { 'ldp': 'http://www.w3.org/ns/ldp#' },
-      '@id': '',
-      '@type': 'ldp:BasicContainer'
-    };
-
-    before(async () => {
-      // Write a JSON-LD .meta file (the format JSS writes internally).
-      await request('/connegtest/public/.meta', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/ld+json' },
-        body: JSON.stringify(metaData),
-        auth: 'connegtest'
-      });
-    });
-
-    it('serves .meta as JSON-LD by default', async () => {
-      const res = await request('/connegtest/public/.meta', { auth: 'connegtest' });
-      assertStatus(res, 200);
-      assertHeaderContains(res, 'Content-Type', 'application/ld+json');
-    });
-
-    it('serves .meta as Turtle when Accept: text/turtle (the umai case)', async () => {
-      const res = await request('/connegtest/public/.meta', {
-        headers: { 'Accept': 'text/turtle' },
-        auth: 'connegtest'
-      });
-      assertStatus(res, 200);
-      assertHeaderContains(res, 'Content-Type', 'text/turtle');
-      const turtle = await res.text();
-      // First byte after the `@prefix` block must parse as Turtle,
-      // not '{' (the bug signature umai hit).
-      assert.ok(!turtle.trimStart().startsWith('{'),
-        `response looks like JSON, not Turtle: ${turtle.slice(0, 60)}`);
-    });
-
-    it('accepts Turtle PUT to .meta and round-trips to JSON-LD', async () => {
-      const turtle = `
-        @prefix ldp: <http://www.w3.org/ns/ldp#>.
-        <> a ldp:BasicContainer.
-      `;
-      const putRes = await request('/connegtest/public/.meta', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'text/turtle' },
-        body: turtle,
-        auth: 'connegtest'
-      });
-      assert.ok(putRes.status < 300, `PUT turtle should succeed, got ${putRes.status}`);
-
-      // Default GET now serves the converted-and-stored JSON-LD.
-      const getRes = await request('/connegtest/public/.meta', {
-        headers: { 'Accept': 'application/ld+json' },
-        auth: 'connegtest'
-      });
-      assertStatus(getRes, 200);
-      assertHeaderContains(getRes, 'Content-Type', 'application/ld+json');
-      const body = await getRes.json();
-      assert.ok(body['@context'] || body['@graph'] || body['@type'] || body['@id'],
-        'round-tripped JSON-LD should have at least one @-keyword');
     });
   });
 });
@@ -548,3 +551,4 @@ describe('Content Negotiation — q-weights and HEAD/GET parity (#325)', () => {
     });
   });
 });
+
