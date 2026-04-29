@@ -423,8 +423,8 @@ function getErrorPage(statusCode, isAuthenticated, request) {
     </div>
 
     <p class="footer">
-      Powered by <a href="https://sandy-mount.com">Sandymount</a> •
-      <a href="https://solidproject.org">Learn about Solid</a>
+      Powered by <a href="https://jss.live/">JSS</a> •
+      <a href="https://jss.live/docs/">Docs</a>
     </p>
   </div>
 </body>
