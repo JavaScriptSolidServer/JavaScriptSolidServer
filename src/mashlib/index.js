@@ -6,38 +6,232 @@
  * we return this wrapper which then fetches and renders the data.
  */
 
-/**
- * Generate Mashlib databrowser HTML
- *
- * @param {string} resourceUrl - The URL of the resource being viewed (unused, kept for API compatibility)
- * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
- * @returns {string} HTML content
- */
 export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
   if (cdnVersion) {
-    // CDN mode - use script.onload to ensure mashlib is fully loaded before init
-    // This avoids race conditions with defer + DOMContentLoaded
+    // CDN mode: load the matching mashlib databrowser shell template from CDN,
+    // then load CSS/JS from the same version while staying on this origin.
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
-    return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
-<link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody"><header id="PageHeader"></header>
-<div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
-<footer id="PageFooter"></footer>
+    return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>SolidOS Web App</title></head>
+<body id="PageBody"><p>Loading Mashlib…</p>
 <script>
 (function() {
-  var s = document.createElement('script');
-  s.src = '${cdnBase}/mashlib.min.js';
-  s.onload = function() { panes.runDataBrowser(); };
-  s.onerror = function() { document.body.innerHTML = '<p>Failed to load Mashlib from CDN</p>'; };
-  document.head.appendChild(s);
+  var cdnBase = '${cdnBase}';
+
+  (function cleanupRefreshParam() {
+    try {
+      var current = new URL(window.location.href);
+      if (current.searchParams.has('_jssr')) {
+        current.searchParams.delete('_jssr');
+        var next = current.pathname + (current.search ? current.search : '') + (current.hash ? current.hash : '');
+        window.history.replaceState(window.history.state, '', next);
+      }
+      sessionStorage.removeItem('jssAuthRefreshPending');
+    } catch {}
+  })();
+
+  function showError(message) {
+    document.body.innerHTML = '<p>' + message + '</p>';
+  }
+
+  function ensureStylesheet(href) {
+    var existing = document.querySelector('link[rel="stylesheet"][href="' + href + '"]');
+    if (existing) return;
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
+
+  function loadScript(src, onload, onerror) {
+    var script = document.createElement('script');
+    script.src = src;
+    script.onload = onload;
+    script.onerror = onerror;
+    document.head.appendChild(script);
+  }
+
+  function installAuthReloadFallback() {
+    if (window.__jssAuthReloadInstalled) return;
+
+    var installed = false;
+    function hardRefresh() {
+      try {
+        if (sessionStorage.getItem('jssAuthRefreshPending') === '1') return;
+        sessionStorage.setItem('jssAuthRefreshPending', '1');
+      } catch {}
+      var url = new URL(window.location.href);
+      url.searchParams.set('_jssr', String(Date.now()));
+      // Use navigation (not reload) to avoid serving a stale cached shell.
+      window.location.replace(url.toString());
+    }
+
+    document.addEventListener('account-menu-select', function(e) {
+      try {
+        var detail = e && e.detail;
+        if (detail && detail.action === 'logout') {
+          setTimeout(hardRefresh, 30);
+        }
+      } catch {}
+    }, true);
+
+    var attach = function() {
+      var authSession = window.SolidLogic && window.SolidLogic.authSession;
+      if (!authSession || !authSession.events || installed) return;
+
+      installed = true;
+      window.__jssAuthReloadInstalled = true;
+
+      var safeReload = function() {
+        // Keep this as a server-side safety net until client lifecycle
+        // handles logout rerender consistently.
+        hardRefresh();
+      };
+
+      authSession.events.on('logout', safeReload);
+    };
+
+    var attempts = 0;
+    var timer = setInterval(function() {
+      attempts += 1;
+      attach();
+      if (window.__jssAuthReloadInstalled || attempts > 30) {
+        clearInterval(timer);
+      }
+    }, 200);
+  }
+
+  function applyShellFromTemplate(htmlText) {
+    var parsed = new DOMParser().parseFromString(htmlText, 'text/html');
+
+    if (parsed.title) {
+      document.title = parsed.title;
+    }
+
+    if (parsed.body) {
+      var attrs = Array.from(parsed.body.attributes || []);
+      document.body.innerHTML = parsed.body.innerHTML;
+      for (var i = 0; i < attrs.length; i++) {
+        document.body.setAttribute(attrs[i].name, attrs[i].value);
+      }
+    }
+  }
+
+  function fetchFirst(urls) {
+    var i = 0;
+    function next() {
+      if (i >= urls.length) {
+        return Promise.reject(new Error('No shell template found on CDN'));
+      }
+      var url = urls[i++];
+      return fetch(url, { cache: 'no-store' }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      }).catch(function() {
+        return next();
+      });
+    }
+    return next();
+  }
+
+  var shellCandidates = [
+    cdnBase + '/databrowser.html'
+  ];
+
+  fetchFirst(shellCandidates)
+    .then(function(shellHtml) {
+      applyShellFromTemplate(shellHtml);
+      ensureStylesheet(cdnBase + '/mash.css');
+      loadScript(
+        cdnBase + '/mashlib.min.js',
+        function() {
+          installAuthReloadFallback();
+          if (window.panes && typeof window.panes.runDataBrowser === 'function') {
+            window.panes.runDataBrowser();
+          } else {
+            showError('Mashlib loaded but panes.runDataBrowser is unavailable');
+          }
+        },
+        function() { showError('Failed to load Mashlib from CDN'); }
+      );
+    })
+    .catch(function() {
+      showError('Failed to load Mashlib shell from CDN');
+    });
 })();
 </script></body></html>`;
   }
 
   // Local mode - use defer (reliable when served locally)
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
-        panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody"><header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>
+      (function() {
+        (function cleanupRefreshParam() {
+          try {
+            var current = new URL(window.location.href);
+            if (current.searchParams.has('_jssr')) {
+              current.searchParams.delete('_jssr');
+              var next = current.pathname + (current.search ? current.search : '') + (current.hash ? current.hash : '');
+              window.history.replaceState(window.history.state, '', next);
+            }
+            sessionStorage.removeItem('jssAuthRefreshPending');
+          } catch {}
+        })();
+
+        function installAuthReloadFallback() {
+          if (window.__jssAuthReloadInstalled) return;
+
+          var installed = false;
+          function hardRefresh() {
+            try {
+              if (sessionStorage.getItem('jssAuthRefreshPending') === '1') return;
+              sessionStorage.setItem('jssAuthRefreshPending', '1');
+            } catch {}
+            var url = new URL(window.location.href);
+            url.searchParams.set('_jssr', String(Date.now()));
+            // Use navigation (not reload) to avoid serving a stale cached shell.
+            window.location.replace(url.toString());
+          }
+
+          document.addEventListener('account-menu-select', function(e) {
+            try {
+              var detail = e && e.detail;
+              if (detail && detail.action === 'logout') {
+                setTimeout(hardRefresh, 30);
+              }
+            } catch {}
+          }, true);
+
+          var attach = function() {
+            var authSession = window.SolidLogic && window.SolidLogic.authSession;
+            if (!authSession || !authSession.events || installed) return;
+
+            installed = true;
+            window.__jssAuthReloadInstalled = true;
+
+            var safeReload = function() {
+              // Keep this as a server-side safety net until client lifecycle
+              // handles logout rerender consistently.
+              hardRefresh();
+            };
+
+            authSession.events.on('logout', safeReload);
+          };
+
+          var attempts = 0;
+          var timer = setInterval(function() {
+            attempts += 1;
+            attach();
+            if (window.__jssAuthReloadInstalled || attempts > 30) {
+              clearInterval(timer);
+            }
+          }, 200);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+          panes.runDataBrowser();
+          installAuthReloadFallback();
+        });
+      })();
+      </script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody"><header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
