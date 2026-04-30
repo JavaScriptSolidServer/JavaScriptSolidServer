@@ -294,7 +294,9 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('rejects text/n3 PUT to .acl with 415', async () => {
@@ -306,7 +308,9 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('rejects text/plain PUT to .acl with 415 (URL-extension protection)', async () => {
@@ -318,7 +322,9 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
@@ -331,7 +337,9 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {
@@ -474,7 +482,9 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('rejects text/plain PUT to .acl with 415', async () => {
@@ -486,7 +496,9 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
@@ -499,7 +511,9 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/json');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/json');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {

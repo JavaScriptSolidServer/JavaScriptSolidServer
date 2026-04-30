@@ -636,8 +636,8 @@ export async function handlePut(request, reply) {
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: connegEnabled
-        ? 'Supported types: application/ld+json, text/turtle, text/n3'
-        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+        ? 'Supported types: application/ld+json, application/json, text/turtle, text/n3'
+        : 'Supported types: application/ld+json, application/json (enable conneg for Turtle support)'
     });
   }
 
