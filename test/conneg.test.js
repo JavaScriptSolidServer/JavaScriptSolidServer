@@ -320,9 +320,11 @@ describe('Content Negotiation (conneg enabled)', () => {
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
+      // Use Uint8Array body so fetch() doesn't auto-set Content-Type
+      // (which it does for string bodies: text/plain;charset=UTF-8).
       const res = await request('/connegtest/public/no-ct-reject.acl', {
         method: 'PUT',
-        body: 'arbitrary bytes',
+        body: new Uint8Array([1, 2, 3, 4]),
         auth: 'connegtest'
       });
       assertStatus(res, 415);
@@ -470,9 +472,11 @@ describe('Content Negotiation (conneg disabled - default)', () => {
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
+      // Use Uint8Array body so fetch() doesn't auto-set Content-Type
+      // (which it does for string bodies: text/plain;charset=UTF-8).
       const res = await request('/noconneg/public/no-ct-reject.acl', {
         method: 'PUT',
-        body: 'arbitrary bytes',
+        body: new Uint8Array([1, 2, 3, 4]),
         auth: 'noconneg'
       });
       assertStatus(res, 415);
