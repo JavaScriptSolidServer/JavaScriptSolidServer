@@ -624,8 +624,7 @@ export async function handlePut(request, reply) {
   const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
   if (urlPath.endsWith('.acl') && !isJsonLd) {
     reply.header('Accept', 'application/ld+json, application/json');
-    reply.header('Accept-Post', 'application/ld+json, application/json');
-    reply.header('Accept-Patch', 'application/ld+json, application/json');
+    reply.header('Accept-Put', 'application/ld+json, application/json');
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: 'ACL resources must be sent as application/ld+json or application/json.'

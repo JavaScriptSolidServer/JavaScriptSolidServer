@@ -294,8 +294,7 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
-      assertHeaderContains(res, 'Accept-Post', 'application/ld+json');
-      assertHeaderContains(res, 'Accept-Patch', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('rejects text/n3 PUT to .acl with 415', async () => {
