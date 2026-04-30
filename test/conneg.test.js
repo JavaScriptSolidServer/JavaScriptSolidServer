@@ -262,9 +262,10 @@ describe('Content Negotiation (conneg enabled)', () => {
     });
   });
 
-  // ACL resources require application/ld+json on PUT regardless of conneg
-  // setting: round-trip serialization between JSON-LD and Turtle has known
-  // limitations that can cause data loss. See #295.
+  // ACL resources require a JSON-LD payload (application/ld+json or
+  // application/json) on PUT regardless of conneg setting: round-trip
+  // serialization between JSON-LD and Turtle has known limitations
+  // that can cause data loss. See #295.
   describe('ACL content-type guard (#295)', () => {
     const aclJsonLd = {
       '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
@@ -292,9 +293,9 @@ describe('Content Negotiation (conneg enabled)', () => {
         auth: 'connegtest'
       });
       assertStatus(res, 415);
-      assertHeader(res, 'Accept', 'application/ld+json');
-      assertHeader(res, 'Accept-Post', 'application/ld+json');
-      assertHeader(res, 'Accept-Patch', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Post', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Patch', 'application/ld+json');
     });
 
     it('rejects text/n3 PUT to .acl with 415', async () => {
@@ -305,7 +306,7 @@ describe('Content Negotiation (conneg enabled)', () => {
         auth: 'connegtest'
       });
       assertStatus(res, 415);
-      assertHeader(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
     });
 
     it('rejects text/plain PUT to .acl with 415 (URL-extension protection)', async () => {
@@ -316,7 +317,17 @@ describe('Content Negotiation (conneg enabled)', () => {
         auth: 'connegtest'
       });
       assertStatus(res, 415);
-      assertHeader(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
+    });
+
+    it('rejects PUT to .acl with no Content-Type with 415', async () => {
+      const res = await request('/connegtest/public/no-ct-reject.acl', {
+        method: 'PUT',
+        body: 'arbitrary bytes',
+        auth: 'connegtest'
+      });
+      assertStatus(res, 415);
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {
@@ -429,6 +440,66 @@ describe('Content Negotiation (conneg disabled - default)', () => {
         'Accept-Put should include application/ld+json');
       assert.ok(!acceptPut || !acceptPut.includes('text/turtle'),
         'Accept-Put should NOT include text/turtle when conneg disabled');
+    });
+  });
+
+  // The .acl content-type guard applies regardless of conneg setting (#295).
+  // The default deployment configuration is conneg disabled, so ensure the
+  // guard fires there too.
+  describe('ACL content-type guard (#295) — conneg disabled', () => {
+    it('rejects text/turtle PUT to .acl with 415', async () => {
+      const turtle = `@prefix acl: <http://www.w3.org/ns/auth/acl#>. <#x> a acl:Authorization.`;
+      const res = await request('/noconneg/public/turtle-reject.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/turtle' },
+        body: turtle,
+        auth: 'noconneg'
+      });
+      assertStatus(res, 415);
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
+    });
+
+    it('rejects text/plain PUT to .acl with 415', async () => {
+      const res = await request('/noconneg/public/plain-reject.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'arbitrary text',
+        auth: 'noconneg'
+      });
+      assertStatus(res, 415);
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
+    });
+
+    it('rejects PUT to .acl with no Content-Type with 415', async () => {
+      const res = await request('/noconneg/public/no-ct-reject.acl', {
+        method: 'PUT',
+        body: 'arbitrary bytes',
+        auth: 'noconneg'
+      });
+      assertStatus(res, 415);
+      assertHeaderContains(res, 'Accept', 'application/ld+json');
+    });
+
+    it('accepts application/ld+json PUT to .acl', async () => {
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': '#me' },
+            'acl:accessTo': { '@id': './' },
+            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }]
+          }
+        ]
+      };
+      const res = await request('/noconneg/public/jsonld-accept.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'noconneg'
+      });
+      assert.ok(res.status < 300, `JSON-LD PUT to .acl should succeed, got ${res.status}`);
     });
   });
 });

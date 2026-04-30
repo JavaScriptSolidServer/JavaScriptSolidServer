@@ -614,19 +614,21 @@ export async function handlePut(request, reply) {
 
   const contentType = request.headers['content-type'] || '';
 
-  // ACL resources require application/ld+json: round-trip serialization
-  // between JSON-LD and Turtle representations has limitations that can
-  // cause data loss when a client PUTs Turtle and later requests Turtle.
-  // Other RDF resources are unaffected.
+  // ACL resources require a JSON-LD payload (application/ld+json or
+  // application/json). Round-trip serialization between JSON-LD and
+  // Turtle representations has limitations that can cause data loss
+  // when a client PUTs Turtle and later requests Turtle.
+  // Other RDF resources are unaffected. The guard fires regardless
+  // of conneg setting and also when Content-Type is missing.
   const ctMain = contentType.split(';')[0].trim().toLowerCase();
   const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
-  if (urlPath.endsWith('.acl') && contentType && !isJsonLd) {
-    reply.header('Accept', 'application/ld+json');
-    reply.header('Accept-Post', 'application/ld+json');
-    reply.header('Accept-Patch', 'application/ld+json');
+  if (urlPath.endsWith('.acl') && !isJsonLd) {
+    reply.header('Accept', 'application/ld+json, application/json');
+    reply.header('Accept-Post', 'application/ld+json, application/json');
+    reply.header('Accept-Patch', 'application/ld+json, application/json');
     return reply.code(415).send({
       error: 'Unsupported Media Type',
-      message: 'ACL resources must be sent as application/ld+json.'
+      message: 'ACL resources must be sent as application/ld+json or application/json.'
     });
   }
 
