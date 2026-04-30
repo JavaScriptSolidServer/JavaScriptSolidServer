@@ -515,6 +515,8 @@ export function consentPage(uid, client, params, account) {
         <button type="submit" class="btn btn-primary">Allow Access</button>
       </form>
 
+      <a href="/idp/interaction/${uid}/relogin" class="btn btn-secondary">Sign in as different user</a>
+
       <form method="POST" action="/idp/interaction/${uid}/abort">
         <button type="submit" class="btn btn-secondary">Deny</button>
       </form>

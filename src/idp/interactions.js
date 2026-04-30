@@ -28,8 +28,8 @@ export async function handleInteractionGet(request, reply, provider) {
 
     const { prompt, params, session } = interaction;
 
-    // If we need login
-    if (prompt.name === 'login') {
+    // If we need login, or consent has no account bound (after relogin)
+    if (prompt.name === 'login' || (prompt.name === 'consent' && !session?.accountId)) {
       return reply.type('text/html').send(loginPage(uid, params.client_id, interaction.lastError));
     }
 
@@ -155,81 +155,27 @@ export async function handleLogin(request, reply, provider) {
       },
     };
 
-    // Save the login result to the interaction
+    // Save the login result to the interaction.
+    // The result is stored here; oidc-provider will read it when we redirect
+    // back to the authorization endpoint via returnTo.
+    const returnTo = interaction.returnTo;
     interaction.result = result;
     await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
 
-    // For browsers (mashlib, etc): do a proper HTTP redirect
+    // For browsers: redirect to the authorization endpoint so oidc-provider
+    // can complete the flow. Avoids reply.hijack() + interactionFinished()
+    // which could hang the response if the provider throws internally.
     if (wantsBrowserRedirect) {
-      reply.hijack();
-      return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+      return reply.redirect(returnTo);
     }
 
     // For CTH and programmatic clients: return JSON with location
     // CTH expects a 200 response with "location" in body (CSS v3+ style)
-    try {
-      reply.hijack();
-
-      // Create a mock response that captures the redirect and returns JSON
-      let capturedLocation = null;
-      let headersSent = false;
-      const mockRes = {
-        statusCode: 200,
-        headersSent: false,
-        setHeader: (name, value) => {
-          if (name.toLowerCase() === 'location') {
-            capturedLocation = value;
-          }
-          return mockRes;
-        },
-        getHeader: (name) => {
-          if (name.toLowerCase() === 'location') return capturedLocation;
-          return undefined;
-        },
-        removeHeader: () => mockRes,
-        writeHead: (status, headers) => {
-          if (headers) {
-            if (typeof headers === 'object' && !Array.isArray(headers)) {
-              for (const [key, value] of Object.entries(headers)) {
-                if (key.toLowerCase() === 'location') {
-                  capturedLocation = value;
-                }
-              }
-            }
-          }
-          return mockRes;
-        },
-        write: () => mockRes,
-        end: (body) => {
-          if (!headersSent) {
-            headersSent = true;
-            const location = capturedLocation || `/idp/auth/${uid}`;
-            reply.raw.writeHead(200, {
-              'Content-Type': 'application/json',
-              'Location': location,
-            });
-            reply.raw.end(JSON.stringify({ location }));
-          }
-        },
-        finished: false,
-        on: () => mockRes,
-        once: () => mockRes,
-        emit: () => mockRes,
-      };
-
-      await provider.interactionFinished(request.raw, mockRes, result, { mergeWithLastSubmission: false });
-      return;
-    } catch (err) {
-      request.log.warn({ err: err.message, errName: err.name, uid }, 'interactionFinished failed, using fallback');
-
-      // Fallback: return the redirect URL for manual following
-      const redirectTo = `/idp/auth/${uid}`;
-      return reply
-        .code(200)
-        .header('Location', redirectTo)
-        .type('application/json')
-        .send({ location: redirectTo });
-    }
+    return reply
+      .code(200)
+      .header('Location', returnTo)
+      .type('application/json')
+      .send({ location: returnTo });
   } catch (err) {
     request.log.error(err, 'Login error');
     return reply.code(500).type('text/html').send(errorPage('Login failed', err.message));
@@ -321,6 +267,37 @@ export async function handleAbort(request, reply, provider) {
     return reply.redirect(redirectTo);
   } catch (err) {
     request.log.error(err, 'Abort error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
+ * Handle GET /idp/interaction/:uid/relogin
+ * Clears the selected account for this interaction to allow switching WebID.
+ */
+export async function handleRelogin(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This login session has expired. Please try again.'));
+    }
+
+    if (interaction.session && interaction.session.accountId) {
+      delete interaction.session.accountId;
+    }
+
+    if (interaction.result && interaction.result.login) {
+      delete interaction.result.login;
+    }
+
+    interaction.lastError = null;
+    await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+
+    return reply.redirect(`/idp/interaction/${uid}`);
+  } catch (err) {
+    request.log.error(err, 'Relogin error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
   }
 }
