@@ -306,6 +306,7 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('rejects text/plain PUT to .acl with 415 (URL-extension protection)', async () => {
@@ -317,6 +318,7 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
@@ -329,6 +331,7 @@ describe('Content Negotiation (conneg enabled)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {
@@ -448,6 +451,19 @@ describe('Content Negotiation (conneg disabled - default)', () => {
   // The default deployment configuration is conneg disabled, so ensure the
   // guard fires there too.
   describe('ACL content-type guard (#295) — conneg disabled', () => {
+    const aclJsonLd = {
+      '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+      '@graph': [
+        {
+          '@id': '#owner',
+          '@type': 'acl:Authorization',
+          'acl:agent': { '@id': '#me' },
+          'acl:accessTo': { '@id': './' },
+          'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }]
+        }
+      ]
+    };
+
     it('rejects text/turtle PUT to .acl with 415', async () => {
       const turtle = `@prefix acl: <http://www.w3.org/ns/auth/acl#>. <#x> a acl:Authorization.`;
       const res = await request('/noconneg/public/turtle-reject.acl', {
@@ -458,6 +474,7 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('rejects text/plain PUT to .acl with 415', async () => {
@@ -469,6 +486,7 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
@@ -481,28 +499,27 @@ describe('Content Negotiation (conneg disabled - default)', () => {
       });
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
+      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {
-      const acl = {
-        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
-        '@graph': [
-          {
-            '@id': '#owner',
-            '@type': 'acl:Authorization',
-            'acl:agent': { '@id': '#me' },
-            'acl:accessTo': { '@id': './' },
-            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }]
-          }
-        ]
-      };
       const res = await request('/noconneg/public/jsonld-accept.acl', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/ld+json' },
-        body: JSON.stringify(acl),
+        body: JSON.stringify(aclJsonLd),
         auth: 'noconneg'
       });
       assert.ok(res.status < 300, `JSON-LD PUT to .acl should succeed, got ${res.status}`);
+    });
+
+    it('accepts application/json PUT to .acl', async () => {
+      const res = await request('/noconneg/public/json-accept.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(aclJsonLd),
+        auth: 'noconneg'
+      });
+      assert.ok(res.status < 300, `application/json PUT to .acl should succeed, got ${res.status}`);
     });
   });
 });
