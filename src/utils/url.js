@@ -149,6 +149,33 @@ export function getResourceName(urlPath) {
 }
 
 /**
+ * Extract the hostname-only part of a baseDomain that may include a port.
+ * Used for routing comparisons against request.hostname (which never has port).
+ *
+ * Examples:
+ *   'example.com'        → 'example.com'
+ *   'example.com:3100'   → 'example.com'
+ *   '[::1]:3100'         → '[::1]'
+ *
+ * @param {string} baseDomain - The configured baseDomain (may include :port)
+ * @returns {string}
+ */
+export function getBaseDomainHost(baseDomain) {
+  if (!baseDomain) return baseDomain;
+  // Bracketed IPv6
+  if (baseDomain.startsWith('[')) {
+    const end = baseDomain.indexOf(']');
+    return end === -1 ? baseDomain : baseDomain.slice(0, end + 1);
+  }
+  const colon = baseDomain.lastIndexOf(':');
+  if (colon === -1) return baseDomain;
+  // Only strip if what follows is a port number
+  const maybePort = baseDomain.slice(colon + 1);
+  return /^\d+$/.test(maybePort) ? baseDomain.slice(0, colon) : baseDomain;
+}
+
+
+/**
  * Extract pod name from URL path or request
  *
  * Resolves to one of four shapes, by deployment mode:

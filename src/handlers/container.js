@@ -282,7 +282,8 @@ export async function handleCreatePod(request, reply) {
 
   let baseUri, podUri, webId;
   if (subdomainsEnabled && baseDomain) {
-    // Subdomain mode: alice.example.com/profile/card.jsonld#me
+    // Subdomain mode: alice.example.com:port/profile/card.jsonld#me
+    // baseDomain may include port (e.g. "example.com:3100")
     const podHost = `${name}.${baseDomain}`;
     baseUri = `${request.protocol}://${baseDomain}`;
     podUri = `${request.protocol}://${podHost}/`;

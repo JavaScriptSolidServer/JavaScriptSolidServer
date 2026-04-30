@@ -205,11 +205,12 @@ export function createServer(options = {}) {
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {
-      const host = request.hostname;
-      // Check if host is a subdomain of baseDomain
-      if (host !== baseDomain && host.endsWith('.' + baseDomain)) {
+      const host = request.hostname; // hostname never includes port
+      const baseDomainHost = baseDomain.includes(':') ? baseDomain.slice(0, baseDomain.lastIndexOf(':')) : baseDomain;
+      // Check if host is a subdomain of baseDomain (hostname part only)
+      if (host !== baseDomainHost && host.endsWith('.' + baseDomainHost)) {
         // Extract subdomain (e.g., "alice.example.com" -> "alice")
-        const subdomain = host.slice(0, -(baseDomain.length + 1));
+        const subdomain = host.slice(0, -(baseDomainHost.length + 1));
         // Only single-level subdomains (no dots)
         if (!subdomain.includes('.')) {
           request.podName = subdomain;
