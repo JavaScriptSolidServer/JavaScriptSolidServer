@@ -261,6 +261,84 @@ describe('Content Negotiation (conneg enabled)', () => {
         'round-tripped JSON-LD should have at least one @-keyword');
     });
   });
+
+  // ACL resources require application/ld+json on PUT regardless of conneg
+  // setting: round-trip serialization between JSON-LD and Turtle has known
+  // limitations that can cause data loss. See #295.
+  describe('ACL content-type guard (#295)', () => {
+    const aclJsonLd = {
+      '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+      '@graph': [
+        {
+          '@id': '#owner',
+          '@type': 'acl:Authorization',
+          'acl:agent': { '@id': '#me' },
+          'acl:accessTo': { '@id': './' },
+          'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }]
+        }
+      ]
+    };
+
+    it('rejects text/turtle PUT to .acl with 415', async () => {
+      const turtle = `
+        @prefix acl: <http://www.w3.org/ns/auth/acl#>.
+        <#owner> a acl:Authorization;
+          acl:mode acl:Read.
+      `;
+      const res = await request('/connegtest/public/turtle-reject.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/turtle' },
+        body: turtle,
+        auth: 'connegtest'
+      });
+      assertStatus(res, 415);
+      assertHeader(res, 'Accept', 'application/ld+json');
+      assertHeader(res, 'Accept-Post', 'application/ld+json');
+      assertHeader(res, 'Accept-Patch', 'application/ld+json');
+    });
+
+    it('rejects text/n3 PUT to .acl with 415', async () => {
+      const res = await request('/connegtest/public/n3-reject.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/n3' },
+        body: '@prefix acl: <http://www.w3.org/ns/auth/acl#>. <#x> a acl:Authorization.',
+        auth: 'connegtest'
+      });
+      assertStatus(res, 415);
+      assertHeader(res, 'Accept', 'application/ld+json');
+    });
+
+    it('rejects text/plain PUT to .acl with 415 (URL-extension protection)', async () => {
+      const res = await request('/connegtest/public/plain-reject.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        body: 'arbitrary text',
+        auth: 'connegtest'
+      });
+      assertStatus(res, 415);
+      assertHeader(res, 'Accept', 'application/ld+json');
+    });
+
+    it('accepts application/ld+json PUT to .acl', async () => {
+      const res = await request('/connegtest/public/jsonld-accept.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(aclJsonLd),
+        auth: 'connegtest'
+      });
+      assert.ok(res.status < 300, `JSON-LD PUT to .acl should succeed, got ${res.status}`);
+    });
+
+    it('accepts application/json PUT to .acl', async () => {
+      const res = await request('/connegtest/public/json-accept.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(aclJsonLd),
+        auth: 'connegtest'
+      });
+      assert.ok(res.status < 300, `application/json PUT to .acl should succeed, got ${res.status}`);
+    });
+  });
 });
 
 describe('Content Negotiation (conneg disabled - default)', () => {
