@@ -193,6 +193,34 @@ describe('Content Negotiation (conneg enabled)', () => {
       assert.ok(acceptPost && acceptPost.includes('text/turtle'),
         'Accept-Post should include text/turtle');
     });
+
+    it('should advertise N3 support in Accept-Put when conneg enabled', async () => {
+      const res = await request('/connegtest/public/alice.json');
+      const acceptPut = res.headers.get('Accept-Put');
+      assert.ok(acceptPut && acceptPut.includes('text/n3'),
+        'Accept-Put should include text/n3 (canAcceptInput accepts it under conneg)');
+    });
+
+    it('should advertise N3 support in Accept-Post for containers when conneg enabled', async () => {
+      const res = await request('/connegtest/public/');
+      const acceptPost = res.headers.get('Accept-Post');
+      assert.ok(acceptPost && acceptPost.includes('text/n3'),
+        'Accept-Post should include text/n3 (canAcceptInput accepts it under conneg)');
+    });
+
+    it('should advertise application/json in Accept-Put', async () => {
+      const res = await request('/connegtest/public/alice.json');
+      const acceptPut = res.headers.get('Accept-Put');
+      assert.ok(acceptPut && acceptPut.includes('application/json'),
+        'Accept-Put should include application/json (canAcceptInput treats it as a JSON-LD alias)');
+    });
+
+    it('should advertise application/json in Accept-Post for containers', async () => {
+      const res = await request('/connegtest/public/');
+      const acceptPost = res.headers.get('Accept-Post');
+      assert.ok(acceptPost && acceptPost.includes('application/json'),
+        'Accept-Post should include application/json (canAcceptInput treats it as a JSON-LD alias)');
+    });
   });
 
   // Regression coverage for #294 — Solid convention dotfiles (.acl, .meta)
@@ -452,6 +480,20 @@ describe('Content Negotiation (conneg disabled - default)', () => {
         'Accept-Put should include application/ld+json');
       assert.ok(!acceptPut || !acceptPut.includes('text/turtle'),
         'Accept-Put should NOT include text/turtle when conneg disabled');
+    });
+
+    it('should advertise application/json in Accept-Put when conneg disabled', async () => {
+      const res = await request('/noconneg/public/');
+      const acceptPut = res.headers.get('Accept-Put');
+      assert.ok(acceptPut && acceptPut.includes('application/json'),
+        'Accept-Put should include application/json (canAcceptInput treats it as a JSON-LD alias)');
+    });
+
+    it('should not advertise text/n3 in Accept-Put when conneg disabled', async () => {
+      const res = await request('/noconneg/public/');
+      const acceptPut = res.headers.get('Accept-Put');
+      assert.ok(!acceptPut || !acceptPut.includes('text/n3'),
+        'Accept-Put should NOT include text/n3 when conneg disabled');
     });
   });
 

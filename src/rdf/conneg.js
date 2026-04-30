@@ -207,21 +207,24 @@ export function getVaryHeader(connegEnabled, mashlibEnabled = false) {
 /**
  * Get Accept-* headers for responses.
  *
- * canAcceptInput() treats application/json as a JSON-LD alias, so it
- * is advertised alongside application/ld+json to match the actual
- * accepted set (clients can discover support consistently).
+ * Advertised types match canAcceptInput()'s accepted set so clients
+ * can discover support consistently:
+ *   - JSON-LD (application/ld+json) and JSON (application/json alias)
+ *     are advertised in all conneg modes.
+ *   - Turtle (text/turtle) and N3 (text/n3) are advertised only when
+ *     conneg is enabled (SUPPORTED_INPUT in this file).
  */
 export function getAcceptHeaders(connegEnabled, isContainer = false) {
   const headers = {};
 
   if (isContainer) {
     headers['Accept-Post'] = connegEnabled
-      ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, */*`
+      ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, ${RDF_TYPES.N3}, */*`
       : `${RDF_TYPES.JSON_LD}, application/json, */*`;
   }
 
   headers['Accept-Put'] = connegEnabled
-    ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, */*`
+    ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, ${RDF_TYPES.N3}, */*`
     : `${RDF_TYPES.JSON_LD}, application/json, */*`;
 
   headers['Accept-Patch'] = 'text/n3, application/sparql-update';
