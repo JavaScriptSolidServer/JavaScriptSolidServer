@@ -614,13 +614,35 @@ export async function handlePut(request, reply) {
 
   const contentType = request.headers['content-type'] || '';
 
+  // ACL resources require a JSON-LD payload (application/ld+json or
+  // application/json). Round-trip serialization between JSON-LD and
+  // Turtle representations has limitations that can cause data loss
+  // when a client PUTs Turtle and later requests Turtle.
+  // Other RDF resources are unaffected. The guard fires regardless
+  // of conneg setting and also when Content-Type is missing.
+  const ctMain = contentType.split(';')[0].trim().toLowerCase();
+  const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
+  if (urlPath.endsWith('.acl') && !isJsonLd) {
+    reply.header('Accept', 'application/ld+json, application/json');
+    reply.header('Accept-Put', 'application/ld+json, application/json');
+    return reply.code(415).send({
+      error: 'Unsupported Media Type',
+      message: 'ACL resources must be sent as application/ld+json or application/json.'
+    });
+  }
+
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {
+    const acceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    reply.header('Accept', acceptValue);
+    reply.header('Accept-Put', acceptValue);
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: connegEnabled
-        ? 'Supported types: application/ld+json, text/turtle, text/n3'
-        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+        ? 'Supported types: application/ld+json, application/json, text/turtle, text/n3'
+        : 'Supported types: application/ld+json, application/json (enable conneg for Turtle/N3 support)'
     });
   }
 

@@ -42,11 +42,16 @@ export async function handlePost(request, reply) {
 
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {
+    const acceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    reply.header('Accept', acceptValue);
+    reply.header('Accept-Post', acceptValue);
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: connegEnabled
-        ? 'Supported types: application/ld+json, text/turtle, text/n3'
-        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+        ? 'Supported types: application/ld+json, application/json, text/turtle, text/n3'
+        : 'Supported types: application/ld+json, application/json (enable conneg for Turtle/N3 support)'
     });
   }
 
