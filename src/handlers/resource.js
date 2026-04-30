@@ -633,6 +633,11 @@ export async function handlePut(request, reply) {
 
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {
+    const acceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    reply.header('Accept', acceptValue);
+    reply.header('Accept-Put', acceptValue);
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: connegEnabled
