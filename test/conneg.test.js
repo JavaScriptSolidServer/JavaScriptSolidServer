@@ -489,6 +489,13 @@ describe('Content Negotiation (conneg disabled - default)', () => {
         'Accept-Put should include application/json (canAcceptInput treats it as a JSON-LD alias)');
     });
 
+    it('should advertise application/json in Accept-Post when conneg disabled', async () => {
+      const res = await request('/noconneg/public/');
+      const acceptPost = res.headers.get('Accept-Post');
+      assert.ok(acceptPost && acceptPost.includes('application/json'),
+        'Accept-Post should include application/json (canAcceptInput treats it as a JSON-LD alias)');
+    });
+
     it('should not advertise text/n3 in Accept-Put when conneg disabled', async () => {
       const res = await request('/noconneg/public/');
       const acceptPut = res.headers.get('Accept-Put');
