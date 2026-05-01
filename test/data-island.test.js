@@ -97,6 +97,20 @@ describe('mashlib data island — emission (unit, #7)', () => {
     });
   }
 
+  it('accepts a Buffer payload (handler may pass storage.read() result directly)', () => {
+    // The src/handlers/resource.js path used to convert with .toString()
+    // before passing in; tightening that contract risks regressions, so
+    // the helper accepts a Buffer transparently.
+    const buf = Buffer.from('{"@id":"#me","foaf:name":"BufferAlice"}', 'utf8');
+    const html = generateDatabrowserHtml(
+      'https://x.test/r',
+      '2.0.0',
+      { embedJsonLd: buf }
+    );
+    assert.match(html, /id="dataisland"/);
+    assert.match(html, /"foaf:name":"BufferAlice"/);
+  });
+
   it('the module-mode wrapper also emits the data island', () => {
     const html = generateModuleDatabrowserHtml(
       'https://example.test/mashlib.js',

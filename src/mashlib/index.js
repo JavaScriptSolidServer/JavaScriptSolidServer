@@ -35,15 +35,15 @@ export const DATA_ISLAND_MAX_BYTES = 256 * 1024;
  * the literal `</script>` token is too narrow.
  *
  * The robust fix is to replace every literal `<` byte in the body with
- * the six-character JSON escape sequence `<` (a backslash, the
- * letter u, then four hex digits). JSON-LD is JSON, and a JSON parser
- * decodes `<` back to `<` natively, so the document's semantics
- * are preserved. After this transform the body literally cannot
- * contain a `<` byte — so no end-tag (or comment, CDATA, etc.) can
- * possibly start.
+ * the JSON string-escape for U+003C — the six characters
+ * backslash-u-0-0-3-c (the same form the implementation emits below).
+ * JSON-LD is JSON, and a JSON parser decodes that escape back to a
+ * literal `<` natively, so document semantics are preserved. After
+ * this transform the body literally cannot contain a `<` byte — so no
+ * end-tag (or comment, CDATA, etc.) can possibly start.
  */
 function escapeForScriptBlock(jsonLdString) {
-  return jsonLdString.replace(/</g, '\\u003c');
+  return String(jsonLdString).replace(/</g, '\\u003c');
 }
 
 /**
@@ -65,8 +65,9 @@ function dataIsland(resourceUrl, jsonLdString) {
  * @param {string} resourceUrl - The URL of the resource being viewed
  * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
  * @param {object} [opts]
- * @param {string} [opts.embedJsonLd] - JSON-LD bytes to inline as a
- *   `<script type="application/ld+json">` data island. Honors a 256 KB
+ * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body to inline
+ *   as a `<script type="application/ld+json">` data island. Accepts a
+ *   UTF-8 string or a Buffer (coerced via `String()`). Honors a 256 KB
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
  * @returns {string} HTML content
  */
@@ -104,8 +105,8 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
  * @param {string} moduleUrl - URL to the ES module entry point
  * @param {string} resourceUrl - The URL of the resource being viewed
  * @param {object} [opts]
- * @param {string} [opts.embedJsonLd] - JSON-LD bytes for the data
- *   island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
+ * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body for the
+ *   data island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
  * @returns {string} HTML content
  */
 export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts = {}) {
