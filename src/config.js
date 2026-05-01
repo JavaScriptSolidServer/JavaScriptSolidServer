@@ -324,6 +324,22 @@ export async function loadConfig(cliOptions = {}, configFile = null) {
     config.conneg = true;
   }
 
+  // Single-user mode strongly implies the built-in IdP. Operators seeding
+  // a password for `me` on localhost almost always want the IdP enabled
+  // so clients can authenticate. Imply --idp unless the user explicitly
+  // disabled it via --no-idp (see #331).
+  if (config.singleUser && !config.idp) {
+    if (cliOptions.idp === false) {
+      // User explicitly passed --no-idp. Respect their choice but warn:
+      // without the built-in IdP and without an external --idp-issuer,
+      // /.well-known/openid-configuration returns 404 and clients fail
+      // with confusing OIDC discovery errors.
+      console.warn('⚠️  --single-user is enabled but --idp is disabled. Clients won\'t be able to authenticate via the built-in IdP. Use --idp, or pass an external --idp-issuer.');
+    } else {
+      config.idp = true;
+    }
+  }
+
   // Validate SSL config
   if ((config.sslKey && !config.sslCert) || (!config.sslKey && config.sslCert)) {
     throw new Error('Both --ssl-key and --ssl-cert must be provided together');
