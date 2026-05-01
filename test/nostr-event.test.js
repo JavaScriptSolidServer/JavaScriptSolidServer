@@ -112,7 +112,7 @@ describe('nostr event utilities (#135)', () => {
       ['short pubkey',              () => { const e = valid(); e.pubkey = 'abcd'; return e; }],
       ['short sig',                 () => { const e = valid(); e.sig = 'abcd'; return e; }],
       ['kind not integer',          () => { const e = valid(); e.kind = 'one'; return e; }],
-      ['kind too big',              () => { const e = valid(); e.kind = 100000; return e; }],
+      ['kind negative',             () => { const e = valid(); e.kind = -1; return e; }],
       ['negative created_at',       () => { const e = valid(); e.created_at = -1; return e; }],
       ['content not string',        () => { const e = valid(); e.content = 123; return e; }],
       ['tags not array',            () => { const e = valid(); e.tags = 'oops'; return e; }],
@@ -126,6 +126,36 @@ describe('nostr event utilities (#135)', () => {
         assert.strictEqual(validateEvent(e), false);
       });
     }
+  });
+
+  describe('lenient input — round 2 fixes (#341 review)', () => {
+    it('accepts uppercase hex in id/pubkey/sig', () => {
+      const sk = generateSecretKey();
+      const event = finalizeEvent({ kind: 1, tags: [], content: 'x' }, sk);
+      // Uppercase variants of all three hex fields should still verify.
+      const upper = {
+        ...event,
+        id: event.id.toUpperCase(),
+        pubkey: event.pubkey.toUpperCase(),
+        sig: event.sig.toUpperCase()
+      };
+      assert.strictEqual(verifyEvent(upper), true,
+        'uppercase hex must verify (canonical lowercase elsewhere is policy, not protocol)');
+    });
+
+    it('accepts kinds above 65535 (NIP-01 has no 16-bit cap)', () => {
+      const sk = generateSecretKey();
+      const event = finalizeEvent({ kind: 30023, tags: [], content: 'long-form' }, sk);
+      assert.strictEqual(verifyEvent(event), true,
+        'kind 30023 (NIP-23 long-form content) must verify');
+    });
+
+    it('still rejects negative kinds', () => {
+      const sk = generateSecretKey();
+      const event = finalizeEvent({ kind: 1, tags: [], content: 'x' }, sk);
+      event.kind = -1;
+      assert.strictEqual(validateEvent(event), false);
+    });
   });
 
   describe('test helper parity with @noble/curves', () => {

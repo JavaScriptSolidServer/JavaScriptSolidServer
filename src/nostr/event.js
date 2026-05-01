@@ -15,8 +15,12 @@
 import { schnorr } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 
-const HEX_64 = /^[a-f0-9]{64}$/;
-const HEX_128 = /^[a-f0-9]{128}$/;
+// Hex is canonically lowercase in NIP-01/BIP-340 examples, but be lenient
+// on input — accepting uppercase keeps interop with implementations that
+// happen to emit either case. We normalize to lowercase for the hash
+// comparison below.
+const HEX_64 = /^[a-fA-F0-9]{64}$/;
+const HEX_128 = /^[a-fA-F0-9]{128}$/;
 
 /**
  * Compute the canonical NIP-01 event id.
@@ -47,7 +51,9 @@ export function validateEvent(event) {
   if (typeof event.id !== 'string' || !HEX_64.test(event.id)) return false;
   if (typeof event.pubkey !== 'string' || !HEX_64.test(event.pubkey)) return false;
   if (typeof event.sig !== 'string' || !HEX_128.test(event.sig)) return false;
-  if (!Number.isInteger(event.kind) || event.kind < 0 || event.kind > 65535) return false;
+  // NIP-01 doesn't cap kinds at 16 bits — many real kinds (10002, 30023,
+  // etc.) are above 65535. Accept any non-negative safe integer.
+  if (!Number.isSafeInteger(event.kind) || event.kind < 0) return false;
   if (!Number.isInteger(event.created_at) || event.created_at < 0) return false;
   if (typeof event.content !== 'string') return false;
   if (!Array.isArray(event.tags)) return false;
@@ -68,9 +74,19 @@ export function validateEvent(event) {
  */
 export function verifyEvent(event) {
   if (!validateEvent(event)) return false;
-  if (event.id !== getEventHash(event)) return false;
+  // Normalize the hex fields to lowercase for the canonical hash compare.
+  // The pubkey is part of the NIP-01 serialization, so if the caller
+  // supplied uppercase hex anywhere we'd recompute a different id unless
+  // we normalize first. We don't mutate the caller's object.
+  const normalized = {
+    ...event,
+    id: event.id.toLowerCase(),
+    pubkey: event.pubkey.toLowerCase(),
+    sig: event.sig.toLowerCase()
+  };
+  if (normalized.id !== getEventHash(normalized)) return false;
   try {
-    return schnorr.verify(event.sig, event.id, event.pubkey);
+    return schnorr.verify(normalized.sig, normalized.id, normalized.pubkey);
   } catch {
     return false;
   }

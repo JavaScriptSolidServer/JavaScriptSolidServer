@@ -9,16 +9,17 @@
  * `@noble/curves` Schnorr that production uses (#135).
  */
 
-import { schnorr } from '@noble/curves/secp256k1';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 import { randomBytes } from 'node:crypto';
 import { getEventHash } from '../../src/nostr/event.js';
 
 /** Generate a random 32-byte secp256k1 private key. */
 export function generateSecretKey() {
-  // schnorr.utils exposes a CSPRNG helper across noble versions; fall
-  // back to `crypto.randomBytes` if that surface ever changes.
-  if (schnorr.utils?.randomPrivateKey) {
-    return schnorr.utils.randomPrivateKey();
+  // Match the rest of the repo (see src/handlers/pay.js) which uses
+  // `secp256k1.utils.randomPrivateKey()`. Fall back to `crypto.randomBytes`
+  // only if that surface ever changes in @noble/curves.
+  if (secp256k1.utils?.randomPrivateKey) {
+    return secp256k1.utils.randomPrivateKey();
   }
   return new Uint8Array(randomBytes(32));
 }
