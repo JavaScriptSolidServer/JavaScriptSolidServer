@@ -52,15 +52,20 @@ describe('nostr event utilities (#135)', () => {
       assert.notStrictEqual(getEventHash({ ...event, tags: [['t']] }), baseline);
     });
 
-    it('lowercases pubkey internally (consistent with verifyEvent)', () => {
+    it('serializes pubkey verbatim (case-strict per NIP-01)', () => {
+      // NIP-01 specifies lowercase hex throughout. We don't normalize
+      // inside getEventHash — uppercase pubkey would produce a different
+      // hash, but validateEvent/verifyEvent reject uppercase before we
+      // get here, so callers never see the divergence in practice.
+      // Use a pubkey with hex letters so upper- and lower-case differ.
       const lower = {
-        pubkey: '0000000000000000000000000000000000000000000000000000000000000001',
+        pubkey: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
         created_at: 1, kind: 1, tags: [], content: ''
       };
       const upper = { ...lower, pubkey: lower.pubkey.toUpperCase() };
-      assert.strictEqual(
+      assert.notStrictEqual(
         getEventHash(lower), getEventHash(upper),
-        'pubkey case must not change the canonical hash'
+        'getEventHash is canonical: caller must supply lowercase'
       );
     });
   });
@@ -149,18 +154,17 @@ describe('nostr event utilities (#135)', () => {
   });
 
   describe('lenient input — round 2 fixes (#341 review)', () => {
-    it('accepts uppercase hex in id/pubkey/sig', () => {
+    it('rejects uppercase hex in id/pubkey/sig (NIP-01 is case-strict)', () => {
+      // We deliberately do NOT lenient-accept uppercase here — accepting
+      // would let an event verify but then miss case-sensitive downstream
+      // lookups (relay filter ID match, dedupe by pubkey, etc.). Strict
+      // at the gate keeps the rest of the codebase from having to remember
+      // to normalize.
       const sk = generateSecretKey();
       const event = finalizeEvent({ kind: 1, tags: [], content: 'x' }, sk);
-      // Uppercase variants of all three hex fields should still verify.
-      const upper = {
-        ...event,
-        id: event.id.toUpperCase(),
-        pubkey: event.pubkey.toUpperCase(),
-        sig: event.sig.toUpperCase()
-      };
-      assert.strictEqual(verifyEvent(upper), true,
-        'uppercase hex must verify (canonical lowercase elsewhere is policy, not protocol)');
+      assert.strictEqual(verifyEvent({ ...event, id: event.id.toUpperCase() }), false);
+      assert.strictEqual(verifyEvent({ ...event, pubkey: event.pubkey.toUpperCase() }), false);
+      assert.strictEqual(verifyEvent({ ...event, sig: event.sig.toUpperCase() }), false);
     });
 
     it('accepts kinds above 65535 (NIP-01 has no 16-bit cap)', () => {

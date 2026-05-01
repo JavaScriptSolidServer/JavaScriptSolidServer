@@ -1,8 +1,13 @@
 /**
  * NIP-01 / NIP-98 event utilities — verifier and signer.
  *
- * Pure-JS Nostr event tools using `@noble/curves` (a direct dependency,
- * audited by Trail of Bits) and Node's built-in `crypto` for SHA-256.
+ * Node-targeted: uses `node:crypto` (`createHash`) and `Buffer` for
+ * SHA-256 and base64. The crypto primitive (`@noble/curves` Schnorr)
+ * is itself runtime-portable, but this module is wired for Node and
+ * is what JSS runs on. Don't claim Workers/Deno portability without
+ * swapping `node:crypto` for `crypto.subtle` and `Buffer` for
+ * `btoa`/`TextEncoder`.
+ *
  * Replaces the `nostr-tools` dependency tree we previously pulled just
  * for a few functions (#135).
  *
@@ -21,33 +26,26 @@
 import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 
-// Hex is canonically lowercase in NIP-01/BIP-340 examples, but be lenient
-// on input — accepting uppercase keeps interop with implementations that
-// happen to emit either case. We normalize to lowercase for the hash
-// comparison below.
-const HEX_64 = /^[a-fA-F0-9]{64}$/;
-const HEX_128 = /^[a-fA-F0-9]{128}$/;
+// NIP-01 and BIP-340 specify hex fields in lowercase. We require it
+// strictly — accepting uppercase here would let an event verify but
+// then fail downstream case-sensitive lookups (e.g. relay filters
+// matching `event.id` exactly), so callers would have to remember to
+// normalize. Strict at the gate avoids that whole class of bug.
+const HEX_64 = /^[a-f0-9]{64}$/;
+const HEX_128 = /^[a-f0-9]{128}$/;
 
 /**
  * Compute the canonical NIP-01 event id.
  * Per NIP-01 the id is `sha256(JSON.stringify([0, pubkey, created_at,
- * kind, tags, content]))` with no whitespace, hex-encoded.
- *
- * `pubkey` is lowercased before serialization so the same id is produced
- * regardless of input case — keeps callers (including the "id missing"
- * branch in src/auth/nostr.js) consistent with `verifyEvent`'s
- * lowercase-normalized hash compare.
+ * kind, tags, content]))` with no whitespace, hex-encoded lowercase.
  *
  * @param {object} event - Event with pubkey/created_at/kind/tags/content
  * @returns {string} 64-char lowercase hex sha256 digest
  */
 export function getEventHash(event) {
-  const pubkey = typeof event.pubkey === 'string'
-    ? event.pubkey.toLowerCase()
-    : event.pubkey;
   const serialized = JSON.stringify([
     0,
-    pubkey,
+    event.pubkey,
     event.created_at,
     event.kind,
     event.tags,
@@ -88,10 +86,7 @@ export function validateEvent(event) {
  */
 export function verifyEvent(event) {
   if (!validateEvent(event)) return false;
-  // Compare the declared id (normalized to lowercase) against the
-  // canonical hash. `getEventHash` itself lowercases pubkey, so the
-  // caller's casing doesn't matter for the hash compare.
-  if (event.id.toLowerCase() !== getEventHash(event)) return false;
+  if (event.id !== getEventHash(event)) return false;
   try {
     return schnorr.verify(event.sig, event.id, event.pubkey);
   } catch {
