@@ -16,8 +16,26 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BIN = path.join(__dirname, '..', 'bin', 'jss.js');
 
+// Timeout cap so the suite can never hang if the validator regresses
+// and `start` actually tries to bind a port instead of exiting early.
+const RUN_TIMEOUT_MS = 10_000;
+
 function runCli(args) {
-  return spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [BIN, ...args], {
+    encoding: 'utf8',
+    timeout: RUN_TIMEOUT_MS,
+    killSignal: 'SIGKILL'
+  });
+  // spawnSync sets `signal` to the kill signal when timeout fires. Treat
+  // that as a hard test failure rather than letting downstream
+  // assertions on stderr accidentally pass.
+  assert.strictEqual(
+    r.signal, null,
+    `CLI did not exit within ${RUN_TIMEOUT_MS}ms — likely the preAction ` +
+    `validator regressed and \`start\` is actually trying to listen. ` +
+    `args: ${JSON.stringify(args)}; partial stderr: ${r.stderr}`
+  );
+  return r;
 }
 
 describe('bin/jss.js — flag-like option values (#103)', () => {
