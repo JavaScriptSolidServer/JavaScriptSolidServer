@@ -5,6 +5,7 @@
 
 import { authenticate, findById, findByWebId, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
 import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } from './views.js';
+import { createAdapter } from './adapter.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
@@ -12,6 +13,42 @@ import { verifyNostrAuth } from '../auth/nostr.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
+
+async function finishInteractionOrError(request, reply, provider, result, options = { mergeWithLastSubmission: false }) {
+  try {
+    reply.hijack();
+    await provider.interactionFinished(request.raw, reply.raw, result, options);
+  } catch (err) {
+    request.log.error({ err: err.message, uid: request.params?.uid }, 'interactionFinished failed');
+    if (!reply.raw.writableEnded) {
+      reply.raw.statusCode = 500;
+      reply.raw.setHeader('Content-Type', 'text/html; charset=utf-8');
+      reply.raw.end(errorPage('Error', 'Could not complete interaction. Please try again.'));
+    }
+  }
+}
+
+async function clearInteractionSession(interaction) {
+  const sessionCookie = interaction.session?.cookie;
+  if (!sessionCookie) return;
+
+  const sessionAdapter = createAdapter('Session');
+  const sessionData = await sessionAdapter.find(sessionCookie);
+  if (!sessionData) return;
+
+  delete sessionData.accountId;
+  delete sessionData.loginTs;
+  delete sessionData.amr;
+  delete sessionData.acr;
+  delete sessionData.transient;
+  sessionData.authorizations = {};
+
+  const expiresIn = sessionData._expiresAt
+    ? Math.max(1, Math.ceil((sessionData._expiresAt - Date.now()) / 1000))
+    : undefined;
+
+  await sessionAdapter.upsert(sessionCookie, sessionData, expiresIn);
+}
 
 /**
  * Handle GET /idp/interaction/:uid
@@ -156,17 +193,15 @@ export async function handleLogin(request, reply, provider) {
     };
 
     // Save the login result to the interaction.
-    // The result is stored here; oidc-provider will read it when we redirect
-    // back to the authorization endpoint via returnTo.
     const returnTo = interaction.returnTo;
     interaction.result = result;
     await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
 
-    // For browsers: redirect to the authorization endpoint so oidc-provider
-    // can complete the flow. Avoids reply.hijack() + interactionFinished()
-    // which could hang the response if the provider throws internally.
+    // For browsers: let oidc-provider finalize the interaction.
+    // This binds the authenticated account to the OIDC session.
     if (wantsBrowserRedirect) {
-      return reply.redirect(returnTo);
+      await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+      return;
     }
 
     // For CTH and programmatic clients: return JSON with location
@@ -227,16 +262,8 @@ export async function handleConsent(request, reply, provider) {
       },
     };
 
-    // Mark reply as sent since interactionFinished will handle the response
-    reply.hijack();
-
-    // Use interactionFinished which handles the redirect directly
-    return provider.interactionFinished(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: true }
-    );
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: true });
+    return;
   } catch (err) {
     request.log.error(err, 'Consent error');
     return reply.code(500).type('text/html').send(errorPage('Consent failed', err.message));
@@ -257,14 +284,8 @@ export async function handleAbort(request, reply, provider) {
     };
 
     // oidc-provider is configured with /idp routes, so redirectTo will have correct path
-    const redirectTo = await provider.interactionResult(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: false }
-    );
-
-    return reply.redirect(redirectTo);
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Abort error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -283,6 +304,8 @@ export async function handleRelogin(request, reply, provider) {
     if (!interaction) {
       return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This login session has expired. Please try again.'));
     }
+
+    await clearInteractionSession(interaction);
 
     if (interaction.session && interaction.session.accountId) {
       delete interaction.session.accountId;
@@ -506,8 +529,8 @@ export async function handlePasskeyComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Passkey login completed');
 
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Passkey complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -533,19 +556,23 @@ export async function handlePasskeySkip(request, reply, provider) {
     }
 
     // Get the pending login result
-    const result = interaction.result;
-    if (!result?.login?.accountId) {
+    const pending = interaction.result;
+    if (!pending?.login?.accountId) {
       return reply.code(400).type('text/html').send(errorPage('Invalid state', 'No pending login found.'));
     }
 
     // Mark passkey prompt as dismissed so we don't nag again
-    await setPasskeyPromptDismissed(result.login.accountId, true);
+    await setPasskeyPromptDismissed(pending.login.accountId, true);
 
-    request.log.info({ accountId: result.login.accountId, uid }, 'Passkey prompt skipped');
+    request.log.info({ accountId: pending.login.accountId, uid }, 'Passkey prompt skipped');
 
     // Complete the OIDC interaction
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    const result = {
+      login: pending.login,
+    };
+
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Passkey skip error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -661,8 +688,8 @@ export async function handleSchnorrComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Schnorr login completed');
 
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
+    await finishInteractionOrError(request, reply, provider, interaction.result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Schnorr complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
