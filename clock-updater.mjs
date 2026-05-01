@@ -3,8 +3,7 @@
  * Usage: node clock-updater.mjs
  */
 
-import { getPublicKey, finalizeEvent } from 'nostr-tools';
-import { getToken } from 'nostr-tools/nip98';
+import { getPublicKey, nip98Token } from './src/nostr/event.js';
 
 // Nostr keypair (in production, load from env/file)
 const SK_HEX = '3f188544fb81bd324ead7be9697fd9503d18345e233a7b0182915b0b582ddd70';
@@ -26,7 +25,11 @@ async function updateClock() {
   };
 
   try {
-    const token = await getToken(CLOCK_URL, 'PUT', (e) => finalizeEvent(e, sk));
+    // Serialize once: the same bytes feed both the NIP-98 payload hash
+    // and the fetch body. nip98Token requires bytes (not an object) so
+    // the `payload` tag matches what the server actually receives.
+    const bodyBytes = JSON.stringify(clockData);
+    const token = nip98Token(CLOCK_URL, 'PUT', sk, bodyBytes);
 
     const res = await fetch(CLOCK_URL, {
       method: 'PUT',
@@ -34,7 +37,7 @@ async function updateClock() {
         'Content-Type': 'application/ld+json',
         'Authorization': 'Nostr ' + token
       },
-      body: JSON.stringify(clockData)
+      body: bodyBytes
     });
 
     const time = isoDate.split('T')[1].replace('Z', '');
