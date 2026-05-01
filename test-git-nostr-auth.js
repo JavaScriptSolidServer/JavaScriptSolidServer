@@ -19,7 +19,10 @@
  */
 
 import { generateSecretKey, getPublicKey } from './test/helpers/nostr-event.js';
-import { bytesToHex } from '@noble/hashes/utils';
+
+// Avoid the @noble/hashes import here — Buffer does hex conversion natively
+// and keeps the script's import surface minimal.
+const bytesToHex = (bytes) => Buffer.from(bytes).toString('hex');
 import { execSync, spawn } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';
