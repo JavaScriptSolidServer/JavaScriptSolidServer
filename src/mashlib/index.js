@@ -25,19 +25,23 @@ export const DATA_ISLAND_MAX_BYTES = 256 * 1024;
 
 /**
  * Escape a JSON-LD body for safe inclusion inside `<script
- * type="application/ld+json">…</script>`. Browsers don't execute the
- * script (wrong MIME), but a literal `</script>` substring inside the
- * body would prematurely close the tag and let arbitrary subsequent
- * bytes be parsed as inline HTML. Replacing `<` with `<` (only
- * inside the script body) defeats that without changing the JSON-LD
- * semantics — `<` is just a unicode escape for `<`.
+ * type="application/ld+json">…</script>`.
+ *
+ * Browsers don't execute the script (wrong MIME), but the HTML parser
+ * still scans the body for an end-of-script tag. The relevant rule:
+ * any `</` followed by `script` (case-insensitive) terminates the
+ * element regardless of what follows — `</script>`, `</script >`,
+ * `</script\n>`, `</SCRIPT>` and friends all close it. Escaping just
+ * the literal `</script>` token is too narrow.
+ *
+ * The robust fix is to escape every `<` byte in the body to its
+ * JSON Unicode form `<`. JSON-LD is JSON, JSON parsers decode
+ * `<` back to `<` natively, so semantics are preserved. After
+ * this transform the body cannot contain `<` — so no end-tag (or
+ * comment, CDATA, etc.) can possibly start.
  */
 function escapeForScriptBlock(jsonLdString) {
-  // Targeted: only sequences that could close or open a tag inside
-  // the script body.
-  return jsonLdString
-    .replace(/<\/script>/gi, '<\\/script>')
-    .replace(/<!--/g, '\\u003c!--');
+  return jsonLdString.replace(/</g, '\\u003c');
 }
 
 /**
@@ -100,15 +104,20 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
  * Generate ES module-based databrowser HTML
  *
  * @param {string} moduleUrl - URL to the ES module entry point
+ * @param {string} resourceUrl - The URL of the resource being viewed
+ * @param {object} [opts]
+ * @param {string} [opts.embedJsonLd] - JSON-LD bytes for the data
+ *   island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
  * @returns {string} HTML content
  */
-export function generateModuleDatabrowserHtml(moduleUrl) {
+export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts = {}) {
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
+  const island = dataIsland(resourceUrl, opts.embedJsonLd);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
-<body><div id="mashlib"></div>
+<body>${island}<div id="mashlib"></div>
 <script type="module" src="${moduleUrl}"></script>
 </body></html>`;
 }

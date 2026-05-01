@@ -14,7 +14,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -245,7 +245,7 @@ export async function handleGet(request, reply) {
       // without a second request.
       const embedJsonLd = serializeJsonLd(jsonLd);
       const html = request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule)
+        ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
         : generateDatabrowserHtml(
           resourceUrl,
           request.mashlibCdn ? request.mashlibVersion : null,
@@ -332,13 +332,19 @@ export async function handleGet(request, reply) {
     // island when it's already JSON-LD (the JSS-native format). Other
     // formats are out of Phase-1 scope; the wrapper still loads
     // correctly and mashlib XHR-fetches as before.
+    //
+    // Cap-aware short-circuit: skip the read entirely when the file is
+    // already over the embed cap. The island would be dropped anyway,
+    // and large JSON-LD resources would otherwise load into memory on
+    // every HTML navigation.
     let embedJsonLd;
-    if (storedContentType === 'application/ld+json') {
+    if (storedContentType === 'application/ld+json' &&
+        stats.size <= DATA_ISLAND_MAX_BYTES) {
       const buf = await storage.read(storagePath);
       if (buf) embedJsonLd = buf.toString('utf8');
     }
     const html = request.mashlibModule
-      ? generateModuleDatabrowserHtml(request.mashlibModule)
+      ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
       : generateDatabrowserHtml(
         resourceUrl,
         request.mashlibCdn ? request.mashlibVersion : null,

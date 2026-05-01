@@ -26,6 +26,7 @@ import {
 } from './helpers.js';
 import {
   generateDatabrowserHtml,
+  generateModuleDatabrowserHtml,
   DATA_ISLAND_MAX_BYTES
 } from '../src/mashlib/index.js';
 
@@ -59,48 +60,50 @@ describe('mashlib data island — emission (unit, #7)', () => {
       'island must drop silently above DATA_ISLAND_MAX_BYTES');
   });
 
-  it('escapes `</script>` substrings so a malicious payload cannot close the tag', () => {
-    // A user could PUT JSON-LD whose content field contains a literal
-    // closing-script tag. Without escaping, this would terminate the
-    // script element early and let arbitrary subsequent bytes parse as
-    // inline HTML.
-    const trojan = '{"content":"oops</script><img src=x onerror=alert(1)>"}';
-    const html = generateDatabrowserHtml(
-      'https://x.test/r',
-      '2.0.0',
-      { embedJsonLd: trojan }
-    );
-    // The verbatim closing tag must not appear inside the script body.
-    // Find the start of the data-island script and check until its real end.
-    const start = html.indexOf('id="dataisland"');
-    assert.ok(start > 0, 'data island should be present');
-    const tail = html.slice(start);
-    // The escaped form must be present; the unescaped form must NOT
-    // appear before our intended `</script>` terminator. Simple check:
-    // the body should not contain `</script>` at all (escaped is `<\/script>`).
-    const bodyEnd = tail.indexOf('</script>');
-    const escapedHits = (tail.slice(0, bodyEnd).match(/<\\\/script>/g) || []).length;
-    assert.strictEqual(escapedHits, 1,
-      'the trojan </script> must be present in escaped form exactly once');
-    assert.doesNotMatch(tail.slice(0, bodyEnd), /<\/script>/,
-      'unescaped </script> must not appear inside the script body');
-    // And the image-payload portion must remain trapped inside the
-    // string; the parser should never see it as live HTML.
-    assert.match(tail, /onerror=alert\(1\)/);
-  });
+  // The escape strategy is "encode every `<` as <". Test the wide
+  // variety of strings that an HTML parser would otherwise treat as a
+  // closing tag — `</script>`, `</script >`, `</script\n>`,
+  // `</SCRIPT>`, `</scRIPT >` — plus `<!--`, all of which require a
+  // literal `<` to start the dangerous sequence. After escaping, no
+  // `<` exists in the body at all.
+  const escapeTrojans = [
+    ['exact </script>',      '{"x":"a</script>b"}'],
+    ['with space </script >', '{"x":"a</script >b"}'],
+    ['with newline </script\\n>', '{"x":"a</script\n>b"}'],
+    ['uppercase </SCRIPT>',  '{"x":"a</SCRIPT>b"}'],
+    ['mixed </ScRiPt>',      '{"x":"a</ScRiPt>b"}'],
+    ['<!-- comment',         '{"x":"<!-- hidden -->"}']
+  ];
+  for (const [label, body] of escapeTrojans) {
+    it(`escape blocks ${label} from prematurely terminating the tag`, () => {
+      const html = generateDatabrowserHtml(
+        'https://x.test/r',
+        '2.0.0',
+        { embedJsonLd: body }
+      );
+      const start = html.indexOf('id="dataisland"');
+      assert.ok(start > 0, 'data island should be present');
+      // Slice from the island's `>` (end of opening tag) forward.
+      const open = html.indexOf('>', start) + 1;
+      const close = html.indexOf('</script>', open);
+      const inner = html.slice(open, close);
+      // After our escape, the body must contain NO literal `<`.
+      assert.doesNotMatch(inner, /</,
+        `script body must not contain a literal "<" — got: ${JSON.stringify(inner)}`);
+      // The escaped form should be present (`<`).
+      assert.match(inner, /\\u003c/,
+        'escaped form `\\u003c` must appear');
+    });
+  }
 
-  it('escapes `<!--` so the body cannot start an HTML comment', () => {
-    const sneaky = '{"content":"<!-- hide me -->"}';
-    const html = generateDatabrowserHtml(
-      'https://x.test/r',
-      '2.0.0',
-      { embedJsonLd: sneaky }
+  it('the module-mode wrapper also emits the data island', () => {
+    const html = generateModuleDatabrowserHtml(
+      'https://example.test/mashlib.js',
+      'https://test.solid.social/profile/card.jsonld',
+      { embedJsonLd: '{"@id":"#me"}' }
     );
-    const start = html.indexOf('id="dataisland"');
-    const tail = html.slice(start);
-    const bodyEnd = tail.indexOf('</script>');
-    assert.doesNotMatch(tail.slice(0, bodyEnd), /<!--/,
-      'unescaped <!-- must not appear inside the script body');
+    assert.match(html, /<script type="application\/ld\+json" id="dataisland" data-uri="https:\/\/test\.solid\.social\/profile\/card\.jsonld">/);
+    assert.match(html, /"@id":"#me"/);
   });
 
   it('escapes the data-uri attribute against quote / angle-bracket injection', () => {
