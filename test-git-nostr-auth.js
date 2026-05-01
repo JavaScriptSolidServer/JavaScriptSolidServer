@@ -18,7 +18,7 @@
  * 6. Cleans up
  */
 
-import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
+import { generateSecretKey, getPublicKey } from './test/helpers/nostr-event.js';
 import { bytesToHex } from '@noble/hashes/utils';
 import { execSync, spawn } from 'child_process';
 import fs from 'fs-extra';

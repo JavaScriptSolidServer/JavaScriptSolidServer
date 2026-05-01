@@ -24,7 +24,10 @@ import {
 describe('nostr event utilities (#135)', () => {
   describe('getEventHash', () => {
     it('matches NIP-01 canonical serialization (sha256 of [0,pubkey,...])', () => {
-      // Pin a deterministic input so the hash function is locked in.
+      // Pin a deterministic input AND a precomputed digest so both the
+      // canonical serialization and the SHA-256 step are locked in.
+      // Recompute via:
+      //   echo -n '[0,"00...01",1000000,1,[],"hello"]' | sha256sum
       const event = {
         pubkey: '0000000000000000000000000000000000000000000000000000000000000001',
         created_at: 1000000,
@@ -32,16 +35,31 @@ describe('nostr event utilities (#135)', () => {
         tags: [],
         content: 'hello'
       };
-      const hash = getEventHash(event);
-      assert.match(hash, /^[a-f0-9]{64}$/);
+      const baseline = getEventHash(event);
+      assert.strictEqual(
+        baseline,
+        '01f1ec62e464146177ccfe8580ae050847b3cc48c7eca3e0678fc7b92cedfef0',
+        'NIP-01 canonical hash regression — change here means serialization or SHA-256 has shifted'
+      );
+      assert.match(baseline, /^[a-f0-9]{64}$/);
 
-      // Recompute via @noble/hashes path indirectly: any change to any
-      // field must yield a different hash.
-      const baseline = hash;
+      // Any change to any canonical field must yield a different hash.
       assert.notStrictEqual(getEventHash({ ...event, content: 'hello!' }), baseline);
       assert.notStrictEqual(getEventHash({ ...event, kind: 2 }), baseline);
       assert.notStrictEqual(getEventHash({ ...event, created_at: 1000001 }), baseline);
       assert.notStrictEqual(getEventHash({ ...event, tags: [['t']] }), baseline);
+    });
+
+    it('lowercases pubkey internally (consistent with verifyEvent)', () => {
+      const lower = {
+        pubkey: '0000000000000000000000000000000000000000000000000000000000000001',
+        created_at: 1, kind: 1, tags: [], content: ''
+      };
+      const upper = { ...lower, pubkey: lower.pubkey.toUpperCase() };
+      assert.strictEqual(
+        getEventHash(lower), getEventHash(upper),
+        'pubkey case must not change the canonical hash'
+      );
     });
   });
 

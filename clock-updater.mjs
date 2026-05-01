@@ -3,8 +3,7 @@
  * Usage: node clock-updater.mjs
  */
 
-import { getPublicKey, finalizeEvent } from 'nostr-tools';
-import { getToken } from 'nostr-tools/nip98';
+import { getPublicKey, nip98Token } from './test/helpers/nostr-event.js';
 
 // Nostr keypair (in production, load from env/file)
 const SK_HEX = '3f188544fb81bd324ead7be9697fd9503d18345e233a7b0182915b0b582ddd70';
@@ -26,7 +25,7 @@ async function updateClock() {
   };
 
   try {
-    const token = await getToken(CLOCK_URL, 'PUT', (e) => finalizeEvent(e, sk));
+    const token = nip98Token(CLOCK_URL, 'PUT', sk, clockData);
 
     const res = await fetch(CLOCK_URL, {
       method: 'PUT',

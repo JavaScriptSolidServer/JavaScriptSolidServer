@@ -10,8 +10,7 @@
  * 4. Verifies the did:nostr identity is recognized
  */
 
-import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools';
-import { getToken } from 'nostr-tools/nip98';
+import { generateSecretKey, getPublicKey, nip98Token } from './test/helpers/nostr-event.js';
 
 const BASE_URL = process.env.TEST_URL || 'http://localhost:4000';
 
@@ -32,7 +31,7 @@ async function main() {
 
   console.log(`2. Creating NIP-98 token for ${method} ${testUrl}`);
 
-  const token = await getToken(testUrl, method, (event) => finalizeEvent(event, sk));
+  const token = nip98Token(testUrl, method, sk);
 
   console.log(`   Token length: ${token.length} chars\n`);
 
@@ -74,7 +73,7 @@ async function main() {
   const containerUrl = `${BASE_URL}/demo/public/`;
 
   try {
-    const containerToken = await getToken(containerUrl, 'GET', (event) => finalizeEvent(event, sk));
+    const containerToken = nip98Token(containerUrl, 'GET', sk);
 
     const response = await fetch(containerUrl, {
       headers: {

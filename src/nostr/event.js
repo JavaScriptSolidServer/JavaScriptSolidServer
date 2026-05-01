@@ -27,13 +27,21 @@ const HEX_128 = /^[a-fA-F0-9]{128}$/;
  * Per NIP-01 the id is `sha256(JSON.stringify([0, pubkey, created_at,
  * kind, tags, content]))` with no whitespace, hex-encoded.
  *
+ * `pubkey` is lowercased before serialization so the same id is produced
+ * regardless of input case — keeps callers (including the "id missing"
+ * branch in src/auth/nostr.js) consistent with `verifyEvent`'s
+ * lowercase-normalized hash compare.
+ *
  * @param {object} event - Event with pubkey/created_at/kind/tags/content
  * @returns {string} 64-char lowercase hex sha256 digest
  */
 export function getEventHash(event) {
+  const pubkey = typeof event.pubkey === 'string'
+    ? event.pubkey.toLowerCase()
+    : event.pubkey;
   const serialized = JSON.stringify([
     0,
-    event.pubkey,
+    pubkey,
     event.created_at,
     event.kind,
     event.tags,
@@ -74,19 +82,12 @@ export function validateEvent(event) {
  */
 export function verifyEvent(event) {
   if (!validateEvent(event)) return false;
-  // Normalize the hex fields to lowercase for the canonical hash compare.
-  // The pubkey is part of the NIP-01 serialization, so if the caller
-  // supplied uppercase hex anywhere we'd recompute a different id unless
-  // we normalize first. We don't mutate the caller's object.
-  const normalized = {
-    ...event,
-    id: event.id.toLowerCase(),
-    pubkey: event.pubkey.toLowerCase(),
-    sig: event.sig.toLowerCase()
-  };
-  if (normalized.id !== getEventHash(normalized)) return false;
+  // Compare the declared id (normalized to lowercase) against the
+  // canonical hash. `getEventHash` itself lowercases pubkey, so the
+  // caller's casing doesn't matter for the hash compare.
+  if (event.id.toLowerCase() !== getEventHash(event)) return false;
   try {
-    return schnorr.verify(normalized.sig, normalized.id, normalized.pubkey);
+    return schnorr.verify(event.sig, event.id, event.pubkey);
   } catch {
     return false;
   }
