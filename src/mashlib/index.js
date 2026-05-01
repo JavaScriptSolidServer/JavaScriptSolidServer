@@ -4,23 +4,79 @@
  * Generates HTML wrapper that loads SolidOS Mashlib from CDN.
  * When a browser requests an RDF resource with Accept: text/html,
  * we return this wrapper which then fetches and renders the data.
+ *
+ * Phase 1 of #7: when the originating resource is reasonably small
+ * RDF, the JSON-LD bytes are embedded in the wrapper as a `<script
+ * type="application/ld+json" id="dataisland" data-uri="…">` block.
+ * Browsers ignore non-JS script bodies, so this is harmless to all
+ * existing clients (mashlib still XHR-fetches today). It immediately
+ * benefits anything that knows to look for `application/ld+json`
+ * islands — search engine rich-results, archival crawlers, scrapers,
+ * static-site exporters — and gives Phase 2 a zero-network fast path.
  */
+
+/**
+ * Cap on how much JSON-LD we'll inline. A 256 KB resource fits any
+ * realistic profile, type index, or container listing. Above that we
+ * drop the island and let the existing XHR path handle it so we don't
+ * make every navigation re-download a multi-megabyte resource.
+ */
+export const DATA_ISLAND_MAX_BYTES = 256 * 1024;
+
+/**
+ * Escape a JSON-LD body for safe inclusion inside `<script
+ * type="application/ld+json">…</script>`. Browsers don't execute the
+ * script (wrong MIME), but a literal `</script>` substring inside the
+ * body would prematurely close the tag and let arbitrary subsequent
+ * bytes be parsed as inline HTML. Replacing `<` with `<` (only
+ * inside the script body) defeats that without changing the JSON-LD
+ * semantics — `<` is just a unicode escape for `<`.
+ */
+function escapeForScriptBlock(jsonLdString) {
+  // Targeted: only sequences that could close or open a tag inside
+  // the script body.
+  return jsonLdString
+    .replace(/<\/script>/gi, '<\\/script>')
+    .replace(/<!--/g, '\\u003c!--');
+}
+
+/**
+ * Build the data-island `<script>` block for the given JSON-LD payload.
+ * Returns an empty string if the payload is missing or over the size
+ * cap so callers can unconditionally interpolate `dataIsland(...)`.
+ */
+function dataIsland(resourceUrl, jsonLdString) {
+  if (!jsonLdString) return '';
+  if (Buffer.byteLength(jsonLdString, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
+  const safeUri = String(resourceUrl)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const safeBody = escapeForScriptBlock(jsonLdString);
+  return `<script type="application/ld+json" id="dataisland" data-uri="${safeUri}">${safeBody}</script>`;
+}
 
 /**
  * Generate Mashlib databrowser HTML
  *
- * @param {string} resourceUrl - The URL of the resource being viewed (unused, kept for API compatibility)
+ * @param {string} resourceUrl - The URL of the resource being viewed
  * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
+ * @param {object} [opts]
+ * @param {string} [opts.embedJsonLd] - JSON-LD bytes to inline as a
+ *   `<script type="application/ld+json">` data island. Honors a 256 KB
+ *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
  * @returns {string} HTML content
  */
-export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
+export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {}) {
+  const island = dataIsland(resourceUrl, opts.embedJsonLd);
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
     return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
 <link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody"><header id="PageHeader"></header>
+<body id="PageBody">${island}<header id="PageHeader"></header>
 <div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
 <footer id="PageFooter"></footer>
 <script>
@@ -37,7 +93,7 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
   // Local mode - use defer (reliable when served locally)
   return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
         panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody"><header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**

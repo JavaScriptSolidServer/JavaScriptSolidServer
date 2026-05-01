@@ -238,9 +238,19 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+      // Phase 1 of #7: also embed the container's JSON-LD listing as a
+      // data island so consumers that look for `<script
+      // type="application/ld+json">` (search-engine rich-results,
+      // archival crawlers, future mashlib zero-fetch path) get the data
+      // without a second request.
+      const embedJsonLd = serializeJsonLd(jsonLd);
       const html = request.mashlibModule
         ? generateModuleDatabrowserHtml(request.mashlibModule)
-        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+        : generateDatabrowserHtml(
+          resourceUrl,
+          request.mashlibCdn ? request.mashlibVersion : null,
+          { embedJsonLd }
+        );
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -318,9 +328,22 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+    // Phase 1 of #7: embed the resource's JSON-LD bytes as a data
+    // island when it's already JSON-LD (the JSS-native format). Other
+    // formats are out of Phase-1 scope; the wrapper still loads
+    // correctly and mashlib XHR-fetches as before.
+    let embedJsonLd;
+    if (storedContentType === 'application/ld+json') {
+      const buf = await storage.read(storagePath);
+      if (buf) embedJsonLd = buf.toString('utf8');
+    }
     const html = request.mashlibModule
       ? generateModuleDatabrowserHtml(request.mashlibModule)
-      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+      : generateDatabrowserHtml(
+        resourceUrl,
+        request.mashlibCdn ? request.mashlibVersion : null,
+        { embedJsonLd }
+      );
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,
