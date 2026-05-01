@@ -4,7 +4,7 @@
 
 import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert';
-import { generateSecretKey, getPublicKey, finalizeEvent } from './helpers/nostr-event.js';
+import { generateSecretKey, getPublicKey, finalizeEvent } from '../src/nostr/event.js';
 import {
   startTestServer,
   stopTestServer,

@@ -10,7 +10,7 @@
  * 4. Verifies the did:nostr identity is recognized
  */
 
-import { generateSecretKey, getPublicKey, nip98Token } from './test/helpers/nostr-event.js';
+import { generateSecretKey, getPublicKey, nip98Token } from './src/nostr/event.js';
 
 const BASE_URL = process.env.TEST_URL || 'http://localhost:4000';
 

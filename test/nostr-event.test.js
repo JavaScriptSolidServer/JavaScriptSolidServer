@@ -14,12 +14,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { schnorr } from '@noble/curves/secp256k1';
 
-import { getEventHash, validateEvent, verifyEvent } from '../src/nostr/event.js';
 import {
+  getEventHash,
+  validateEvent,
+  verifyEvent,
   generateSecretKey,
   getPublicKey,
   finalizeEvent
-} from './helpers/nostr-event.js';
+} from '../src/nostr/event.js';
 
 describe('nostr event utilities (#135)', () => {
   describe('getEventHash', () => {

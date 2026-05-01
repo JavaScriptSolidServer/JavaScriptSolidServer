@@ -3,7 +3,7 @@
  * Usage: node clock-updater.mjs
  */
 
-import { getPublicKey, nip98Token } from './test/helpers/nostr-event.js';
+import { getPublicKey, nip98Token } from './src/nostr/event.js';
 
 // Nostr keypair (in production, load from env/file)
 const SK_HEX = '3f188544fb81bd324ead7be9697fd9503d18345e233a7b0182915b0b582ddd70';

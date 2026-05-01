@@ -18,7 +18,7 @@
  * 6. Cleans up
  */
 
-import { generateSecretKey, getPublicKey } from './test/helpers/nostr-event.js';
+import { generateSecretKey, getPublicKey } from './src/nostr/event.js';
 
 // Avoid the @noble/hashes import here — Buffer does hex conversion natively
 // and keeps the script's import surface minimal.

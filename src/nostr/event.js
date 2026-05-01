@@ -1,18 +1,24 @@
 /**
- * NIP-01 / NIP-98 event utilities.
+ * NIP-01 / NIP-98 event utilities — verifier and signer.
  *
- * Pure-JS Nostr event validation and Schnorr verification using
- * `@noble/curves` (already a direct dependency, audited by Trail of
- * Bits) and Node's built-in `crypto` for SHA-256. Replaces the
- * `nostr-tools` dependency tree we previously pulled just for two
- * functions (#135).
+ * Pure-JS Nostr event tools using `@noble/curves` (a direct dependency,
+ * audited by Trail of Bits) and Node's built-in `crypto` for SHA-256.
+ * Replaces the `nostr-tools` dependency tree we previously pulled just
+ * for a few functions (#135).
  *
- * Exports a minimal, drop-in surface: `getEventHash`, `validateEvent`,
- * `verifyEvent`. Both `src/auth/nostr.js` (NIP-98 HTTP auth) and
- * `src/nostr/relay.js` (in-process relay) consume this module.
+ * Verifier surface (used by production):
+ *   - `getEventHash`, `validateEvent`, `verifyEvent`
+ *   - consumed by `src/auth/nostr.js` (NIP-98 HTTP auth) and
+ *     `src/nostr/relay.js` (in-process relay).
+ *
+ * Signer surface (used by integration tests + dev scripts):
+ *   - `generateSecretKey`, `getPublicKey`, `finalizeEvent`, `nip98Token`
+ *   - consumed by `test/*.js` and the repo-root `*.mjs`/`test-*.js`
+ *     dev scripts. Living in `src/` rather than `test/helpers/` so
+ *     non-test consumers don't reach into test-only code paths.
  */
 
-import { schnorr } from '@noble/curves/secp256k1';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 
 // Hex is canonically lowercase in NIP-01/BIP-340 examples, but be lenient
@@ -91,4 +97,79 @@ export function verifyEvent(event) {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------
+// Signer-side helpers
+// ---------------------------------------------------------------------
+
+/**
+ * Generate a random 32-byte secp256k1 private key.
+ *
+ * Always uses `secp256k1.utils.randomPrivateKey()` so the result is
+ * guaranteed to be in [1, n-1] (a valid secp256k1 scalar). A naive
+ * `crypto.randomBytes(32)` fallback would have a vanishing-but-nonzero
+ * chance of producing 0 or a value >= curve order, which would manifest
+ * as flaky signing/verification.
+ */
+export function generateSecretKey() {
+  if (!secp256k1.utils?.randomPrivateKey) {
+    throw new Error('secp256k1.utils.randomPrivateKey is unavailable');
+  }
+  return secp256k1.utils.randomPrivateKey();
+}
+
+/**
+ * Derive the BIP-340 x-only public key as 64-char lowercase hex.
+ */
+export function getPublicKey(secretKey) {
+  return Buffer.from(schnorr.getPublicKey(secretKey)).toString('hex');
+}
+
+/**
+ * Take a partial Nostr event, compute its NIP-01 id, sign it with the
+ * given secret key, and return the finalized event.
+ *
+ * @param {object} template - {kind, tags?, content?, created_at?}
+ * @param {Uint8Array|string} secretKey
+ */
+export function finalizeEvent(template, secretKey) {
+  const pubkey = getPublicKey(secretKey);
+  const event = {
+    pubkey,
+    created_at: template.created_at ?? Math.floor(Date.now() / 1000),
+    kind: template.kind,
+    tags: template.tags ?? [],
+    content: template.content ?? ''
+  };
+  event.id = getEventHash(event);
+  event.sig = Buffer.from(schnorr.sign(event.id, secretKey)).toString('hex');
+  return event;
+}
+
+/**
+ * Build a NIP-98 HTTP auth header value (the part after `Nostr `):
+ * a kind-27235 event signed with `secretKey`, base64-encoded.
+ *
+ * @param {string} url - Full request URL (becomes the `u` tag)
+ * @param {string} method - HTTP method (becomes the `method` tag, uppercased)
+ * @param {Uint8Array|string} secretKey - 32-byte secret key
+ * @param {object|string|null} [body] - Optional request body; if present
+ *   the SHA-256 hex hash is added as a `payload` tag per NIP-98.
+ * @returns {string} base64-encoded signed event
+ */
+export function nip98Token(url, method, secretKey, body = null) {
+  const tags = [
+    ['u', url],
+    ['method', method.toUpperCase()]
+  ];
+  if (body !== null && body !== undefined) {
+    const bytes = typeof body === 'string'
+      ? Buffer.from(body, 'utf8')
+      : Buffer.from(JSON.stringify(body), 'utf8');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    tags.push(['payload', hash]);
+  }
+  const event = finalizeEvent({ kind: 27235, tags, content: '' }, secretKey);
+  return Buffer.from(JSON.stringify(event)).toString('base64');
 }
