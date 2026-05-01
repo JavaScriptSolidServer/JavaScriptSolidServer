@@ -60,12 +60,13 @@ describe('mashlib data island — emission (unit, #7)', () => {
       'island must drop silently above DATA_ISLAND_MAX_BYTES');
   });
 
-  // The escape strategy is "encode every `<` as <". Test the wide
-  // variety of strings that an HTML parser would otherwise treat as a
-  // closing tag — `</script>`, `</script >`, `</script\n>`,
-  // `</SCRIPT>`, `</scRIPT >` — plus `<!--`, all of which require a
-  // literal `<` to start the dangerous sequence. After escaping, no
-  // `<` exists in the body at all.
+  // The escape strategy is "encode every `<` byte as the six-character
+  // JSON escape `\\u003c`". Test the wide variety of strings that an
+  // HTML parser would otherwise treat as a closing tag — `</script>`,
+  // `</script >`, `</script\n>`, `</SCRIPT>`, `</scRIPT>` — plus
+  // `<!--`, all of which require a literal `<` to start the dangerous
+  // sequence. After escaping, no literal `<` exists in the body and
+  // every transformed location appears as `\\u003c`.
   const escapeTrojans = [
     ['exact </script>',      '{"x":"a</script>b"}'],
     ['with space </script >', '{"x":"a</script >b"}'],

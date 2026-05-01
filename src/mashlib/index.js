@@ -34,11 +34,13 @@ export const DATA_ISLAND_MAX_BYTES = 256 * 1024;
  * `</script\n>`, `</SCRIPT>` and friends all close it. Escaping just
  * the literal `</script>` token is too narrow.
  *
- * The robust fix is to escape every `<` byte in the body to its
- * JSON Unicode form `<`. JSON-LD is JSON, JSON parsers decode
- * `<` back to `<` natively, so semantics are preserved. After
- * this transform the body cannot contain `<` — so no end-tag (or
- * comment, CDATA, etc.) can possibly start.
+ * The robust fix is to replace every literal `<` byte in the body with
+ * the six-character JSON escape sequence `<` (a backslash, the
+ * letter u, then four hex digits). JSON-LD is JSON, and a JSON parser
+ * decodes `<` back to `<` natively, so the document's semantics
+ * are preserved. After this transform the body literally cannot
+ * contain a `<` byte — so no end-tag (or comment, CDATA, etc.) can
+ * possibly start.
  */
 function escapeForScriptBlock(jsonLdString) {
   return jsonLdString.replace(/</g, '\\u003c');
@@ -52,11 +54,7 @@ function escapeForScriptBlock(jsonLdString) {
 function dataIsland(resourceUrl, jsonLdString) {
   if (!jsonLdString) return '';
   if (Buffer.byteLength(jsonLdString, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
-  const safeUri = String(resourceUrl)
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  const safeUri = escapeHtml(String(resourceUrl));
   const safeBody = escapeForScriptBlock(jsonLdString);
   return `<script type="application/ld+json" id="dataisland" data-uri="${safeUri}">${safeBody}</script>`;
 }
