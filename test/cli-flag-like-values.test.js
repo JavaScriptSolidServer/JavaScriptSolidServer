@@ -31,11 +31,17 @@ describe('bin/jss.js — flag-like option values (#103)', () => {
   it('rejects another option swallowing a flag (covers --idp-issuer too)', () => {
     // Commander's behaviour: it greedily consumes the next argv as the
     // value, which is the whole reason the bug exists. We use a flag
-    // commander doesn't know about ("--unknown-flag") so commander
-    // doesn't reroute it through its own argument-count error.
-    const r = runCli(['start', '--idp-issuer', '--unknown-flag']);
+    // commander doesn't know about so commander doesn't reroute it
+    // through its own argument-count error. The dummy name is
+    // collision-proof — if anyone ever adds a real `--bogus-...` flag
+    // matching this pattern, the duplication is the bigger problem.
+    const FAKE_FLAG = '--__jss103_unlikely_cli_option__';
+    const r = runCli(['start', '--idp-issuer', FAKE_FLAG]);
     assert.notStrictEqual(r.status, 0);
-    assert.match(r.stderr, /--idp-issuer value "--unknown-flag" looks like a flag/);
+    assert.match(
+      r.stderr,
+      new RegExp(`--idp-issuer value "${FAKE_FLAG}" looks like a flag`)
+    );
   });
 
   it('rejects `--port --idp` (numeric option → NaN) with helpful error', () => {
