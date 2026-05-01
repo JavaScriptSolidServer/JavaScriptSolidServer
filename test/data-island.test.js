@@ -60,6 +60,21 @@ describe('mashlib data island — emission (unit, #7)', () => {
       'island must drop silently above DATA_ISLAND_MAX_BYTES');
   });
 
+  it('cap applies post-escape (defends against `<`-heavy expansion)', () => {
+    // A pathological body that's well under the cap as raw bytes but
+    // explodes 6x after escaping — every byte becomes `<`. Without
+    // the post-escape check, this would emit a multi-megabyte island.
+    const halfCap = Math.floor(DATA_ISLAND_MAX_BYTES / 2);
+    const payload = '<'.repeat(halfCap); // 128 KB raw, ~768 KB escaped
+    const html = generateDatabrowserHtml(
+      'https://x.test/expand',
+      '2.0.0',
+      { embedJsonLd: payload }
+    );
+    assert.doesNotMatch(html, /id="dataisland"/,
+      'island must drop when the escaped body exceeds the cap');
+  });
+
   // The escape strategy is "encode every `<` byte as the six-character
   // JSON escape `\\u003c`". Test the wide variety of strings that an
   // HTML parser would otherwise treat as a closing tag — `</script>`,

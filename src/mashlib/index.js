@@ -50,12 +50,19 @@ function escapeForScriptBlock(jsonLdString) {
  * Build the data-island `<script>` block for the given JSON-LD payload.
  * Returns an empty string if the payload is missing or over the size
  * cap so callers can unconditionally interpolate `dataIsland(...)`.
+ *
+ * The cap applies to the *escaped* body — i.e. the bytes that will
+ * actually appear in the HTTP response. `escapeForScriptBlock` can
+ * expand input up to 6x (each `<` becomes 6 chars `<`), so
+ * checking the raw input size could let an HTML response balloon past
+ * the cap. We always escape first (it's cheap, single-pass) and then
+ * gate on the result.
  */
 function dataIsland(resourceUrl, jsonLdString) {
   if (!jsonLdString) return '';
-  if (Buffer.byteLength(jsonLdString, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
-  const safeUri = escapeHtml(String(resourceUrl));
   const safeBody = escapeForScriptBlock(jsonLdString);
+  if (Buffer.byteLength(safeBody, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
+  const safeUri = escapeHtml(String(resourceUrl));
   return `<script type="application/ld+json" id="dataisland" data-uri="${safeUri}">${safeBody}</script>`;
 }
 
