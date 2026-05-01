@@ -11,7 +11,7 @@
  *   did:nostr:<64-char-hex-pubkey>
  */
 
-import { verifyEvent } from 'nostr-tools';
+import { verifyEvent } from '../nostr/event.js';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 
