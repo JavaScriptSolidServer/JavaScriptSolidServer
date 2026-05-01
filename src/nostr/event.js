@@ -66,7 +66,9 @@ export function validateEvent(event) {
   // NIP-01 doesn't cap kinds at 16 bits — many real kinds (10002, 30023,
   // etc.) are above 65535. Accept any non-negative safe integer.
   if (!Number.isSafeInteger(event.kind) || event.kind < 0) return false;
-  if (!Number.isInteger(event.created_at) || event.created_at < 0) return false;
+  // Use isSafeInteger for parity with kind — non-safe ints can't round-trip
+  // through JSON without precision loss, which would corrupt the canonical hash.
+  if (!Number.isSafeInteger(event.created_at) || event.created_at < 0) return false;
   if (typeof event.content !== 'string') return false;
   if (!Array.isArray(event.tags)) return false;
   for (const tag of event.tags) {
@@ -125,10 +127,30 @@ export function getPublicKey(secretKey) {
  * Take a partial Nostr event, compute its NIP-01 id, sign it with the
  * given secret key, and return the finalized event.
  *
+ * Validates the template up-front so we can't produce events that would
+ * later fail `verifyEvent` (e.g. `kind: undefined` would JSON-serialize
+ * as `null` and the resulting id would round-trip as garbage).
+ *
  * @param {object} template - {kind, tags?, content?, created_at?}
  * @param {Uint8Array|string} secretKey
  */
 export function finalizeEvent(template, secretKey) {
+  if (!template || typeof template !== 'object') {
+    throw new TypeError('finalizeEvent: template must be an object');
+  }
+  if (!Number.isSafeInteger(template.kind) || template.kind < 0) {
+    throw new TypeError('finalizeEvent: template.kind must be a non-negative safe integer');
+  }
+  if (template.created_at !== undefined &&
+      (!Number.isSafeInteger(template.created_at) || template.created_at < 0)) {
+    throw new TypeError('finalizeEvent: template.created_at must be a non-negative safe integer');
+  }
+  if (template.tags !== undefined && !Array.isArray(template.tags)) {
+    throw new TypeError('finalizeEvent: template.tags must be an array');
+  }
+  if (template.content !== undefined && typeof template.content !== 'string') {
+    throw new TypeError('finalizeEvent: template.content must be a string');
+  }
   const pubkey = getPublicKey(secretKey);
   const event = {
     pubkey,
@@ -146,11 +168,19 @@ export function finalizeEvent(template, secretKey) {
  * Build a NIP-98 HTTP auth header value (the part after `Nostr `):
  * a kind-27235 event signed with `secretKey`, base64-encoded.
  *
+ * NIP-98's `payload` tag is the SHA-256 of the *exact bytes* the client
+ * will send on the wire. So `body` must be a `string`, `Uint8Array`, or
+ * `Buffer` representing those bytes — passing a plain JS object would
+ * force us to re-serialize via `JSON.stringify`, which is unlikely to
+ * match the bytes `fetch()` would actually send (whitespace, key order,
+ * non-JSON payloads). Callers serialize once and pass the bytes here.
+ *
  * @param {string} url - Full request URL (becomes the `u` tag)
  * @param {string} method - HTTP method (becomes the `method` tag, uppercased)
  * @param {Uint8Array|string} secretKey - 32-byte secret key
- * @param {object|string|null} [body] - Optional request body; if present
- *   the SHA-256 hex hash is added as a `payload` tag per NIP-98.
+ * @param {string|Uint8Array|Buffer|null} [body] - Optional request body
+ *   *bytes*; if present the SHA-256 hex hash is added as a `payload` tag
+ *   per NIP-98.
  * @returns {string} base64-encoded signed event
  */
 export function nip98Token(url, method, secretKey, body = null) {
@@ -159,9 +189,15 @@ export function nip98Token(url, method, secretKey, body = null) {
     ['method', method.toUpperCase()]
   ];
   if (body !== null && body !== undefined) {
+    if (typeof body !== 'string' && !(body instanceof Uint8Array)) {
+      throw new TypeError(
+        'nip98Token: body must be a string, Uint8Array, or Buffer — ' +
+        'pass the exact bytes that will be sent on the wire'
+      );
+    }
     const bytes = typeof body === 'string'
       ? Buffer.from(body, 'utf8')
-      : Buffer.from(JSON.stringify(body), 'utf8');
+      : body;
     const hash = createHash('sha256').update(bytes).digest('hex');
     tags.push(['payload', hash]);
   }

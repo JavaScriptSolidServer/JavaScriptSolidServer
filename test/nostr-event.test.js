@@ -20,7 +20,8 @@ import {
   verifyEvent,
   generateSecretKey,
   getPublicKey,
-  finalizeEvent
+  finalizeEvent,
+  nip98Token
 } from '../src/nostr/event.js';
 
 describe('nostr event utilities (#135)', () => {
@@ -178,6 +179,79 @@ describe('nostr event utilities (#135)', () => {
       const sk = generateSecretKey();
       const event = finalizeEvent({ kind: 1, tags: [], content: 'x' }, sk);
       event.kind = -1;
+      assert.strictEqual(validateEvent(event), false);
+    });
+  });
+
+  describe('finalizeEvent input validation (#341 review)', () => {
+    it('throws when kind is missing', () => {
+      const sk = generateSecretKey();
+      assert.throws(() => finalizeEvent({ tags: [], content: 'x' }, sk), TypeError);
+    });
+
+    it('throws when kind is not a non-negative safe integer', () => {
+      const sk = generateSecretKey();
+      assert.throws(() => finalizeEvent({ kind: -1 }, sk), TypeError);
+      assert.throws(() => finalizeEvent({ kind: 'one' }, sk), TypeError);
+      assert.throws(() => finalizeEvent({ kind: 1.5 }, sk), TypeError);
+      assert.throws(() => finalizeEvent({ kind: Number.MAX_SAFE_INTEGER + 1 }, sk), TypeError);
+    });
+
+    it('throws when created_at is invalid', () => {
+      const sk = generateSecretKey();
+      assert.throws(() => finalizeEvent({ kind: 1, created_at: -1 }, sk), TypeError);
+      assert.throws(() => finalizeEvent({ kind: 1, created_at: 'now' }, sk), TypeError);
+    });
+
+    it('throws when tags is not an array', () => {
+      const sk = generateSecretKey();
+      assert.throws(() => finalizeEvent({ kind: 1, tags: 'oops' }, sk), TypeError);
+    });
+
+    it('throws when content is not a string', () => {
+      const sk = generateSecretKey();
+      assert.throws(() => finalizeEvent({ kind: 1, content: 123 }, sk), TypeError);
+    });
+  });
+
+  describe('nip98Token body must be bytes (#341 review)', () => {
+    it('accepts a string body (JSON or text)', () => {
+      const sk = generateSecretKey();
+      const tok = nip98Token('https://x.test/', 'POST', sk, '{"a":1}');
+      assert.ok(typeof tok === 'string' && tok.length > 0);
+    });
+
+    it('accepts a Uint8Array body', () => {
+      const sk = generateSecretKey();
+      const bytes = new TextEncoder().encode('{"a":1}');
+      const tok = nip98Token('https://x.test/', 'POST', sk, bytes);
+      assert.ok(typeof tok === 'string' && tok.length > 0);
+    });
+
+    it('accepts no body', () => {
+      const sk = generateSecretKey();
+      const tok = nip98Token('https://x.test/', 'GET', sk);
+      assert.ok(typeof tok === 'string' && tok.length > 0);
+    });
+
+    it('throws on a plain object (would re-serialize and not match wire bytes)', () => {
+      const sk = generateSecretKey();
+      assert.throws(
+        () => nip98Token('https://x.test/', 'POST', sk, { a: 1 }),
+        TypeError,
+        'Object body must be rejected — caller must pass exact wire bytes'
+      );
+    });
+  });
+
+  describe('validateEvent — created_at (#341 review)', () => {
+    it('rejects created_at beyond Number.MAX_SAFE_INTEGER', () => {
+      const sk = generateSecretKey();
+      const event = finalizeEvent({ kind: 1 }, sk);
+      // Manually inject a non-safe-integer to test validateEvent — we
+      // can't construct it via finalizeEvent (which now rejects too).
+      event.created_at = Number.MAX_SAFE_INTEGER + 1;
+      // Recompute id so the structural check is the only one that fires.
       assert.strictEqual(validateEvent(event), false);
     });
   });

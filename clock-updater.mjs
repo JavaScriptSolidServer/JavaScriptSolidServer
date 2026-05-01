@@ -25,7 +25,11 @@ async function updateClock() {
   };
 
   try {
-    const token = nip98Token(CLOCK_URL, 'PUT', sk, clockData);
+    // Serialize once: the same bytes feed both the NIP-98 payload hash
+    // and the fetch body. nip98Token requires bytes (not an object) so
+    // the `payload` tag matches what the server actually receives.
+    const bodyBytes = JSON.stringify(clockData);
+    const token = nip98Token(CLOCK_URL, 'PUT', sk, bodyBytes);
 
     const res = await fetch(CLOCK_URL, {
       method: 'PUT',
@@ -33,7 +37,7 @@ async function updateClock() {
         'Content-Type': 'application/ld+json',
         'Authorization': 'Nostr ' + token
       },
-      body: JSON.stringify(clockData)
+      body: bodyBytes
     });
 
     const time = isoDate.split('T')[1].replace('Z', '');
