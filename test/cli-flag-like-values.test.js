@@ -9,6 +9,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,9 +48,12 @@ describe('bin/jss.js — flag-like option values (#103)', () => {
   it('accepts a real value and reaches normal config processing', () => {
     // --print-config exits 0 cleanly after dumping config; this proves
     // the validator doesn't false-positive on legitimate values.
+    // Use os.tmpdir() rather than a hard-coded /tmp/... so the test is
+    // portable across platforms (and matches the rest of the suite).
+    const tmpRoot = path.join(os.tmpdir(), 'jss-103-sanity-doesnotneedtoexist');
     const r = runCli(['start',
       '--port', '4582',
-      '--root', '/tmp/jss-103-sanity-doesnotneedtoexist',
+      '--root', tmpRoot,
       '--single-user-name', 'alice',
       '--print-config'
     ]);
