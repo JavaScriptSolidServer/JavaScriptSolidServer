@@ -105,8 +105,13 @@ export function roundTripOptimizationScript() {
 (function () {
   if (typeof window === 'undefined') return;
 
-  window.__dataIsland = window.__dataIsland || {
-    get: function (uri) {
+  // Initialize defensively: another script may have set a truthy
+  // window.__dataIsland that lacks a .get function. Preserve any
+  // existing object but always ensure .get is callable so consumers
+  // never hit a TypeError on the inline-data fast path.
+  window.__dataIsland = window.__dataIsland || {};
+  if (typeof window.__dataIsland.get !== 'function') {
+    window.__dataIsland.get = function (uri) {
       if (!uri) return null;
       try {
         // Fetch by id and compare data-uri as a string. Avoids
@@ -124,8 +129,8 @@ export function roundTripOptimizationScript() {
         }
       } catch (e) { /* fall through to null */ }
       return null;
-    }
-  };
+    };
+  }
 
   function applyPatch(rdf) {
     if (!rdf || !rdf.fetcher || !rdf.fetcher.load) return;
@@ -177,7 +182,19 @@ export function roundTripOptimizationScript() {
                   status: 200,
                   statusText: 'OK',
                   url: s,
-                  headers: { get: function () { return null; } }
+                  headers: {
+                    // Match real Response.headers.get() behavior on
+                    // the inline-data path: case-insensitive lookup,
+                    // returns the data island's content-type for
+                    // 'content-type', null for unknown headers.
+                    get: function (name) {
+                      if (typeof name !== 'string') return null;
+                      if (name.toLowerCase() === 'content-type') {
+                        return d.contentType;
+                      }
+                      return null;
+                    }
+                  }
                 };
               }
               resolve(resp);

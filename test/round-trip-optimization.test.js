@@ -457,6 +457,100 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     assert.strictEqual(typeof result.headers.get, 'function');
   });
 
+  it('fallback headers.get returns the data island content-type (case-insensitive)', async () => {
+    // Build a context without Response so the fallback headers path runs.
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#x"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+    const window = {};
+    const fakeFetcher = {
+      requested: {},
+      store: {},
+      load: async () => 'orig'
+    };
+    const $rdf = {
+      fetcher: fakeFetcher,
+      parse: (c, s, u, ct, cb) => cb(null),
+      sym: (u) => u
+    };
+    const ctx = vm.createContext({
+      window, document, $rdf,
+      setTimeout: () => 0, clearTimeout: () => {},
+      Promise, String, console,
+      Object: globalThis.Object
+      // No Response — forces fallback path.
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+    const result = await fakeFetcher.load('https://x.test/foo', {});
+    assert.strictEqual(result.headers.get('content-type'), 'application/ld+json');
+    assert.strictEqual(result.headers.get('Content-Type'), 'application/ld+json');
+    assert.strictEqual(result.headers.get('CONTENT-TYPE'), 'application/ld+json');
+    assert.strictEqual(result.headers.get('etag'), null);
+    assert.strictEqual(result.headers.get(123), null,
+      'non-string name should return null without throwing');
+  });
+
+  it('preserves existing window.__dataIsland but ensures .get is callable', () => {
+    // Simulate a prior script setting a truthy __dataIsland without .get.
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#me"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+    const preExisting = { someOtherProperty: 'original-value' };
+    const window = { __dataIsland: preExisting };
+    const ctx = vm.createContext({
+      window, document,
+      setTimeout: () => 0, clearTimeout: () => {},
+      Promise, String, console, Response,
+      Object: globalThis.Object
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+
+    // Existing object preserved (not overwritten):
+    assert.strictEqual(ctx.window.__dataIsland, preExisting);
+    assert.strictEqual(ctx.window.__dataIsland.someOtherProperty, 'original-value');
+    // .get added since it was missing:
+    assert.strictEqual(typeof ctx.window.__dataIsland.get, 'function');
+    // And it works:
+    const result = ctx.window.__dataIsland.get('https://x.test/foo');
+    assert.strictEqual(result.contentType, 'application/ld+json');
+    assert.strictEqual(result.content, '{"@id":"#me"}');
+  });
+
+  it('does not overwrite a pre-existing window.__dataIsland.get', () => {
+    const customGet = function () {
+      return { contentType: 'custom', content: 'from-custom-get' };
+    };
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#me"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+    const window = { __dataIsland: { get: customGet } };
+    const ctx = vm.createContext({
+      window, document,
+      setTimeout: () => 0, clearTimeout: () => {},
+      Promise, String, console, Response,
+      Object: globalThis.Object
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+
+    assert.strictEqual(ctx.window.__dataIsland.get, customGet,
+      'pre-existing custom .get must not be replaced');
+  });
+
   it('tolerates missing fetcher.requested without hanging the Promise', async () => {
     // Some rdflib/mashlib builds may not initialize `requested`.
     // The patched load must still resolve cleanly.
