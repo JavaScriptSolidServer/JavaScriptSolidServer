@@ -617,11 +617,17 @@ export function createServer(options = {}) {
       // still needs *some* username for the login form. Default to 'me'
       // — matches the WebID fragment, fits the historical convention.
       if (idpEnabled) {
+        // The IDP also persists `podName` and surfaces it as the
+        // `name` claim under the OIDC `profile` scope (see
+        // src/idp/accounts.js). For root pods we use 'me' here too —
+        // a null podName would leak through as a null/missing
+        // profile.name on every login, which OIDC clients expect to
+        // be a non-empty human-readable string.
         await seedSingleUserIdpAccount({
           fastify,
           username: isRootPod ? 'me' : singleUserName,
           webId,
-          podName: isRootPod ? null : singleUserName,
+          podName: isRootPod ? 'me' : singleUserName,
           providedPassword: singleUserPassword
         });
       }
