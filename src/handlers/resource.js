@@ -14,7 +14,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -238,9 +238,21 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+      // Phase 1 of #7: also embed the container's JSON-LD listing as a
+      // data island so consumers that look for `<script
+      // type="application/ld+json">` (search-engine rich-results,
+      // archival crawlers, future mashlib zero-fetch path) get the data
+      // without a second request. Use compact (no-whitespace) form for
+      // the embed so we don't burn bytes against DATA_ISLAND_MAX_BYTES
+      // on indentation that nothing will ever read.
+      const embedJsonLd = JSON.stringify(jsonLd);
       const html = request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule)
-        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+        ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
+        : generateDatabrowserHtml(
+          resourceUrl,
+          request.mashlibCdn ? request.mashlibVersion : null,
+          { embedJsonLd }
+        );
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -318,9 +330,31 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+    // Phase 1 of #7: embed the resource's JSON-LD bytes as a data
+    // island when it's already JSON-LD (the JSS-native format). Other
+    // formats are out of Phase-1 scope; the wrapper still loads
+    // correctly and mashlib XHR-fetches as before.
+    //
+    // Cap-aware short-circuit: skip the read entirely when the file is
+    // already over the embed cap. The island would be dropped anyway,
+    // and large JSON-LD resources would otherwise load into memory on
+    // every HTML navigation.
+    let embedJsonLd;
+    if (storedContentType === 'application/ld+json' &&
+        stats.size <= DATA_ISLAND_MAX_BYTES) {
+      // dataIsland() in mashlib/index.js coerces Buffer → string itself,
+      // so we hand it the Buffer directly instead of allocating a UTF-8
+      // string copy on every navigation.
+      const buf = await storage.read(storagePath);
+      if (buf) embedJsonLd = buf;
+    }
     const html = request.mashlibModule
-      ? generateModuleDatabrowserHtml(request.mashlibModule)
-      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+      ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
+      : generateDatabrowserHtml(
+        resourceUrl,
+        request.mashlibCdn ? request.mashlibVersion : null,
+        { embedJsonLd }
+      );
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,

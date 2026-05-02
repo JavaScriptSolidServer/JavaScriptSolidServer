@@ -4,23 +4,97 @@
  * Generates HTML wrapper that loads SolidOS Mashlib from CDN.
  * When a browser requests an RDF resource with Accept: text/html,
  * we return this wrapper which then fetches and renders the data.
+ *
+ * Phase 1 of #7: when the originating resource is reasonably small
+ * RDF, the JSON-LD bytes are embedded in the wrapper as a `<script
+ * type="application/ld+json" id="dataisland" data-uri="…">` block.
+ * Browsers ignore non-JS script bodies, so this is harmless to all
+ * existing clients (mashlib still XHR-fetches today). It immediately
+ * benefits anything that knows to look for `application/ld+json`
+ * islands — search engine rich-results, archival crawlers, scrapers,
+ * static-site exporters — and gives Phase 2 a zero-network fast path.
  */
+
+/**
+ * Cap on how much JSON-LD we'll inline. A 256 KB resource fits any
+ * realistic profile, type index, or container listing. Above that we
+ * drop the island and let the existing XHR path handle it so we don't
+ * make every navigation re-download a multi-megabyte resource.
+ */
+export const DATA_ISLAND_MAX_BYTES = 256 * 1024;
+
+/**
+ * Escape a JSON-LD body for safe inclusion inside `<script
+ * type="application/ld+json">…</script>`.
+ *
+ * Browsers don't execute the script (wrong MIME), but the HTML parser
+ * still scans the body for an end-of-script tag. The relevant rule:
+ * any `</` followed by `script` (case-insensitive) terminates the
+ * element regardless of what follows — `</script>`, `</script >`,
+ * `</script\n>`, `</SCRIPT>` and friends all close it. Escaping just
+ * the literal `</script>` token is too narrow.
+ *
+ * The robust fix is to replace every literal `<` byte in the body with
+ * the JSON string-escape for U+003C — the six characters
+ * backslash-u-0-0-3-c (the same form the implementation emits below).
+ * JSON-LD is JSON, and a JSON parser decodes that escape back to a
+ * literal `<` natively, so document semantics are preserved. After
+ * this transform the body literally cannot contain a `<` byte — so no
+ * end-tag (or comment, CDATA, etc.) can possibly start.
+ */
+function escapeForScriptBlock(jsonLdString) {
+  return String(jsonLdString).replace(/</g, '\\u003c');
+}
+
+/**
+ * Build the data-island `<script>` block for the given JSON-LD payload.
+ * Returns an empty string if the payload is missing or over the size
+ * cap so callers can unconditionally interpolate `dataIsland(...)`.
+ *
+ * The cap applies to the *escaped* body — i.e. the bytes that will
+ * actually appear in the HTTP response. `escapeForScriptBlock` can
+ * expand input up to 6x (each literal `<` becomes the 6-byte JSON
+ * escape sequence backslash-u-0-0-3-c), so checking the raw input
+ * size alone could let an HTML response balloon past the cap.
+ *
+ * Two-stage check:
+ *   1. Cheap raw-byte pre-check — escape can only grow the body,
+ *      so a raw payload already over the cap is guaranteed to be
+ *      over after escaping; drop without doing the work.
+ *   2. Post-escape check — catches the rare case where input was
+ *      under the cap but expanded above it (`<`-heavy bodies).
+ */
+function dataIsland(resourceUrl, jsonLdString) {
+  if (!jsonLdString) return '';
+  const raw = String(jsonLdString);
+  if (Buffer.byteLength(raw, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
+  const safeBody = escapeForScriptBlock(raw);
+  if (Buffer.byteLength(safeBody, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
+  const safeUri = escapeHtml(String(resourceUrl));
+  return `<script type="application/ld+json" id="dataisland" data-uri="${safeUri}">${safeBody}</script>`;
+}
 
 /**
  * Generate Mashlib databrowser HTML
  *
- * @param {string} resourceUrl - The URL of the resource being viewed (unused, kept for API compatibility)
+ * @param {string} resourceUrl - The URL of the resource being viewed
  * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
+ * @param {object} [opts]
+ * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body to inline
+ *   as a `<script type="application/ld+json">` data island. Accepts a
+ *   UTF-8 string or a Buffer (coerced via `String()`). Honors a 256 KB
+ *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
  * @returns {string} HTML content
  */
-export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
+export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {}) {
+  const island = dataIsland(resourceUrl, opts.embedJsonLd);
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
     return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
 <link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody"><header id="PageHeader"></header>
+<body id="PageBody">${island}<header id="PageHeader"></header>
 <div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
 <footer id="PageFooter"></footer>
 <script>
@@ -37,22 +111,27 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null) {
   // Local mode - use defer (reliable when served locally)
   return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
         panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody"><header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
  * Generate ES module-based databrowser HTML
  *
  * @param {string} moduleUrl - URL to the ES module entry point
+ * @param {string} resourceUrl - The URL of the resource being viewed
+ * @param {object} [opts]
+ * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body for the
+ *   data island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
  * @returns {string} HTML content
  */
-export function generateModuleDatabrowserHtml(moduleUrl) {
+export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts = {}) {
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
+  const island = dataIsland(resourceUrl, opts.embedJsonLd);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
-<body><div id="mashlib"></div>
+<body>${island}<div id="mashlib"></div>
 <script type="module" src="${moduleUrl}"></script>
 </body></html>`;
 }
