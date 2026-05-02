@@ -162,16 +162,33 @@ export function getResourceName(urlPath) {
  */
 export function getBaseDomainHost(baseDomain) {
   if (!baseDomain) return baseDomain;
-  // Bracketed IPv6
-  if (baseDomain.startsWith('[')) {
-    const end = baseDomain.indexOf(']');
-    return end === -1 ? baseDomain : baseDomain.slice(0, end + 1);
+
+  let value = String(baseDomain).trim();
+  if (!value) return value;
+
+  // Accept defensive forms like "https://example.com:3100/".
+  if (!value.includes('://')) {
+    value = `http://${value}`;
   }
-  const colon = baseDomain.lastIndexOf(':');
-  if (colon === -1) return baseDomain;
-  // Only strip if what follows is a port number
-  const maybePort = baseDomain.slice(colon + 1);
-  return /^\d+$/.test(maybePort) ? baseDomain.slice(0, colon) : baseDomain;
+
+  try {
+    const parsed = new URL(value);
+    return parsed.hostname;
+  } catch {
+    // Fallback for malformed values: best-effort host extraction.
+    const candidate = value.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/.*$/, '');
+
+    // Bracketed IPv6
+    if (candidate.startsWith('[')) {
+      const end = candidate.indexOf(']');
+      return end === -1 ? candidate : candidate.slice(0, end + 1);
+    }
+
+    const colon = candidate.lastIndexOf(':');
+    if (colon === -1) return candidate;
+    const maybePort = candidate.slice(colon + 1);
+    return /^\d+$/.test(maybePort) ? candidate.slice(0, colon) : candidate;
+  }
 }
 
 

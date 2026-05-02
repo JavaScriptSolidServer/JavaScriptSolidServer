@@ -6,6 +6,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import * as jose from 'jose';
+import crypto from 'crypto';
 import {
   startTestServer,
   stopTestServer,
@@ -14,6 +15,8 @@ import {
   getBaseUrl,
   assertStatus
 } from './helpers.js';
+import { addTrustedIssuer, clearCaches, verifySolidOidc } from '../src/auth/solid-oidc.js';
+import { getJwks } from '../src/idp/keys.js';
 
 describe('Solid-OIDC', () => {
   let keyPair;
@@ -177,6 +180,67 @@ describe('Solid-OIDC', () => {
       });
 
       assertStatus(res, 401);
+    });
+
+    it('verifies tokens from a trusted self issuer without remote discovery fetch', async () => {
+      clearCaches();
+
+      const issuer = 'https://pivot-test.local:4443';
+      addTrustedIssuer(issuer);
+
+      const dpopKeyPair = await jose.generateKeyPair('ES256');
+      const dpopPublicJwk = await jose.exportJWK(dpopKeyPair.publicKey);
+      dpopPublicJwk.alg = 'ES256';
+      const thumbprint = await jose.calculateJwkThumbprint(dpopPublicJwk, 'sha256');
+
+      const serverJwks = await getJwks();
+      const signingKey = serverJwks.keys.find((key) => key.alg === 'RS256') || serverJwks.keys[0];
+      const privateKey = await jose.importJWK(signingKey, signingKey.alg);
+
+      const accessToken = await new jose.SignJWT({
+        webid: 'https://alice.pivot-test.local:4443/profile/card#me',
+        sub: 'https://alice.pivot-test.local:4443/profile/card#me',
+        iss: issuer,
+        aud: 'solid',
+        cnf: { jkt: thumbprint },
+      })
+        .setProtectedHeader({ alg: signingKey.alg, kid: signingKey.kid })
+        .setIssuedAt()
+        .setExpirationTime('1h')
+        .sign(privateKey);
+
+      const dpopProof = await new jose.SignJWT({
+        htm: 'GET',
+        htu: 'https://alice.pivot-test.local:4443/private/',
+        iat: Math.floor(Date.now() / 1000),
+        jti: crypto.randomUUID(),
+      })
+        .setProtectedHeader({ alg: 'ES256', typ: 'dpop+jwt', jwk: dpopPublicJwk })
+        .sign(dpopKeyPair.privateKey);
+
+      const originalFetch = global.fetch;
+      global.fetch = async () => {
+        throw new Error('trusted self issuer should not use fetch');
+      };
+
+      try {
+        const result = await verifySolidOidc({
+          method: 'GET',
+          protocol: 'https',
+          hostname: 'alice.pivot-test.local:4443',
+          url: '/private/',
+          headers: {
+            authorization: `DPoP ${accessToken}`,
+            dpop: dpopProof,
+          },
+        });
+
+        assert.strictEqual(result.error, null);
+        assert.strictEqual(result.webId, 'https://alice.pivot-test.local:4443/profile/card#me');
+      } finally {
+        global.fetch = originalFetch;
+        clearCaches();
+      }
     });
   });
 

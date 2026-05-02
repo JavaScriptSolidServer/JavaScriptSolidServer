@@ -7,7 +7,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { getPodName, getContentType } from '../src/utils/url.js';
+import { getPodName, getContentType, getBaseDomainHost } from '../src/utils/url.js';
 
 describe('getPodName', () => {
   describe('subdomain mode', () => {
@@ -74,8 +74,41 @@ describe('getPodName', () => {
   });
 });
 
+// Regression coverage for getBaseDomainHost — must strip port from baseDomain
+// before comparing against request.hostname.
+// Fastify sets request.hostname to the full host:port string, so the subdomain
+// detection in server.js was failing for non-default ports (e.g. :4443).
+describe('getBaseDomainHost', () => {
+  it('plain hostname — returned as-is', () => {
+    assert.strictEqual(getBaseDomainHost('example.com'), 'example.com');
+  });
+
+  it('hostname:port — strips the port', () => {
+    assert.strictEqual(getBaseDomainHost('example.com:4443'), 'example.com');
+  });
+
+  it('hostname:80 — strips even well-known port', () => {
+    assert.strictEqual(getBaseDomainHost('example.com:80'), 'example.com');
+  });
+
+  it('full https URL form — extracts hostname only', () => {
+    assert.strictEqual(getBaseDomainHost('https://example.com:3100/'), 'example.com');
+  });
+
+  it('full http URL without port — extracts hostname', () => {
+    assert.strictEqual(getBaseDomainHost('http://example.com/'), 'example.com');
+  });
+
+  it('localhost:4443 — strips port', () => {
+    assert.strictEqual(getBaseDomainHost('localhost:4443'), 'localhost');
+  });
+
+  it('pivot-test.local:4443 — strips port (real regression case)', () => {
+    assert.strictEqual(getBaseDomainHost('pivot-test.local:4443'), 'pivot-test.local');
+  });
+});
+
 // Regression coverage for #294 — .acl and .meta must be recognised as RDF
-// resources so content negotiation kicks in for Turtle-native clients.
 describe('getContentType', () => {
   describe('extension-based mapping (existing)', () => {
     it('maps .jsonld → application/ld+json', () => {

@@ -107,3 +107,56 @@ describe('buildResourceUrl — subdomain mode disabled', () => {
     assert.strictEqual(buildResourceUrl(req, '/alice/'), 'https://example.com/alice/');
   });
 });
+
+// Regression: Fastify sets request.hostname to host:port when a non-default
+// port is in use. Previously getBaseDomainHost was not called, so
+// 'alice.pivot-test.local:4443' never matched '.pivot-test.local', making
+// request.podName stay null and subdomain routing break entirely.
+describe('buildResourceUrl — port-bearing hostname (subdomain mode)', () => {
+  const baseDomain = 'pivot-test.local:4443';
+
+  it('subdomain request with port — uses headers.host verbatim', () => {
+    // Simulate Fastify: hostname includes port, headers.host also has port
+    const req = makeRequest({
+      hostname: 'alice.pivot-test.local:4443',
+      baseDomain,
+      podName: 'alice',
+    });
+    // Already on subdomain — buildResourceUrl uses headers.host directly
+    assert.strictEqual(
+      buildResourceUrl(req, '/'),
+      'https://alice.pivot-test.local:4443/'
+    );
+  });
+
+  it('base-domain with port — rewrites pod path to subdomain URL', () => {
+    // hostname matches baseDomain host after stripping port
+    const req = {
+      protocol: 'https',
+      hostname: 'pivot-test.local:4443',
+      headers: { host: 'pivot-test.local:4443' },
+      subdomainsEnabled: true,
+      baseDomain,
+      podName: null,
+    };
+    assert.strictEqual(
+      buildResourceUrl(req, '/alice/'),
+      'https://alice.pivot-test.local:4443/'
+    );
+  });
+
+  it('base-domain with port — no rewrite for file with extension', () => {
+    const req = {
+      protocol: 'https',
+      hostname: 'pivot-test.local:4443',
+      headers: { host: 'pivot-test.local:4443' },
+      subdomainsEnabled: true,
+      baseDomain,
+      podName: null,
+    };
+    assert.strictEqual(
+      buildResourceUrl(req, '/mashlib.js'),
+      'https://pivot-test.local:4443/mashlib.js'
+    );
+  });
+});

@@ -12,6 +12,7 @@
 
 import * as jose from 'jose';
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { getPublicJwks } from '../idp/keys.js';
 
 // Cache for OIDC configurations and JWKS
 const oidcConfigCache = new Map();
@@ -285,6 +286,26 @@ async function getOidcConfig(issuer) {
     }
   }
 
+  // For the server's own trusted issuer, avoid an outbound HTTPS fetch.
+  // This prevents local/self-signed certificate problems during resource-token
+  // verification and guarantees consistency with our served discovery doc.
+  if (isTrusted) {
+    const baseUrl = issuer.replace(/\/$/, '');
+    const config = {
+      issuer: baseUrl + '/',
+      authorization_endpoint: `${baseUrl}/idp/auth`,
+      token_endpoint: `${baseUrl}/idp/token`,
+      userinfo_endpoint: `${baseUrl}/idp/me`,
+      jwks_uri: `${baseUrl}/.well-known/jwks.json`,
+      registration_endpoint: `${baseUrl}/idp/reg`,
+      introspection_endpoint: `${baseUrl}/idp/token/introspection`,
+      revocation_endpoint: `${baseUrl}/idp/token/revocation`,
+      end_session_endpoint: `${baseUrl}/idp/session/end`,
+    };
+    oidcConfigCache.set(issuer, { config, timestamp: Date.now() });
+    return config;
+  }
+
   const configUrl = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
 
   try {
@@ -310,6 +331,15 @@ async function getJwks(issuer) {
   const cached = jwksCache.get(issuer);
   if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
     return cached.jwks;
+  }
+
+  const normalizedIssuer = issuer.replace(/\/$/, '');
+  const isTrusted = trustedIssuers.has(normalizedIssuer) || trustedIssuers.has(normalizedIssuer + '/');
+
+  if (isTrusted) {
+    const localJwks = jose.createLocalJWKSet(await getPublicJwks());
+    jwksCache.set(issuer, { jwks: localJwks, timestamp: Date.now() });
+    return localJwks;
   }
 
   // Get OIDC config to find JWKS URI

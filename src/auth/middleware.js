@@ -28,8 +28,10 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashl
 export function buildResourceUrl(request, urlPath) {
   // Use request.headers.host (includes port) instead of request.hostname (strips port)
   const host = request.headers.host || request.hostname;
+  // request.hostname may include port — strip it for comparison
+  const hostnameOnly = request.hostname.includes(':') ? request.hostname.split(':')[0] : request.hostname;
   if (request.subdomainsEnabled && request.baseDomain &&
-      request.hostname === getBaseDomainHost(request.baseDomain) && !request.podName) {
+      hostnameOnly === getBaseDomainHost(request.baseDomain) && !request.podName) {
     const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
     // Treat a path segment as a pod name only if it looks like one:
     //   - not a dotfile (.well-known, .acl, .meta, ...)
@@ -193,10 +195,16 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     // If mashlib is enabled, serve mashlib instead of static error page
     // Mashlib has built-in login functionality via panes.runDataBrowser()
     if (request.mashlibEnabled) {
+      // OIDC code-flow callbacks often land back on protected resources with
+      // ?code=...&state=...; return 200 so the browser shell can process the
+      // callback instead of getting stuck on an HTTP 401 page.
+      const isOidcCallback = request.method === 'GET' &&
+        typeof request.query?.code === 'string' &&
+        typeof request.query?.state === 'string';
       const html = request.mashlibModule
         ? generateModuleDatabrowserHtml(request.mashlibModule)
         : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
-      return reply.code(statusCode).type('text/html').send(html);
+      return reply.code(isOidcCallback ? 200 : statusCode).type('text/html').send(html);
     }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
   }

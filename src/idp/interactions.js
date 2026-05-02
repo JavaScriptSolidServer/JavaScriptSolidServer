@@ -19,7 +19,11 @@ async function finishInteractionOrError(request, reply, provider, result, option
     reply.hijack();
     await provider.interactionFinished(request.raw, reply.raw, result, options);
   } catch (err) {
-    request.log.error({ err: err.message, uid: request.params?.uid }, 'interactionFinished failed');
+    request.log.error({
+      err: err.message,
+      error_description: err.error_description,
+      uid: request.params?.uid,
+    }, 'interactionFinished failed');
     if (!reply.raw.writableEnded) {
       reply.raw.statusCode = 500;
       reply.raw.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -231,8 +235,32 @@ export async function handleConsent(request, reply, provider) {
     }
 
     const { prompt, params, session } = interaction;
+
     if (prompt.name !== 'consent') {
       return reply.code(400).type('text/html').send(errorPage('Invalid state', 'Not in consent stage.'));
+    }
+
+    let liveSession = null;
+    if (session?.uid) {
+      liveSession = await provider.Session.findByUid(session.uid);
+    }
+
+    // Fallback: when UID lookup fails but we still have a session cookie binding,
+    // recover the live session by cookie (jti) and repair the interaction snapshot.
+    // This prevents oidc-provider from failing with "session not found" at
+    // interactionFinished when interaction.session.uid is stale/missing.
+    if (!liveSession && session?.cookie) {
+      const byCookieSession = await provider.Session.find(session.cookie);
+
+      if (byCookieSession?.uid) {
+        interaction.session = {
+          ...(interaction.session || {}),
+          uid: byCookieSession.uid,
+          accountId: byCookieSession.accountId || interaction.session?.accountId,
+          cookie: byCookieSession.jti || interaction.session?.cookie,
+        };
+        await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+      }
     }
 
     // Grant consent
