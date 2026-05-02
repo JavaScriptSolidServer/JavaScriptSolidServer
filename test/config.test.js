@@ -158,3 +158,35 @@ describe('config — --single-user implies --idp (#331)', () => {
       '--no-idp without --single-user should not trigger the #331 warning');
   });
 });
+
+// #348: the user-visible default change — `jss start --single-user`
+// (no name flag) must produce a config where singleUserName is null,
+// so createServer() takes the root-pod path. createServer() has its
+// own tests but a future refactor of loadConfig() could silently
+// restore the old `'me'` default and only the server-level tests
+// would catch it via behaviour, not the config layer directly.
+describe('config — singleUserName default (#348)', () => {
+  it('loadConfig() returns singleUserName=null when no flag/env is set', async () => {
+    delete process.env.JSS_SINGLE_USER_NAME;
+    const cfg = await loadConfig({}, null);
+    assert.strictEqual(cfg.singleUserName, null,
+      'default must be null (= root pod), not the legacy "me"');
+  });
+
+  it('loadConfig() preserves an explicit singleUserName CLI arg', async () => {
+    delete process.env.JSS_SINGLE_USER_NAME;
+    const cfg = await loadConfig({ singleUserName: 'alice' }, null);
+    assert.strictEqual(cfg.singleUserName, 'alice');
+  });
+
+  it('loadConfig() respects JSS_SINGLE_USER_NAME from env', async () => {
+    process.env.JSS_SINGLE_USER_NAME = 'me';
+    try {
+      const cfg = await loadConfig({}, null);
+      assert.strictEqual(cfg.singleUserName, 'me',
+        'env var should restore the legacy "me" pod path on demand');
+    } finally {
+      delete process.env.JSS_SINGLE_USER_NAME;
+    }
+  });
+});

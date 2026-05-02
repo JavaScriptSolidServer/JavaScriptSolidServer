@@ -286,8 +286,16 @@ JSS_SINGLE_USER=true jss start --idp
 - Proper ACLs generated automatically
 
 **Upgrading from a pre-#348 install:** if your existing pod was created with the old default (data lives under `<root>/me/`), JSS no longer auto-detects it — restarting plain `jss start --single-user` will start seeding a fresh empty root pod alongside your legacy `/me/` data, and your existing IDP account will keep authenticating against `/me/`. Pick one path on the next restart:
-- Add `--single-user-name me` to keep the legacy `/me/` layout exactly as before.
-- Move `<root>/me/*` to `<root>/`, delete the IDP account for `me` (so the new root pod's `me` account can be seeded), then restart without the name flag.
+- **Keep the legacy layout:** add `--single-user-name me` to your launch command. No data movement needed.
+- **Migrate to root pod:** move the *entire* contents of `<root>/me/` (including dotfiles like `.acl`, `.meta`, `.quota.json` — a plain `mv <root>/me/* <root>/` skips them) to `<root>/`, delete the IDP account for `me` (so the new root pod's `me` account can be seeded), then restart without the name flag. Use one of:
+
+  ```bash
+  # Option A: rsync handles dotfiles correctly with the trailing slash.
+  rsync -a <root>/me/ <root>/ && rm -rf <root>/me
+
+  # Option B: bash with dotglob enabled so * matches dotfiles too.
+  shopt -s dotglob && mv <root>/me/* <root>/ && rmdir <root>/me
+  ```
 
 **Initial password sources, in priority order:**
 1. `--single-user-password <pw>` CLI flag
