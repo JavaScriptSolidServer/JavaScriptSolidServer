@@ -75,6 +75,177 @@ function dataIsland(resourceUrl, jsonLdString) {
 }
 
 /**
+ * Inline round-trip optimization reader (#346).
+ *
+ * Exposes a generic `window.__dataIsland.get(uri)` accessor any client
+ * can use, plus a compatibility patch for rdflib-based clients
+ * (mashlib and friends) that intercepts `fetcher.load(uri)` and
+ * resolves from the inline JSON-LD data island instead of issuing a
+ * second HTTP request. Falls through cleanly to the original network
+ * fetch on any miss, parse error, or absent rdflib.
+ *
+ * Three detection paths to cover the timing space:
+ *   1. Synchronous check — if `$rdf` is already on the page when this
+ *      script runs (e.g. reader injected after mashlib in some custom
+ *      flow), patch immediately.
+ *   2. Setter on `window.$rdf` — catches the assignment as soon as
+ *      mashlib publishes its rdflib instance. Closes the race where
+ *      mashlib's bundle initializes and calls `panes.runDataBrowser()`
+ *      synchronously inside an `onload` handler before any setTimeout
+ *      poll could fire.
+ *   3. Polling fallback — bounded retry for environments where the
+ *      property setter is rejected (e.g. `$rdf` already defined as a
+ *      non-configurable own property).
+ *
+ * Net effect: when JSS serves an HTML wrapper with an embedded data
+ * island, the page renders with one HTTP round-trip instead of two.
+ */
+export function roundTripOptimizationScript() {
+  return `<script>
+(function () {
+  if (typeof window === 'undefined') return;
+
+  // Initialize defensively: another script may have set a truthy
+  // window.__dataIsland that lacks a .get function — or, worse,
+  // assigned a primitive (string, number, etc.) where attaching
+  // .get would silently fail in non-strict mode and throw in strict
+  // mode. Normalize to a plain object first if the existing value
+  // is not an object or function (this also handles a null value,
+  // since typeof null === 'object'). Preserve well-formed existing
+  // implementations so consumers can register custom .get hooks.
+  var di = window.__dataIsland;
+  if (di === null || di === undefined
+      || (typeof di !== 'object' && typeof di !== 'function')) {
+    di = window.__dataIsland = {};
+  }
+  if (typeof di.get !== 'function') {
+    di.get = function (uri) {
+      if (!uri) return null;
+      try {
+        // Fetch by id and compare data-uri as a string. Avoids
+        // selector construction entirely so there is no CSS.escape
+        // pitfall, no attribute-string-context injection surface,
+        // and no false misses on URIs containing characters older
+        // browsers' selector parsers handle inconsistently.
+        var el = document.getElementById('dataisland');
+        if (el && el.type === 'application/ld+json'
+            && el.getAttribute('data-uri') === String(uri)) {
+          return {
+            contentType: 'application/ld+json',
+            content: el.textContent
+          };
+        }
+      } catch (e) { /* fall through to null */ }
+      return null;
+    };
+  }
+
+  function applyPatch(rdf) {
+    if (!rdf || !rdf.fetcher || !rdf.fetcher.load) return;
+    if (rdf.fetcher.__dataIslandPatched) return;
+    rdf.fetcher.__dataIslandPatched = true;
+    var f = rdf.fetcher;
+    var orig = f.load.bind(f);
+    f.load = function (uri, options) {
+      var s = (uri && uri.uri) || (uri && uri.value) || String(uri);
+      var d = window.__dataIsland.get(s);
+      if (d) {
+        return new Promise(function (resolve, reject) {
+          rdf.parse(d.content, f.store, s, d.contentType, function (err) {
+            if (err) {
+              reject(err);
+              return;
+            }
+            // Wrap the success path so unexpected throws (e.g.
+            // f.requested missing/non-writable on some rdflib builds)
+            // surface as Promise rejections rather than hanging the
+            // resolution.
+            try {
+              if (f.requested && typeof f.requested === 'object') {
+                f.requested[s] = 'done';
+              }
+              // Return a real Response when available so consumers
+              // using "instanceof Response", ".text()", ".json()",
+              // etc. work the same as on the network path. Fall
+              // back to a Response-shaped plain object in environments
+              // where the Response constructor isn't available.
+              var resp;
+              if (typeof Response === 'function') {
+                resp = new Response(d.content, {
+                  status: 200,
+                  statusText: 'OK',
+                  headers: { 'content-type': d.contentType }
+                });
+                // Response.url is read-only and empty when
+                // constructed; consumers reading it expect the
+                // resource URL. defineProperty is supported on
+                // Response in all browsers we target.
+                try {
+                  Object.defineProperty(resp, 'url',
+                    { value: s, configurable: true });
+                } catch (urlErr) { /* leave url empty */ }
+              } else {
+                resp = {
+                  ok: true,
+                  status: 200,
+                  statusText: 'OK',
+                  url: s,
+                  headers: {
+                    // Match real Response.headers.get() behavior on
+                    // the inline-data path: case-insensitive lookup,
+                    // returns the data island's content-type for
+                    // 'content-type', null for unknown headers.
+                    get: function (name) {
+                      if (typeof name !== 'string') return null;
+                      if (name.toLowerCase() === 'content-type') {
+                        return d.contentType;
+                      }
+                      return null;
+                    }
+                  }
+                };
+              }
+              resolve(resp);
+            } catch (callbackErr) {
+              reject(callbackErr);
+            }
+          });
+        }).catch(function () { return orig(uri, options); });
+      }
+      return orig(uri, options);
+    };
+  }
+
+  // Path 1: synchronous check
+  if (typeof $rdf !== 'undefined') applyPatch($rdf);
+
+  // Path 2: setter for $rdf — catches synchronous mashlib initialization
+  try {
+    var captured = (typeof $rdf !== 'undefined') ? $rdf : undefined;
+    Object.defineProperty(window, '$rdf', {
+      configurable: true,
+      get: function () { return captured; },
+      set: function (v) { captured = v; applyPatch(v); }
+    });
+  } catch (e) {
+    /* property non-configurable or otherwise un-redefinable;
+       the polling fallback below covers this case */
+  }
+
+  // Path 3: polling fallback
+  var n = 0;
+  (function poll() {
+    if (++n > 100) return;
+    if (typeof $rdf !== 'undefined' && $rdf && $rdf.fetcher
+        && $rdf.fetcher.__dataIslandPatched) return;
+    if (typeof $rdf !== 'undefined') applyPatch($rdf);
+    setTimeout(poll, 100);
+  })();
+})();
+</script>`;
+}
+
+/**
  * Generate Mashlib databrowser HTML
  *
  * @param {string} resourceUrl - The URL of the resource being viewed
@@ -84,17 +255,23 @@ function dataIsland(resourceUrl, jsonLdString) {
  *   as a `<script type="application/ld+json">` data island. Accepts a
  *   UTF-8 string or a Buffer (coerced via `String()`). Honors a 256 KB
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
+ * @param {boolean} [opts.roundTripOptimization=true] - Inline a small
+ *   reader script that lets rdflib-based clients (mashlib and friends)
+ *   resolve `fetcher.load(uri)` from the data island instead of issuing
+ *   a second HTTP request. Falls through to network fetch on any miss
+ *   or parse error. #346.
  * @returns {string} HTML content
  */
 export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {}) {
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
+  const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
     return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
 <link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody">${island}<header id="PageHeader"></header>
+<body id="PageBody">${island}${reader}<header id="PageHeader"></header>
 <div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
 <footer id="PageFooter"></footer>
 <script>
@@ -111,7 +288,7 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
   // Local mode - use defer (reliable when served locally)
   return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
         panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}${reader}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
@@ -122,16 +299,19 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
  * @param {object} [opts]
  * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body for the
  *   data island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
+ * @param {boolean} [opts.roundTripOptimization=true] - Inline reader
+ *   script (#346); see `generateDatabrowserHtml` for details.
  * @returns {string} HTML content
  */
 export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts = {}) {
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
+  const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
-<body>${island}<div id="mashlib"></div>
+<body>${island}${reader}<div id="mashlib"></div>
 <script type="module" src="${moduleUrl}"></script>
 </body></html>`;
 }
