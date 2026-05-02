@@ -350,26 +350,36 @@ export async function handleGet(request, reply) {
     // are not handled — the wrapper still loads and mashlib
     // XHR-fetches them as before.
     const islandConvertible =
-      storedContentType === 'application/ld+json' ||
-      storedContentType === 'text/turtle' ||
-      storedContentType === 'text/n3';
+      storedContentType === RDF_TYPES.JSON_LD ||
+      storedContentType === RDF_TYPES.TURTLE ||
+      storedContentType === RDF_TYPES.N3;
     let embedJsonLd;
     if (islandConvertible && stats.size <= DATA_ISLAND_MAX_BYTES) {
       const buf = await storage.read(storagePath);
       if (buf) {
-        const text = buf.toString('utf8');
-        try {
-          JSON.parse(text);
-          // Already JSON-LD bytes — pass the Buffer through so
-          // dataIsland() can coerce it without an extra string copy.
+        if (storedContentType === RDF_TYPES.JSON_LD) {
+          // Pass the Buffer through. dataIsland() decodes once when
+          // it needs to; we don't pre-validate or pre-decode here.
           embedJsonLd = buf;
-        } catch {
+        } else {
+          // Turtle / N3 URL. JSS stores everything as JSON-LD on
+          // disk (PUT converts), so try JSON parse first and pass
+          // the *decoded text* through (avoids a second decode
+          // inside dataIsland's String() coercion). Fall back to a
+          // Turtle parse for files placed on the filesystem
+          // out-of-band in their native format.
+          const text = buf.toString('utf8');
           try {
-            const jsonLd = await turtleToJsonLd(text, resourceUrl);
-            embedJsonLd = JSON.stringify(jsonLd);
+            JSON.parse(text);
+            embedJsonLd = text;
           } catch {
-            // Both parses failed → drop the island. The wrapper
-            // still renders and mashlib XHR-fetches the original.
+            try {
+              const jsonLd = await turtleToJsonLd(text, resourceUrl);
+              embedJsonLd = JSON.stringify(jsonLd);
+            } catch {
+              // Both parses failed → drop the island. The wrapper
+              // still renders and mashlib XHR-fetches the original.
+            }
           }
         }
       }

@@ -16,6 +16,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import {
   startTestServer,
   stopTestServer,
@@ -229,6 +231,18 @@ describe('mashlib data island — Turtle/N3 translation (#344)', () => {
             '<#note> foaf:name "n3 island" .\n',
       auth: 'turtleisland'
     });
+    // The both-parses-fail branch in the handler is unreachable via
+    // HTTP — handlePut validates Turtle/N3 input and rejects malformed
+    // bodies with 400 before they ever reach storage. To exercise the
+    // defensive guard we plant a file directly on disk in the test
+    // data dir, mimicking the "out-of-band placement" case the
+    // production code handles.
+    const brokenPath = path.resolve('./data/turtleisland/public/broken.ttl');
+    await fs.writeFile(
+      brokenPath,
+      '@prefix foaf: <http://xmlns.com/foaf/0.1/>\n' +
+      '<#note> foaf:name "broken — missing dot above" .\n'
+    );
   });
 
   after(async () => { await stopTestServer(); });
@@ -259,4 +273,21 @@ describe('mashlib data island — Turtle/N3 translation (#344)', () => {
     assert.match(body, /"n3 island"/);
   });
 
+  it('out-of-band malformed Turtle drops the island, wrapper still renders', async () => {
+    // File was planted on disk directly (in `before`), bypassing the
+    // PUT validator. The handler's two-stage parse (JSON, then Turtle)
+    // both fail; the island is dropped silently and the mashlib
+    // wrapper is still served so the browser can XHR-fetch the
+    // resource and surface the parse problem to the user.
+    const res = await request('/turtleisland/public/broken.ttl', {
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }
+    });
+    assertStatus(res, 200);
+    assertHeaderContains(res, 'Content-Type', 'text/html');
+    const body = await res.text();
+    assert.doesNotMatch(body, /id="dataisland"/,
+      'island must drop when both JSON and Turtle parses fail');
+    assert.match(body, /<!doctype html>/i);
+    assert.match(body, /mashlib/);
+  });
 });
