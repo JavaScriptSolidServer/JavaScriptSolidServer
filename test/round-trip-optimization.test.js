@@ -175,9 +175,15 @@ function makeContext({ islands = {}, $rdf = undefined } = {}) {
     }
   };
   const window = { CSS: { escape: (s) => String(s).replace(/"/g, '\\"') } };
+  // Stub setTimeout so the reader's polling fallback (up to ~10s of
+  // 100ms ticks when $rdf is absent) does not register real Node
+  // timers that keep the test process alive past the assertions.
+  // Tests that need to exercise polling can build a custom context.
   return vm.createContext({
     window, document, $rdf,
-    setTimeout, clearTimeout, Promise, String, console,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    Promise, String, console,
     Object: globalThis.Object
   });
 }
@@ -249,7 +255,7 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     });
     vm.runInContext(extractReaderSource(html), ctx);
 
-    await fakeFetcher.load('https://x.test/foo', {});
+    const result = await fakeFetcher.load('https://x.test/foo', {});
 
     assert.strictEqual(networkCalls, 0, 'should not have hit network');
     assert.strictEqual(parseCalls.length, 1, '$rdf.parse called once');
@@ -257,6 +263,14 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     assert.strictEqual(parseCalls[0].uri, 'https://x.test/foo');
     assert.strictEqual(parseCalls[0].contentType, 'application/ld+json');
     assert.strictEqual(fakeFetcher.requested['https://x.test/foo'], 'done');
+
+    // Return value is Response-shaped so consumers that inspect
+    // .ok / .status / .url / .headers.get(...) don't break.
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.url, 'https://x.test/foo');
+    assert.strictEqual(typeof result.headers.get, 'function');
+    assert.strictEqual(result.headers.get('content-type'), null);
   });
 
   it('patched fetcher.load falls through to original on data island miss', async () => {

@@ -142,7 +142,17 @@ export function roundTripOptimizationScript() {
               reject(err);
             } else {
               f.requested[s] = 'done';
-              resolve(rdf.sym ? rdf.sym(s) : s);
+              // Return a Response-shaped object so consumers that
+              // inspect the resolved value (e.g. Response.ok, .status,
+              // .url, .headers.get) don't break compared with the
+              // original network path.
+              resolve({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                url: s,
+                headers: { get: function () { return null; } }
+              });
             }
           });
         }).catch(function () { return orig(uri, options); });
