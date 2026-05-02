@@ -465,6 +465,7 @@ describe('Single-user default — root pod (#348)', () => {
   let server;
   let baseUrl;
   const DEFAULT_DATA_DIR = './test-data-348-default-root';
+  const ROOT_POD_PASSWORD = 'root-pod-test-pw';
 
   before(async () => {
     await fs.remove(DEFAULT_DATA_DIR);
@@ -480,6 +481,8 @@ describe('Single-user default — root pod (#348)', () => {
       idpIssuer: baseUrl,
       singleUser: true,
       // singleUserName intentionally omitted — exercises the new default.
+      // Provide a password so the seeding path runs non-interactively.
+      singleUserPassword: ROOT_POD_PASSWORD,
       forceCloseConnections: true,
     });
 
@@ -504,11 +507,28 @@ describe('Single-user default — root pod (#348)', () => {
     const res = await fetch(`${baseUrl}/profile/card.jsonld`);
     const body = await res.json();
     const webId = `${baseUrl}/profile/card.jsonld#me`;
-    // The seeded profile uses the bare WebID as @id.
     const matches = Array.isArray(body)
       ? body.some(n => n['@id'] === webId)
       : body['@id'] === webId || (body['@graph'] || []).some(n => n['@id'] === webId);
     assert.ok(matches, `profile should declare WebID ${webId}, got: ${JSON.stringify(body).slice(0, 200)}`);
+  });
+
+  it('seeds an IDP account for "me" so the root pod is loggable', async () => {
+    // Round-2 review of #348: a regression here would mean a fresh
+    // `jss start --single-user --idp` produces a pod nobody can log
+    // in to (registration is disabled in single-user mode, so there
+    // would be no recovery path other than out-of-band account
+    // creation). Use the credentials endpoint as a black-box login
+    // probe — if it issues a token, the seed worked.
+    const res = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'me', password: ROOT_POD_PASSWORD }),
+    });
+    assert.strictEqual(res.status, 200,
+      `login as "me" should succeed for the default root pod (got ${res.status})`);
+    const body = await res.json();
+    assert.ok(body.access_token, 'response should carry an access token');
   });
 });
 

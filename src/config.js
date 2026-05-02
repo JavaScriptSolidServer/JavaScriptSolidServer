@@ -403,20 +403,14 @@ export function printConfig(config) {
   console.log(`  Multi-user:    ${config.multiuser}`);
   if (config.singleUser) {
     const isRootPod = config.singleUserName === '/' || !config.singleUserName;
-    // Password seeding only runs when --idp is on AND the pod isn't the
-    // root-level case. Reflect both gates in the printed line so
-    // operators don't see a misleading "missing — login disabled" when
-    // login isn't governed by an IDP password at all.
-    let details = isRootPod ? '/ (root pod)' : config.singleUserName;
+    // Root pod (#348) seeds the IDP account under the username 'me' —
+    // the same login flow as a named pod, just at a different mount.
+    let details = isRootPod ? '/ (root pod, login as "me")' : config.singleUserName;
     if (config.idp) {
-      if (isRootPod) {
-        details += ' (password not seeded)';
-      } else {
-        const pwSource = config.singleUserPassword
-          ? 'provided'
-          : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
-        details += ` (password: ${pwSource})`;
-      }
+      const pwSource = config.singleUserPassword
+        ? 'provided'
+        : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
+      details += ` (password: ${pwSource})`;
     }
     console.log(`  Single-user:   ${details}`);
   }

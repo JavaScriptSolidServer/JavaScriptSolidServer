@@ -597,12 +597,16 @@ export function createServer(options = {}) {
       // this, single-user + --idp produces a pod but no credential, and
       // registration is intentionally disabled in single-user mode — so
       // the pod is unloggable until a password is set externally (#323).
-      if (idpEnabled && !isRootPod) {
+      //
+      // Root pods (#348) need this too: the pod has no name, but the IDP
+      // still needs *some* username for the login form. Default to 'me'
+      // — matches the WebID fragment, fits the historical convention.
+      if (idpEnabled) {
         await seedSingleUserIdpAccount({
           fastify,
-          username: singleUserName,
+          username: isRootPod ? 'me' : singleUserName,
           webId,
-          podName: singleUserName,
+          podName: isRootPod ? null : singleUserName,
           providedPassword: singleUserPassword
         });
       }

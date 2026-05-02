@@ -258,19 +258,21 @@ Response:
 For personal pod servers where only one user needs access:
 
 ```bash
-# Basic single-user mode (creates pod at /me/)
-# On first run JSS will prompt for an initial password (TTY only).
+# Default: pod served at server root (#348). WebID is /profile/card#me;
+# the IDP login username is "me". On first run JSS will prompt for an
+# initial password (TTY only).
 jss start --single-user --idp
 
 # Provide the initial IDP password non-interactively (systemd, containers, CI):
 jss start --single-user --idp --single-user-password 'choose-a-good-one'
 JSS_SINGLE_USER_PASSWORD='choose-a-good-one' jss start --single-user --idp
 
-# Custom username
+# Mount the pod at a named path instead of the origin. WebID becomes
+# /alice/profile/card#me; login as "alice".
 jss start --single-user --single-user-name alice --idp
 
-# Root-level pod (pod at /, WebID at /profile/card#me)
-jss start --single-user --single-user-name '' --idp
+# Legacy /me/ pod — same as the old default before #348.
+jss start --single-user --single-user-name me --idp
 
 # Via environment
 JSS_SINGLE_USER=true jss start --idp
