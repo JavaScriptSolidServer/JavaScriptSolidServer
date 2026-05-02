@@ -74,7 +74,11 @@ export const defaults = {
 
   // Single-user mode (personal pod server)
   singleUser: false,
-  singleUserName: 'me',
+  // null = root pod (mounted at server origin, WebID at
+  // /profile/card.jsonld#me). A string mounts the pod at /<name>/ —
+  // useful when more than one Solid identity coexists on the same
+  // origin, or when the operator wants the pre-#348 /me/ shape.
+  singleUserName: null,
   // Initial IDP password seeded on first single-user pod creation. If
   // unset and --idp is enabled, the server prompts on a TTY or logs a
   // warning and continues startup on non-TTY (so the pod is created but
@@ -399,20 +403,17 @@ export function printConfig(config) {
   console.log(`  SSL:           ${config.ssl ? 'enabled' : 'disabled'}`);
   console.log(`  Multi-user:    ${config.multiuser}`);
   if (config.singleUser) {
-    let details = `${config.singleUserName}`;
-    // Password seeding only runs when --idp is on AND the pod isn't the
-    // root-level case ('/'). Reflect both gates in the printed line so
-    // operators don't see a misleading "missing — login disabled" when
-    // login isn't governed by an IDP password at all.
+    const isRootPod = config.singleUserName === '/' || !config.singleUserName;
+    let details = isRootPod ? '/ (root pod)' : config.singleUserName;
+    // The "login as me" hint and password line only make sense when
+    // the built-in IdP is on. With --no-idp / external issuer there's
+    // no built-in login form, so don't imply one exists.
     if (config.idp) {
-      if (config.singleUserName === '/' || !config.singleUserName) {
-        details += ' (root pod; password not seeded)';
-      } else {
-        const pwSource = config.singleUserPassword
-          ? 'provided'
-          : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
-        details += ` (password: ${pwSource})`;
-      }
+      if (isRootPod) details += ', login as "me"';
+      const pwSource = config.singleUserPassword
+        ? 'provided'
+        : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
+      details += ` (password: ${pwSource})`;
     }
     console.log(`  Single-user:   ${details}`);
   }
