@@ -75,9 +75,12 @@ describe('round-trip optimization reader — emission (#346)', () => {
     assert.match(html, /\.get\s*[:=(]/);
   });
 
-  it('queries data islands by data-uri attribute', () => {
+  it('looks up the data island by id and compares data-uri', () => {
+    // Avoiding selector construction sidesteps CSS.escape pitfalls and
+    // selector-injection surface in older browsers.
     const html = generateDatabrowserHtml('https://x.test/foo', '2.0.0');
-    assert.match(html, /script#dataisland\[data-uri="/);
+    assert.match(html, /document\.getElementById\(\s*['"]dataisland['"]\s*\)/);
+    assert.match(html, /getAttribute\(\s*['"]data-uri['"]\s*\)/);
   });
 
   it('marks the fetcher as patched to prevent double-patching', () => {
@@ -165,16 +168,25 @@ function extractReaderSource(html) {
 }
 
 function makeContext({ islands = {}, $rdf = undefined } = {}) {
+  // Single data island per page (matches the real DOM contract). The
+  // accessor uses getElementById('dataisland'), so we expose at most
+  // one element regardless of how many entries the test passes in.
+  const islandEntries = Object.entries(islands);
+  const islandEl = islandEntries.length > 0
+    ? {
+        type: 'application/ld+json',
+        textContent: islandEntries[0][1],
+        getAttribute(name) {
+          return name === 'data-uri' ? islandEntries[0][0] : null;
+        }
+      }
+    : null;
   const document = {
-    querySelector(selector) {
-      const m = selector.match(/data-uri="([^"]+)"/);
-      if (!m) return null;
-      const uri = m[1];
-      if (!(uri in islands)) return null;
-      return { type: 'application/ld+json', textContent: islands[uri] };
+    getElementById(id) {
+      return id === 'dataisland' ? islandEl : null;
     }
   };
-  const window = { CSS: { escape: (s) => String(s).replace(/"/g, '\\"') } };
+  const window = {};
   // Stub setTimeout so the reader's polling fallback (up to ~10s of
   // 100ms ticks when $rdf is absent) does not register real Node
   // timers that keep the test process alive past the assertions.
@@ -183,7 +195,7 @@ function makeContext({ islands = {}, $rdf = undefined } = {}) {
     window, document, $rdf,
     setTimeout: () => 0,
     clearTimeout: () => {},
-    Promise, String, console,
+    Promise, String, console, Response,
     Object: globalThis.Object
   });
 }
@@ -264,13 +276,15 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     assert.strictEqual(parseCalls[0].contentType, 'application/ld+json');
     assert.strictEqual(fakeFetcher.requested['https://x.test/foo'], 'done');
 
-    // Return value is Response-shaped so consumers that inspect
-    // .ok / .status / .url / .headers.get(...) don't break.
+    // Return value is a real Response (or Response-shaped fallback) so
+    // consumers using `instanceof Response` or `.text()` / `.json()`
+    // see the same kind of object as on the network path.
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.status, 200);
     assert.strictEqual(result.url, 'https://x.test/foo');
     assert.strictEqual(typeof result.headers.get, 'function');
-    assert.strictEqual(result.headers.get('content-type'), null);
+    // Content-type header round-trips through the Response init.
+    assert.strictEqual(result.headers.get('content-type'), 'application/ld+json');
   });
 
   it('patched fetcher.load falls through to original on data island miss', async () => {
@@ -382,5 +396,94 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     ctx.window.$rdf = fakeRdf;
     assert.strictEqual(fakeFetcher.__dataIslandPatched, true,
       'fetcher should be patched the moment $rdf is assigned');
+  });
+
+  it('returns a real Response when the constructor is available', async () => {
+    const fakeFetcher = {
+      requested: {},
+      store: {},
+      load: async () => 'orig'
+    };
+    const $rdf = {
+      fetcher: fakeFetcher,
+      parse: (content, store, uri, ct, cb) => cb(null),
+      sym: (u) => u
+    };
+    const ctx = makeContext({
+      islands: { 'https://x.test/foo': '{"@id":"#me"}' },
+      $rdf
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+    const result = await fakeFetcher.load('https://x.test/foo', {});
+    assert.ok(result instanceof Response,
+      'should resolve to a real Response when constructor is available');
+    assert.strictEqual(await result.text(), '{"@id":"#me"}');
+    assert.strictEqual(result.url, 'https://x.test/foo');
+  });
+
+  it('falls back to Response-shaped object when Response is unavailable', async () => {
+    // Build a context without Response so the fallback path runs.
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#x"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+    const window = {};
+    const fakeFetcher = {
+      requested: {},
+      store: {},
+      load: async () => 'orig'
+    };
+    const $rdf = {
+      fetcher: fakeFetcher,
+      parse: (c, s, u, ct, cb) => cb(null),
+      sym: (u) => u
+    };
+    const ctx = vm.createContext({
+      window, document, $rdf,
+      setTimeout: () => 0, clearTimeout: () => {},
+      Promise, String, console,
+      Object: globalThis.Object
+      // Note: no Response in this context.
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+    const result = await fakeFetcher.load('https://x.test/foo', {});
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.status, 200);
+    assert.strictEqual(result.url, 'https://x.test/foo');
+    assert.strictEqual(typeof result.headers.get, 'function');
+  });
+
+  it('tolerates missing fetcher.requested without hanging the Promise', async () => {
+    // Some rdflib/mashlib builds may not initialize `requested`.
+    // The patched load must still resolve cleanly.
+    const fakeFetcher = {
+      // No `requested` property.
+      store: {},
+      load: async () => 'orig'
+    };
+    const $rdf = {
+      fetcher: fakeFetcher,
+      parse: (c, s, u, ct, cb) => cb(null),
+      sym: (u) => u
+    };
+    const ctx = makeContext({
+      islands: { 'https://x.test/foo': '{"@id":"#z"}' },
+      $rdf
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+
+    // Bound the wait so a hanging Promise fails the test rather than
+    // hanging the whole suite.
+    const result = await Promise.race([
+      fakeFetcher.load('https://x.test/foo', {}),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('load() hung')), 500))
+    ]);
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.url, 'https://x.test/foo');
   });
 });

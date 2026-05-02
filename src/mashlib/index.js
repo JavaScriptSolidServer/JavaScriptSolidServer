@@ -109,13 +109,14 @@ export function roundTripOptimizationScript() {
     get: function (uri) {
       if (!uri) return null;
       try {
-        var esc = window.CSS && window.CSS.escape
-          ? window.CSS.escape(uri)
-          : String(uri).replace(/["\\\\]/g, '\\\\$&');
-        var el = document.querySelector(
-          'script#dataisland[data-uri="' + esc + '"]'
-        );
-        if (el && el.type === 'application/ld+json') {
+        // Fetch by id and compare data-uri as a string. Avoids
+        // selector construction entirely so there is no CSS.escape
+        // pitfall, no attribute-string-context injection surface,
+        // and no false misses on URIs containing characters older
+        // browsers' selector parsers handle inconsistently.
+        var el = document.getElementById('dataisland');
+        if (el && el.type === 'application/ld+json'
+            && el.getAttribute('data-uri') === String(uri)) {
           return {
             contentType: 'application/ld+json',
             content: el.textContent
@@ -140,19 +141,48 @@ export function roundTripOptimizationScript() {
           rdf.parse(d.content, f.store, s, d.contentType, function (err) {
             if (err) {
               reject(err);
-            } else {
-              f.requested[s] = 'done';
-              // Return a Response-shaped object so consumers that
-              // inspect the resolved value (e.g. Response.ok, .status,
-              // .url, .headers.get) don't break compared with the
-              // original network path.
-              resolve({
-                ok: true,
-                status: 200,
-                statusText: 'OK',
-                url: s,
-                headers: { get: function () { return null; } }
-              });
+              return;
+            }
+            // Wrap the success path so unexpected throws (e.g.
+            // f.requested missing/non-writable on some rdflib builds)
+            // surface as Promise rejections rather than hanging the
+            // resolution.
+            try {
+              if (f.requested && typeof f.requested === 'object') {
+                f.requested[s] = 'done';
+              }
+              // Return a real Response when available so consumers
+              // using "instanceof Response", ".text()", ".json()",
+              // etc. work the same as on the network path. Fall
+              // back to a Response-shaped plain object in environments
+              // where the Response constructor isn't available.
+              var resp;
+              if (typeof Response === 'function') {
+                resp = new Response(d.content, {
+                  status: 200,
+                  statusText: 'OK',
+                  headers: { 'content-type': d.contentType }
+                });
+                // Response.url is read-only and empty when
+                // constructed; consumers reading it expect the
+                // resource URL. defineProperty is supported on
+                // Response in all browsers we target.
+                try {
+                  Object.defineProperty(resp, 'url',
+                    { value: s, configurable: true });
+                } catch (urlErr) { /* leave url empty */ }
+              } else {
+                resp = {
+                  ok: true,
+                  status: 200,
+                  statusText: 'OK',
+                  url: s,
+                  headers: { get: function () { return null; } }
+                };
+              }
+              resolve(resp);
+            } catch (callbackErr) {
+              reject(callbackErr);
             }
           });
         }).catch(function () { return orig(uri, options); });
