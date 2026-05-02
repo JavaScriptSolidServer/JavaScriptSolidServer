@@ -16,6 +16,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import {
   startTestServer,
   stopTestServer,
@@ -205,5 +207,87 @@ describe('mashlib data island — integration (#7)', () => {
     const body = await res.text();
     assert.doesNotMatch(body, /id="dataisland"/);
     assert.doesNotMatch(body, /<!doctype html>/i);
+  });
+});
+
+// #344: data island also covers Turtle and N3 stored resources, by
+// parsing them server-side and re-emitting the body as JSON-LD inside
+// the script tag. Embedded shape is uniform across stored formats.
+describe('mashlib data island — Turtle/N3 translation (#344)', () => {
+  before(async () => {
+    await startTestServer({ mashlibCdn: true, conneg: true });
+    await createTestPod('turtleisland');
+    await request('/turtleisland/public/note.ttl', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/turtle' },
+      body: '@prefix foaf: <http://xmlns.com/foaf/0.1/> .\n' +
+            '<#note> foaf:name "turtle island" .\n',
+      auth: 'turtleisland'
+    });
+    await request('/turtleisland/public/note.n3', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/n3' },
+      body: '@prefix foaf: <http://xmlns.com/foaf/0.1/> .\n' +
+            '<#note> foaf:name "n3 island" .\n',
+      auth: 'turtleisland'
+    });
+    // The both-parses-fail branch in the handler is unreachable via
+    // HTTP — handlePut validates Turtle/N3 input and rejects malformed
+    // bodies with 400 before they ever reach storage. To exercise the
+    // defensive guard we plant a file directly on disk in the test
+    // data dir, mimicking the "out-of-band placement" case the
+    // production code handles.
+    const brokenPath = path.resolve('./data/turtleisland/public/broken.ttl');
+    await fs.writeFile(
+      brokenPath,
+      '@prefix foaf: <http://xmlns.com/foaf/0.1/>\n' +
+      '<#note> foaf:name "broken — missing dot above" .\n'
+    );
+  });
+
+  after(async () => { await stopTestServer(); });
+
+  it('a browser GET to a Turtle resource embeds parsed JSON-LD', async () => {
+    const res = await request('/turtleisland/public/note.ttl', {
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }
+    });
+    assertStatus(res, 200);
+    assertHeaderContains(res, 'Content-Type', 'text/html');
+    const body = await res.text();
+    assert.match(body, /id="dataisland"/);
+    assert.match(body, /<script type="application\/ld\+json"/);
+    // The Turtle name literal must round-trip into the embedded JSON-LD.
+    assert.match(body, /"turtle island"/);
+    // No raw Turtle prefix syntax should leak into the script body.
+    assert.doesNotMatch(body, /id="dataisland"[^>]*>[^<]*@prefix/);
+  });
+
+  it('a browser GET to an N3 resource embeds parsed JSON-LD', async () => {
+    const res = await request('/turtleisland/public/note.n3', {
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }
+    });
+    assertStatus(res, 200);
+    assertHeaderContains(res, 'Content-Type', 'text/html');
+    const body = await res.text();
+    assert.match(body, /id="dataisland"/);
+    assert.match(body, /"n3 island"/);
+  });
+
+  it('out-of-band malformed Turtle drops the island, wrapper still renders', async () => {
+    // File was planted on disk directly (in `before`), bypassing the
+    // PUT validator. The handler's two-stage parse (JSON, then Turtle)
+    // both fail; the island is dropped silently and the mashlib
+    // wrapper is still served so the browser can XHR-fetch the
+    // resource and surface the parse problem to the user.
+    const res = await request('/turtleisland/public/broken.ttl', {
+      headers: { Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' }
+    });
+    assertStatus(res, 200);
+    assertHeaderContains(res, 'Content-Type', 'text/html');
+    const body = await res.text();
+    assert.doesNotMatch(body, /id="dataisland"/,
+      'island must drop when both JSON and Turtle parses fail');
+    assert.match(body, /<!doctype html>/i);
+    assert.match(body, /mashlib/);
   });
 });
