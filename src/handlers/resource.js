@@ -15,6 +15,7 @@ import {
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
+import { turtleToJsonLd } from '../rdf/turtle.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -330,23 +331,48 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
-    // Phase 1 of #7: embed the resource's JSON-LD bytes as a data
-    // island when it's already JSON-LD (the JSS-native format). Other
-    // formats are out of Phase-1 scope; the wrapper still loads
-    // correctly and mashlib XHR-fetches as before.
+    // #7 / #344: embed the resource as a JSON-LD data island so
+    // non-mashlib consumers (search-engine rich-results, archival
+    // crawlers) get the data without a second request, and so the
+    // shape is uniform regardless of the URL extension.
     //
-    // Cap-aware short-circuit: skip the read entirely when the file is
-    // already over the embed cap. The island would be dropped anyway,
-    // and large JSON-LD resources would otherwise load into memory on
-    // every HTML navigation.
+    // JSS stores all RDF as JSON-LD on disk (PUT converts Turtle/N3
+    // before write — see the conneg branch in handlePut), so for
+    // `.ttl` / `.n3` URLs the bytes on disk are usually already
+    // JSON-LD. Try JSON parse first; only fall back to a Turtle parse
+    // when that fails (covers files placed on the filesystem
+    // out-of-band in their native format).
+    //
+    // Cap-aware short-circuit: skip the read entirely when the file
+    // is already over the embed cap. The island would be dropped
+    // anyway, and large RDF resources would otherwise load into
+    // memory on every HTML navigation. Other formats (rdf+xml, etc.)
+    // are not handled — the wrapper still loads and mashlib
+    // XHR-fetches them as before.
+    const islandConvertible =
+      storedContentType === 'application/ld+json' ||
+      storedContentType === 'text/turtle' ||
+      storedContentType === 'text/n3';
     let embedJsonLd;
-    if (storedContentType === 'application/ld+json' &&
-        stats.size <= DATA_ISLAND_MAX_BYTES) {
-      // dataIsland() in mashlib/index.js coerces Buffer → string itself,
-      // so we hand it the Buffer directly instead of allocating a UTF-8
-      // string copy on every navigation.
+    if (islandConvertible && stats.size <= DATA_ISLAND_MAX_BYTES) {
       const buf = await storage.read(storagePath);
-      if (buf) embedJsonLd = buf;
+      if (buf) {
+        const text = buf.toString('utf8');
+        try {
+          JSON.parse(text);
+          // Already JSON-LD bytes — pass the Buffer through so
+          // dataIsland() can coerce it without an extra string copy.
+          embedJsonLd = buf;
+        } catch {
+          try {
+            const jsonLd = await turtleToJsonLd(text, resourceUrl);
+            embedJsonLd = JSON.stringify(jsonLd);
+          } catch {
+            // Both parses failed → drop the island. The wrapper
+            // still renders and mashlib XHR-fetches the original.
+          }
+        }
+      }
     }
     const html = request.mashlibModule
       ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
