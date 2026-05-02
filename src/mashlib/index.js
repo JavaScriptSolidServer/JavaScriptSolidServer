@@ -53,14 +53,22 @@ function escapeForScriptBlock(jsonLdString) {
  *
  * The cap applies to the *escaped* body — i.e. the bytes that will
  * actually appear in the HTTP response. `escapeForScriptBlock` can
- * expand input up to 6x (each `<` becomes 6 chars `<`), so
- * checking the raw input size could let an HTML response balloon past
- * the cap. We always escape first (it's cheap, single-pass) and then
- * gate on the result.
+ * expand input up to 6x (each literal `<` becomes the 6-byte JSON
+ * escape sequence backslash-u-0-0-3-c), so checking the raw input
+ * size alone could let an HTML response balloon past the cap.
+ *
+ * Two-stage check:
+ *   1. Cheap raw-byte pre-check — escape can only grow the body,
+ *      so a raw payload already over the cap is guaranteed to be
+ *      over after escaping; drop without doing the work.
+ *   2. Post-escape check — catches the rare case where input was
+ *      under the cap but expanded above it (`<`-heavy bodies).
  */
 function dataIsland(resourceUrl, jsonLdString) {
   if (!jsonLdString) return '';
-  const safeBody = escapeForScriptBlock(jsonLdString);
+  const raw = String(jsonLdString);
+  if (Buffer.byteLength(raw, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
+  const safeBody = escapeForScriptBlock(raw);
   if (Buffer.byteLength(safeBody, 'utf8') > DATA_ISLAND_MAX_BYTES) return '';
   const safeUri = escapeHtml(String(resourceUrl));
   return `<script type="application/ld+json" id="dataisland" data-uri="${safeUri}">${safeBody}</script>`;

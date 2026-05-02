@@ -62,8 +62,9 @@ describe('mashlib data island — emission (unit, #7)', () => {
 
   it('cap applies post-escape (defends against `<`-heavy expansion)', () => {
     // A pathological body that's well under the cap as raw bytes but
-    // explodes 6x after escaping — every byte becomes `<`. Without
-    // the post-escape check, this would emit a multi-megabyte island.
+    // explodes 6x after escaping — every literal `<` byte becomes the
+    // 6-byte JSON escape sequence backslash-u-0-0-3-c. Without the
+    // post-escape check, this would emit a multi-megabyte island.
     const halfCap = Math.floor(DATA_ISLAND_MAX_BYTES / 2);
     const payload = '<'.repeat(halfCap); // 128 KB raw, ~768 KB escaped
     const html = generateDatabrowserHtml(
