@@ -94,8 +94,15 @@ export function createServer(options = {}) {
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
   // Default null = root pod (#348). Pass an explicit singleUserName
-  // to mount the pod at /<name>/ instead.
-  const singleUserName = options.singleUserName ?? null;
+  // to mount the pod at /<name>/ instead. Normalize the
+  // historical `'/'` / `''` forms to null up front so downstream
+  // code (remoteStoragePlugin, decorators, etc.) doesn't have to
+  // re-check for the same three shapes — see PR #349 review.
+  const rawSingleUserName = options.singleUserName ?? null;
+  const singleUserName =
+    (rawSingleUserName === '/' || rawSingleUserName === '')
+      ? null
+      : rawSingleUserName;
   const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
@@ -560,8 +567,10 @@ export function createServer(options = {}) {
       const baseUrl = idpIssuer?.replace(/\/$/, '') || `${protocol}://${host}:${port}`;
       const issuer = idpIssuer || `${baseUrl}/`;
 
-      // Root-level pod (empty or '/' name) vs named pod
-      const isRootPod = !singleUserName || singleUserName === '/';
+      // Root pod (no name) vs named pod. After the singleUserName
+      // normalization at the top of createServer(), null is the only
+      // root-pod shape we need to recognize here.
+      const isRootPod = !singleUserName;
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
       const displayName = isRootPod ? 'me' : singleUserName;
@@ -581,6 +590,25 @@ export function createServer(options = {}) {
       const profileExists = hasJsonLd || hasLegacy;
 
       if (!profileExists) {
+        // Migration trap (#348 review round 2): if the operator is
+        // about to seed a fresh root pod but a `/me/` pod already
+        // exists, they probably upgraded an old `--single-user`
+        // (default 'me') install without realizing the default
+        // changed. The new pod will be empty and the existing
+        // /me/ data unreferenced. Warn loudly so they don't silently
+        // end up with two half-functional pods.
+        if (isRootPod) {
+          const meHasJsonLd = await storage.exists('/me/profile/card.jsonld');
+          const meHasLegacy = !meHasJsonLd && await storage.exists('/me/profile/card');
+          if (meHasJsonLd || meHasLegacy) {
+            fastify.log.warn(
+              'Found existing /me/ pod data while seeding the new default root pod. ' +
+              'The default single-user pod path changed to / (was /me/) — see #348. ' +
+              'To keep using your existing pod, restart with --single-user-name me. ' +
+              'Otherwise the new root pod will be empty and the /me/ data unreferenced.'
+            );
+          }
+        }
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
 
         if (isRootPod) {

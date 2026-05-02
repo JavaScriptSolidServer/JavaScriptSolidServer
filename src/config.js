@@ -74,9 +74,10 @@ export const defaults = {
 
   // Single-user mode (personal pod server)
   singleUser: false,
-  // null = root pod (mounted at server origin, WebID at /profile/card#me).
-  // A string mounts the pod at /<name>/ — useful when more than one Solid
-  // identity coexists on the same origin (#348).
+  // null = root pod (mounted at server origin, WebID at
+  // /profile/card.jsonld#me). A string mounts the pod at /<name>/ —
+  // useful when more than one Solid identity coexists on the same
+  // origin, or when the operator wants the pre-#348 /me/ shape.
   singleUserName: null,
   // Initial IDP password seeded on first single-user pod creation. If
   // unset and --idp is enabled, the server prompts on a TTY or logs a
@@ -403,10 +404,12 @@ export function printConfig(config) {
   console.log(`  Multi-user:    ${config.multiuser}`);
   if (config.singleUser) {
     const isRootPod = config.singleUserName === '/' || !config.singleUserName;
-    // Root pod (#348) seeds the IDP account under the username 'me' —
-    // the same login flow as a named pod, just at a different mount.
-    let details = isRootPod ? '/ (root pod, login as "me")' : config.singleUserName;
+    let details = isRootPod ? '/ (root pod)' : config.singleUserName;
+    // The "login as me" hint and password line only make sense when
+    // the built-in IdP is on. With --no-idp / external issuer there's
+    // no built-in login form, so don't imply one exists.
     if (config.idp) {
+      if (isRootPod) details += ', login as "me"';
       const pwSource = config.singleUserPassword
         ? 'provided'
         : (process.stdin.isTTY ? 'will prompt at startup' : 'missing — login disabled');
