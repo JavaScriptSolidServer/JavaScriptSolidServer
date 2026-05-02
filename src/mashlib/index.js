@@ -75,6 +75,23 @@ function dataIsland(resourceUrl, jsonLdString) {
 }
 
 /**
+ * Inline round-trip optimization reader (#346).
+ *
+ * Exposes a generic `window.__dataIsland.get(uri)` accessor any client
+ * can use, plus a bounded-retry compatibility patch for rdflib-based
+ * clients (mashlib and friends) that intercepts `fetcher.load(uri)` and
+ * resolves from the inline JSON-LD data island instead of issuing a
+ * second HTTP request. Falls through cleanly to the original network
+ * fetch on any miss, parse error, or absent rdflib.
+ *
+ * Net effect: when JSS serves an HTML wrapper with an embedded data
+ * island, the page renders with one HTTP round-trip instead of two.
+ */
+function roundTripOptimizationScript() {
+  return `<script>(function(){if(typeof window==='undefined')return;window.__dataIsland=window.__dataIsland||{get:function(uri){if(!uri)return null;try{var esc=window.CSS&&CSS.escape?CSS.escape(uri):String(uri).replace(/["\\\\]/g,'\\\\$&');var el=document.querySelector('script#dataisland[data-uri="'+esc+'"]');if(el&&el.type==='application/ld+json')return{contentType:'application/ld+json',content:el.textContent};}catch(e){}return null;}};var n=0;(function p(){if(++n>100)return;if(typeof $rdf==='undefined'||!$rdf.fetcher||!$rdf.fetcher.load){setTimeout(p,100);return;}if($rdf.fetcher.__dataIslandPatched)return;$rdf.fetcher.__dataIslandPatched=true;var f=$rdf.fetcher,orig=f.load.bind(f);f.load=function(uri,options){var s=(uri&&uri.uri)||(uri&&uri.value)||String(uri);var d=window.__dataIsland.get(s);if(d){return new Promise(function(resolve,reject){$rdf.parse(d.content,f.store,s,d.contentType,function(err){if(err)reject(err);else{f.requested[s]='done';resolve($rdf.sym?$rdf.sym(s):s);}});}).catch(function(){return orig(uri,options);});}return orig(uri,options);};})();})();</script>`;
+}
+
+/**
  * Generate Mashlib databrowser HTML
  *
  * @param {string} resourceUrl - The URL of the resource being viewed
@@ -84,17 +101,23 @@ function dataIsland(resourceUrl, jsonLdString) {
  *   as a `<script type="application/ld+json">` data island. Accepts a
  *   UTF-8 string or a Buffer (coerced via `String()`). Honors a 256 KB
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
+ * @param {boolean} [opts.roundTripOptimization=true] - Inline a small
+ *   reader script that lets rdflib-based clients (mashlib and friends)
+ *   resolve `fetcher.load(uri)` from the data island instead of issuing
+ *   a second HTTP request. Falls through to network fetch on any miss
+ *   or parse error. #346.
  * @returns {string} HTML content
  */
 export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {}) {
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
+  const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
     return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
 <link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody">${island}<header id="PageHeader"></header>
+<body id="PageBody">${island}${reader}<header id="PageHeader"></header>
 <div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
 <footer id="PageFooter"></footer>
 <script>
@@ -111,7 +134,7 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
   // Local mode - use defer (reliable when served locally)
   return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
         panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}${reader}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
@@ -122,16 +145,19 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
  * @param {object} [opts]
  * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body for the
  *   data island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
+ * @param {boolean} [opts.roundTripOptimization=true] - Inline reader
+ *   script (#346); see `generateDatabrowserHtml` for details.
  * @returns {string} HTML content
  */
 export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts = {}) {
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
+  const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
-<body>${island}<div id="mashlib"></div>
+<body>${island}${reader}<div id="mashlib"></div>
 <script type="module" src="${moduleUrl}"></script>
 </body></html>`;
 }
