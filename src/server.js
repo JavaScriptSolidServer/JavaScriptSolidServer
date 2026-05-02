@@ -93,7 +93,9 @@ export function createServer(options = {}) {
   const inviteOnly = options.inviteOnly ?? false;
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
-  const singleUserName = options.singleUserName ?? 'me';
+  // Default null = root pod (#348). Pass an explicit singleUserName
+  // to mount the pod at /<name>/ instead.
+  const singleUserName = options.singleUserName ?? null;
   const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;

@@ -458,6 +458,60 @@ describe('Identity Provider - Root pod type index ACLs', () => {
   });
 });
 
+// #348: --single-user with no name flag now defaults to a root pod
+// (was '/me/' historically). The server-side seed must land the
+// profile at /profile/card.jsonld, not /me/profile/card.jsonld.
+describe('Single-user default — root pod (#348)', () => {
+  let server;
+  let baseUrl;
+  const DEFAULT_DATA_DIR = './test-data-348-default-root';
+
+  before(async () => {
+    await fs.remove(DEFAULT_DATA_DIR);
+    await fs.ensureDir(DEFAULT_DATA_DIR);
+
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
+    server = createServer({
+      logger: false,
+      root: DEFAULT_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      // singleUserName intentionally omitted — exercises the new default.
+      forceCloseConnections: true,
+    });
+
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(DEFAULT_DATA_DIR);
+  });
+
+  it('seeds the profile at /profile/card.jsonld (not /me/profile/...)', async () => {
+    const root = await fetch(`${baseUrl}/profile/card.jsonld`);
+    assert.strictEqual(root.status, 200,
+      '--single-user with no name should default to a root pod');
+    const me = await fetch(`${baseUrl}/me/profile/card.jsonld`);
+    assert.notStrictEqual(me.status, 200,
+      'no /me/ pod should be served when singleUserName is unset (got 200)');
+  });
+
+  it('WebID resolves at the server origin', async () => {
+    const res = await fetch(`${baseUrl}/profile/card.jsonld`);
+    const body = await res.json();
+    const webId = `${baseUrl}/profile/card.jsonld#me`;
+    // The seeded profile uses the bare WebID as @id.
+    const matches = Array.isArray(body)
+      ? body.some(n => n['@id'] === webId)
+      : body['@id'] === webId || (body['@graph'] || []).some(n => n['@id'] === webId);
+    assert.ok(matches, `profile should declare WebID ${webId}, got: ${JSON.stringify(body).slice(0, 200)}`);
+  });
+});
+
 describe('Identity Provider - Accounts', () => {
   let server;
   let accountsUrl;
