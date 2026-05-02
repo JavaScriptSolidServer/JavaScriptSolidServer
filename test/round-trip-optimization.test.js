@@ -526,6 +526,61 @@ describe('round-trip optimization reader — runtime behavior (#346)', () => {
     assert.strictEqual(result.content, '{"@id":"#me"}');
   });
 
+  it('normalizes primitive window.__dataIsland to an object before attaching .get', () => {
+    // If a script accidentally assigned a primitive (string/number/etc),
+    // `|| {}` would preserve it and attaching .get would silently fail.
+    // The reader must reset to a plain object before adding .get.
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#me"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+
+    for (const primitive of ['stringy', 42, true, Symbol('x')]) {
+      const window = { __dataIsland: primitive };
+      const ctx = vm.createContext({
+        window, document,
+        setTimeout: () => 0, clearTimeout: () => {},
+        Promise, String, console, Response,
+        Object: globalThis.Object
+      });
+      vm.runInContext(extractReaderSource(html), ctx);
+      assert.strictEqual(typeof ctx.window.__dataIsland, 'object',
+        'primitive should be normalized to object');
+      assert.strictEqual(typeof ctx.window.__dataIsland.get, 'function',
+        '.get should be installed after normalization');
+      // And it works:
+      const result = ctx.window.__dataIsland.get('https://x.test/foo');
+      assert.strictEqual(result.contentType, 'application/ld+json');
+    }
+  });
+
+  it('normalizes a null window.__dataIsland to an object before attaching .get', () => {
+    // typeof null === 'object', so a naive object-check would let null
+    // through. Explicit null check is required.
+    const islandEl = {
+      type: 'application/ld+json',
+      textContent: '{"@id":"#me"}',
+      getAttribute: (n) => n === 'data-uri' ? 'https://x.test/foo' : null
+    };
+    const document = {
+      getElementById: (id) => id === 'dataisland' ? islandEl : null
+    };
+    const window = { __dataIsland: null };
+    const ctx = vm.createContext({
+      window, document,
+      setTimeout: () => 0, clearTimeout: () => {},
+      Promise, String, console, Response,
+      Object: globalThis.Object
+    });
+    vm.runInContext(extractReaderSource(html), ctx);
+    assert.notStrictEqual(ctx.window.__dataIsland, null);
+    assert.strictEqual(typeof ctx.window.__dataIsland.get, 'function');
+  });
+
   it('does not overwrite a pre-existing window.__dataIsland.get', () => {
     const customGet = function () {
       return { contentType: 'custom', content: 'from-custom-get' };

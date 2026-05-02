@@ -106,12 +106,20 @@ export function roundTripOptimizationScript() {
   if (typeof window === 'undefined') return;
 
   // Initialize defensively: another script may have set a truthy
-  // window.__dataIsland that lacks a .get function. Preserve any
-  // existing object but always ensure .get is callable so consumers
-  // never hit a TypeError on the inline-data fast path.
-  window.__dataIsland = window.__dataIsland || {};
-  if (typeof window.__dataIsland.get !== 'function') {
-    window.__dataIsland.get = function (uri) {
+  // window.__dataIsland that lacks a .get function — or, worse,
+  // assigned a primitive (string, number, etc.) where attaching
+  // .get would silently fail in non-strict mode and throw in strict
+  // mode. Normalize to a plain object first if the existing value
+  // is not an object or function (this also handles a null value,
+  // since typeof null === 'object'). Preserve well-formed existing
+  // implementations so consumers can register custom .get hooks.
+  var di = window.__dataIsland;
+  if (di === null || di === undefined
+      || (typeof di !== 'object' && typeof di !== 'function')) {
+    di = window.__dataIsland = {};
+  }
+  if (typeof di.get !== 'function') {
+    di.get = function (uri) {
       if (!uri) return null;
       try {
         // Fetch by id and compare data-uri as a string. Avoids
