@@ -78,17 +78,106 @@ function dataIsland(resourceUrl, jsonLdString) {
  * Inline round-trip optimization reader (#346).
  *
  * Exposes a generic `window.__dataIsland.get(uri)` accessor any client
- * can use, plus a bounded-retry compatibility patch for rdflib-based
- * clients (mashlib and friends) that intercepts `fetcher.load(uri)` and
+ * can use, plus a compatibility patch for rdflib-based clients
+ * (mashlib and friends) that intercepts `fetcher.load(uri)` and
  * resolves from the inline JSON-LD data island instead of issuing a
  * second HTTP request. Falls through cleanly to the original network
  * fetch on any miss, parse error, or absent rdflib.
  *
+ * Three detection paths to cover the timing space:
+ *   1. Synchronous check — if `$rdf` is already on the page when this
+ *      script runs (e.g. reader injected after mashlib in some custom
+ *      flow), patch immediately.
+ *   2. Setter on `window.$rdf` — catches the assignment as soon as
+ *      mashlib publishes its rdflib instance. Closes the race where
+ *      mashlib's bundle initializes and calls `panes.runDataBrowser()`
+ *      synchronously inside an `onload` handler before any setTimeout
+ *      poll could fire.
+ *   3. Polling fallback — bounded retry for environments where the
+ *      property setter is rejected (e.g. `$rdf` already defined as a
+ *      non-configurable own property).
+ *
  * Net effect: when JSS serves an HTML wrapper with an embedded data
  * island, the page renders with one HTTP round-trip instead of two.
  */
-function roundTripOptimizationScript() {
-  return `<script>(function(){if(typeof window==='undefined')return;window.__dataIsland=window.__dataIsland||{get:function(uri){if(!uri)return null;try{var esc=window.CSS&&window.CSS.escape?window.CSS.escape(uri):String(uri).replace(/["\\\\]/g,'\\\\$&');var el=document.querySelector('script#dataisland[data-uri="'+esc+'"]');if(el&&el.type==='application/ld+json')return{contentType:'application/ld+json',content:el.textContent};}catch(e){}return null;}};var n=0;(function p(){if(++n>100)return;if(typeof $rdf==='undefined'||!$rdf.fetcher||!$rdf.fetcher.load){setTimeout(p,100);return;}if($rdf.fetcher.__dataIslandPatched)return;$rdf.fetcher.__dataIslandPatched=true;var f=$rdf.fetcher,orig=f.load.bind(f);f.load=function(uri,options){var s=(uri&&uri.uri)||(uri&&uri.value)||String(uri);var d=window.__dataIsland.get(s);if(d){return new Promise(function(resolve,reject){$rdf.parse(d.content,f.store,s,d.contentType,function(err){if(err)reject(err);else{f.requested[s]='done';resolve($rdf.sym?$rdf.sym(s):s);}});}).catch(function(){return orig(uri,options);});}return orig(uri,options);};})();})();</script>`;
+export function roundTripOptimizationScript() {
+  return `<script>
+(function () {
+  if (typeof window === 'undefined') return;
+
+  window.__dataIsland = window.__dataIsland || {
+    get: function (uri) {
+      if (!uri) return null;
+      try {
+        var esc = window.CSS && window.CSS.escape
+          ? window.CSS.escape(uri)
+          : String(uri).replace(/["\\\\]/g, '\\\\$&');
+        var el = document.querySelector(
+          'script#dataisland[data-uri="' + esc + '"]'
+        );
+        if (el && el.type === 'application/ld+json') {
+          return {
+            contentType: 'application/ld+json',
+            content: el.textContent
+          };
+        }
+      } catch (e) { /* fall through to null */ }
+      return null;
+    }
+  };
+
+  function applyPatch(rdf) {
+    if (!rdf || !rdf.fetcher || !rdf.fetcher.load) return;
+    if (rdf.fetcher.__dataIslandPatched) return;
+    rdf.fetcher.__dataIslandPatched = true;
+    var f = rdf.fetcher;
+    var orig = f.load.bind(f);
+    f.load = function (uri, options) {
+      var s = (uri && uri.uri) || (uri && uri.value) || String(uri);
+      var d = window.__dataIsland.get(s);
+      if (d) {
+        return new Promise(function (resolve, reject) {
+          rdf.parse(d.content, f.store, s, d.contentType, function (err) {
+            if (err) {
+              reject(err);
+            } else {
+              f.requested[s] = 'done';
+              resolve(rdf.sym ? rdf.sym(s) : s);
+            }
+          });
+        }).catch(function () { return orig(uri, options); });
+      }
+      return orig(uri, options);
+    };
+  }
+
+  // Path 1: synchronous check
+  if (typeof $rdf !== 'undefined') applyPatch($rdf);
+
+  // Path 2: setter for $rdf — catches synchronous mashlib initialization
+  try {
+    var captured = (typeof $rdf !== 'undefined') ? $rdf : undefined;
+    Object.defineProperty(window, '$rdf', {
+      configurable: true,
+      get: function () { return captured; },
+      set: function (v) { captured = v; applyPatch(v); }
+    });
+  } catch (e) {
+    /* property non-configurable or otherwise un-redefinable;
+       the polling fallback below covers this case */
+  }
+
+  // Path 3: polling fallback
+  var n = 0;
+  (function poll() {
+    if (++n > 100) return;
+    if (typeof $rdf !== 'undefined' && $rdf && $rdf.fetcher
+        && $rdf.fetcher.__dataIslandPatched) return;
+    if (typeof $rdf !== 'undefined') applyPatch($rdf);
+    setTimeout(poll, 100);
+  })();
+})();
+</script>`;
 }
 
 /**
