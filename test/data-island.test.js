@@ -2,8 +2,8 @@
  * Phase-1 tests for the JSON-LD data island (#7).
  *
  * The mashlib HTML wrapper now carries the resource's JSON-LD bytes
- * inside a `<script type="application/ld+json" id="dataisland">`
- * block. Phase 1 doesn't change mashlib's runtime behaviour — the
+ * inside a `<script type="application/ld+json" id="dataisland"
+ * data-uri="...">` block. Phase 1 doesn't change mashlib's runtime behaviour — the
  * island is purely additive — so these tests pin:
  *   - emission shape (script tag, id, MIME, data-uri)
  *   - escape: any `</script>` substring inside the body must not
@@ -107,7 +107,8 @@ describe('mashlib data island — emission (unit, #7)', () => {
       // After our escape, the body must contain NO literal `<`.
       assert.doesNotMatch(inner, /</,
         `script body must not contain a literal "<" — got: ${JSON.stringify(inner)}`);
-      // The escaped form should be present (`<`).
+      // The escaped form (the six characters backslash-u-0-0-3-c)
+      // should be present.
       assert.match(inner, /\\u003c/,
         'escaped form `\\u003c` must appear');
     });
