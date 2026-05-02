@@ -1,7 +1,6 @@
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
@@ -98,34 +97,18 @@ export function createServer(options = {}) {
   // to mount the pod at /<name>/ instead. Normalize the
   // historical `'/'` / `''` forms to null up front so downstream
   // code (remoteStoragePlugin, decorators, etc.) doesn't have to
-  // re-check for the same three shapes — see PR #349 review.
+  // re-check for the same three shapes.
+  //
+  // Pre-#348 installs (default 'me') that upgrade in place will see
+  // a fresh empty root pod alongside their /me/ data. The fix is to
+  // pass `--single-user-name me` on restart (or move data/me/* out
+  // to the data root). At v0.0.x we accept that one-time
+  // intervention rather than carrying detection magic in the code.
   const rawSingleUserName = options.singleUserName ?? null;
-  const normalizedName =
+  const singleUserName =
     (rawSingleUserName === '/' || rawSingleUserName === '')
       ? null
       : rawSingleUserName;
-
-  // #348 backwards-compat for in-place upgrades: if the operator
-  // didn't pass --single-user-name and a /me/ pod from a pre-#348
-  // install already exists on disk, fall back to the legacy 'me'
-  // name so the existing pod and IDP account stay live. Without
-  // this, the new default would seed an empty root pod alongside
-  // the still-served /me/ data — a split-brain state where the
-  // operator has no way to log in to the new pod (the 'me' IDP
-  // account still points at /me/profile/card) and clients keep
-  // reading/writing the legacy one. The disk check is sync because
-  // remoteStoragePlugin captures the username at registration time
-  // (before onReady fires).
-  const dataRoot = options.root || process.env.DATA_ROOT || './data';
-  let singleUserName = normalizedName;
-  let migratedFromMeDefault = false;
-  if (singleUser && singleUserName === null) {
-    if (existsSync(join(dataRoot, 'me/profile/card.jsonld')) ||
-        existsSync(join(dataRoot, 'me/profile/card'))) {
-      singleUserName = 'me';
-      migratedFromMeDefault = true;
-    }
-  }
   const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
@@ -611,20 +594,6 @@ export function createServer(options = {}) {
                           : 'profile/card.jsonld'; // fresh pod default
       const webId = `${podUri}${profileFile}#me`;
       const profileExists = hasJsonLd || hasLegacy;
-
-      if (migratedFromMeDefault) {
-        // Surface the auto-fallback once at startup so operators
-        // know why their pod is at /me/ instead of /. This is
-        // backwards-compat for pre-#348 installs — the new default
-        // (root pod) only kicks in when no /me/ data exists.
-        fastify.log.warn(
-          'Detected pre-existing /me/ pod data. Falling back to ' +
-          '--single-user-name me for backwards compatibility (#348 ' +
-          'changed the default pod path from /me/ to /). To opt into ' +
-          'the new default root pod, move data/me/* to data/* and ' +
-          'remove the IDP account for "me" before restarting.'
-        );
-      }
 
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);

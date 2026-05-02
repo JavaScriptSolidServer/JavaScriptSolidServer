@@ -498,9 +498,13 @@ describe('Single-user default — root pod (#348)', () => {
     const root = await fetch(`${baseUrl}/profile/card.jsonld`);
     assert.strictEqual(root.status, 200,
       '--single-user with no name should default to a root pod');
-    const me = await fetch(`${baseUrl}/me/profile/card.jsonld`);
-    assert.notStrictEqual(me.status, 200,
-      'no /me/ pod should be served when singleUserName is unset (got 200)');
+    // Check the filesystem directly — an HTTP-only check could pass
+    // on a 401 even if /me/ data was somehow seeded, which would
+    // hide the regression we care about (root vs /me/ pod).
+    assert.strictEqual(await fs.pathExists(path.join(DEFAULT_DATA_DIR, 'me/profile/card.jsonld')), false,
+      'no /me/ pod files should be created when singleUserName is unset');
+    assert.strictEqual(await fs.pathExists(path.join(DEFAULT_DATA_DIR, 'me/profile/card')), false,
+      'no legacy /me/ pod files should be created either');
   });
 
   it('WebID resolves at the server origin', async () => {
@@ -527,90 +531,6 @@ describe('Single-user default — root pod (#348)', () => {
     });
     assert.strictEqual(res.status, 200,
       `login as "me" should succeed for the default root pod (got ${res.status})`);
-    const body = await res.json();
-    assert.ok(body.access_token, 'response should carry an access token');
-  });
-});
-
-// #348 review round 3: starting against a data dir that already has
-// a pre-#348 `/me/` pod — without the operator passing
-// --single-user-name — must NOT seed a fresh empty root pod
-// alongside it. The auto-fallback should detect /me/ and keep
-// serving from there, preserving the legacy WebID and IDP account.
-describe('Single-user upgrade fallback — pre-existing /me/ pod (#348)', () => {
-  let server;
-  let baseUrl;
-  const UPGRADE_DATA_DIR = './test-data-348-upgrade-from-me';
-  const LEGACY_PASSWORD = 'legacy-pre-348-pw';
-
-  before(async () => {
-    await fs.remove(UPGRADE_DATA_DIR);
-    await fs.ensureDir(UPGRADE_DATA_DIR);
-
-    // Reuse the same port across phases. ACL bodies seeded in
-    // phase 1 carry absolute URIs with the host+port; if phase 2
-    // bound a different port, the ACL's `acl:accessTo` would no
-    // longer match the requested resource and access checks would
-    // fail spuriously — that's a test-setup artifact, not a real
-    // upgrade bug.
-    const port = await getAvailablePort();
-    baseUrl = `http://${TEST_HOST}:${port}`;
-
-    // Phase 1: spin up a server in the *old* shape (explicit
-    // --single-user-name me) so the seeding pipeline produces a
-    // realistic pre-#348 layout — pod at /me/, IDP account "me"
-    // pointing at /me/profile/card.jsonld#me.
-    let s = createServer({
-      logger: false,
-      root: UPGRADE_DATA_DIR,
-      idp: true,
-      idpIssuer: baseUrl,
-      singleUser: true,
-      singleUserName: 'me',
-      singleUserPassword: LEGACY_PASSWORD,
-      forceCloseConnections: true,
-    });
-    await s.listen({ port, host: TEST_HOST });
-    await s.close();
-
-    // Phase 2: restart against the same data dir without the name
-    // flag — this is the in-place upgrade path.
-    server = createServer({
-      logger: false,
-      root: UPGRADE_DATA_DIR,
-      idp: true,
-      idpIssuer: baseUrl,
-      singleUser: true,
-      // singleUserName intentionally omitted.
-      forceCloseConnections: true,
-    });
-    await server.listen({ port, host: TEST_HOST });
-  });
-
-  after(async () => {
-    await server.close();
-    await fs.remove(UPGRADE_DATA_DIR);
-  });
-
-  it('keeps serving the existing /me/ profile (no fresh root pod)', async () => {
-    const me = await fetch(`${baseUrl}/me/profile/card.jsonld`);
-    assert.strictEqual(me.status, 200,
-      'pre-existing /me/ pod should remain reachable after upgrade');
-    // The auto-fallback should NOT have seeded a separate root pod.
-    // We can't reliably test "the file at / does not exist" via HTTP
-    // (WAC may rewrite to 401), but we can verify the auto-fallback
-    // path was taken by checking that /me/'s WebID is still the one
-    // bound to the IDP account — the login probe below verifies that.
-  });
-
-  it('legacy "me" login still works against /me/profile/card.jsonld#me', async () => {
-    const res = await fetch(`${baseUrl}/idp/credentials`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'me', password: LEGACY_PASSWORD }),
-    });
-    assert.strictEqual(res.status, 200,
-      'pre-existing IDP account for "me" should still authenticate');
     const body = await res.json();
     assert.ok(body.access_token, 'response should carry an access token');
   });

@@ -285,6 +285,10 @@ JSS_SINGLE_USER=true jss start --idp
 - Login works for the single user via password (`POST /idp/credentials`) or any other configured method
 - Proper ACLs generated automatically
 
+**Upgrading from a pre-#348 install:** if your existing pod was created with the old default (data lives under `<root>/me/`), JSS no longer auto-detects it — restarting plain `jss start --single-user` will start seeding a fresh empty root pod alongside your legacy `/me/` data, and your existing IDP account will keep authenticating against `/me/`. Pick one path on the next restart:
+- Add `--single-user-name me` to keep the legacy `/me/` layout exactly as before.
+- Move `<root>/me/*` to `<root>/`, delete the IDP account for `me` (so the new root pod's `me` account can be seeded), then restart without the name flag.
+
 **Initial password sources, in priority order:**
 1. `--single-user-password <pw>` CLI flag
 2. `JSS_SINGLE_USER_PASSWORD` env var
