@@ -242,8 +242,10 @@ export async function handleGet(request, reply) {
       // data island so consumers that look for `<script
       // type="application/ld+json">` (search-engine rich-results,
       // archival crawlers, future mashlib zero-fetch path) get the data
-      // without a second request.
-      const embedJsonLd = serializeJsonLd(jsonLd);
+      // without a second request. Use compact (no-whitespace) form for
+      // the embed so we don't burn bytes against DATA_ISLAND_MAX_BYTES
+      // on indentation that nothing will ever read.
+      const embedJsonLd = JSON.stringify(jsonLd);
       const html = request.mashlibModule
         ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
         : generateDatabrowserHtml(
@@ -340,8 +342,11 @@ export async function handleGet(request, reply) {
     let embedJsonLd;
     if (storedContentType === 'application/ld+json' &&
         stats.size <= DATA_ISLAND_MAX_BYTES) {
+      // dataIsland() in mashlib/index.js coerces Buffer → string itself,
+      // so we hand it the Buffer directly instead of allocating a UTF-8
+      // string copy on every navigation.
       const buf = await storage.read(storagePath);
-      if (buf) embedJsonLd = buf.toString('utf8');
+      if (buf) embedJsonLd = buf;
     }
     const html = request.mashlibModule
       ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
