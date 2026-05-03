@@ -144,6 +144,19 @@ export async function createAccount({ username, password, webId, podName, email 
 }
 
 /**
+ * Verify a password against an account's stored hash without side effects.
+ * Use this for re-auth proofs (e.g. password rotation) where stamping
+ * lastLogin would falsify the audit trail.
+ * @param {object} account - Account object with passwordHash
+ * @param {string} password - Plain text password
+ * @returns {Promise<boolean>}
+ */
+export async function verifyPassword(account, password) {
+  if (!account?.passwordHash) return false;
+  return bcrypt.compare(password, account.passwordHash);
+}
+
+/**
  * Authenticate a user with username/email and password
  * @param {string} identifier - Username or email
  * @param {string} password - Plain text password

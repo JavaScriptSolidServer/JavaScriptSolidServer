@@ -5,7 +5,7 @@
 
 import * as jose from 'jose';
 import crypto from 'crypto';
-import { authenticate, findByWebId, updatePassword } from './accounts.js';
+import { authenticate, findByWebId, updatePassword, verifyPassword } from './accounts.js';
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 
@@ -248,9 +248,9 @@ export async function handleChangePassword(request, reply) {
     });
   }
 
-  // 4. Verify currentPassword (re-auth proof)
-  const reauth = await authenticate(account.email, currentPassword);
-  if (!reauth || reauth.id !== account.id) {
+  // 4. Verify currentPassword (re-auth proof). Side-effect-free — does NOT
+  // stamp lastLogin, since password rotation isn't a login event.
+  if (!(await verifyPassword(account, currentPassword))) {
     return reply.code(401).send({
       error: 'invalid_grant',
       error_description: 'Current password is incorrect',
