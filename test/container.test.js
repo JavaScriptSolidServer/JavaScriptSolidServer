@@ -24,23 +24,25 @@ describe('generateContainerJsonLd dotfile filtering (#350)', () => {
     ]);
   });
 
-  it('keeps allowed Solid dotfiles (.acl, .meta, .well-known)', () => {
+  it('keeps canonical Solid per-resource sidecars (.acl, .meta)', () => {
     const out = generateContainerJsonLd('https://example.com/pod/', [
       { name: '.acl', isDirectory: false },
       { name: '.meta', isDirectory: false },
-      { name: '.well-known', isDirectory: true },
     ]);
     const ids = out.contains.map(c => c['@id']);
     assert.ok(ids.includes('https://example.com/pod/.acl'));
     assert.ok(ids.includes('https://example.com/pod/.meta'));
-    assert.ok(ids.includes('https://example.com/pod/.well-known/'));
   });
 
-  it('hides server-internal sidecars (.idp/, .quota.json, .server/)', () => {
+  it('hides server-internal sidecars (.idp/, .quota.json, .server/, .well-known/)', () => {
+    // .well-known is intentionally hidden in listings even though routing
+    // allows it — JSS persists token-store and pay state under
+    // DATA_ROOT/.well-known/, so listing it leaks internal paths.
     const out = generateContainerJsonLd('https://example.com/', [
       { name: '.idp', isDirectory: true },
       { name: '.quota.json', isDirectory: false },
       { name: '.server', isDirectory: true },
+      { name: '.well-known', isDirectory: true },
     ]);
     assert.deepStrictEqual(out.contains, []);
   });

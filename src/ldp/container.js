@@ -5,11 +5,17 @@
 const LDP = 'http://www.w3.org/ns/ldp#';
 
 // Dotfiles allowed to appear in ldp:contains. Anything else starting with '.'
-// is server-internal state (.idp, .quota.json, .server, future .git, etc.) and
-// must not leak into container listings — even when its contents are otherwise
-// ACL-gated, the *existence* gives attackers free path-fingerprinting (see #350).
-// Mirrors the dotfile allowlist enforced at the routing layer in server.js.
-const ALLOWED_DOTFILES = new Set(['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account']);
+// is server-internal state and must not leak into container listings — even
+// when its contents are ACL-gated, the *existence* gives attackers free
+// path-fingerprinting (#350).
+//
+// This list is intentionally NARROWER than the routing-layer dotfile guard
+// in server.js. Routing has to allow `.well-known/`, `.pods`, `.notifications`,
+// `.account` so Fastify-served discovery/control endpoints work; but on-disk
+// directories with those names hold internal state (token store, pay state,
+// etc. live under DATA_ROOT/.well-known/) that should not appear in listings.
+// Only canonical Solid per-resource sidecars belong here.
+const ALLOWED_DOTFILES = new Set(['.acl', '.meta']);
 
 function isHiddenEntry(name) {
   return name.startsWith('.') && !ALLOWED_DOTFILES.has(name);
