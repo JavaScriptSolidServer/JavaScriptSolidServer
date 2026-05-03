@@ -287,13 +287,20 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
     } catch {}
   })();
 
-  // bfcache: Android Chrome can restore frozen page state instead of
-  // re-running scripts, so panes.runDataBrowser() never fires.
-  // Keep this workaround scoped to Android Chrome to avoid desktop side-effects.
+  // bfcache can restore a stale/frozen shell where mashlib is not ready.
+  // On persisted restores, reload only when the shell looks uninitialized.
   window.addEventListener('pageshow', function(event) {
-    var ua = navigator.userAgent || '';
-    var isAndroidChrome = /Android/i.test(ua) && /Chrome\//i.test(ua) && !/EdgA\//i.test(ua);
-    if (event.persisted && isAndroidChrome) { window.location.reload(); }
+    if (!event.persisted) return;
+    try {
+      var outline = document.getElementById('outline');
+      var hasRows = !!(outline && outline.querySelector('tr'));
+      var canRun = !!(window.panes && typeof window.panes.runDataBrowser === 'function');
+      if (!hasRows || !canRun) {
+        window.location.reload();
+      }
+    } catch (_) {
+      window.location.reload();
+    }
   });
 
   function showError(message) {
@@ -443,13 +450,20 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
           } catch {}
         })();
 
-        // bfcache: Android Chrome can restore frozen page state instead of
-        // re-running scripts, so panes.runDataBrowser() never fires.
-        // Keep this workaround scoped to Android Chrome to avoid desktop side-effects.
+        // bfcache can restore a stale/frozen shell where mashlib is not ready.
+        // On persisted restores, reload only when the shell looks uninitialized.
         window.addEventListener('pageshow', function(event) {
-          var ua = navigator.userAgent || '';
-          var isAndroidChrome = /Android/i.test(ua) && /Chrome\//i.test(ua) && !/EdgA\//i.test(ua);
-          if (event.persisted && isAndroidChrome) { window.location.reload(); }
+          if (!event.persisted) return;
+          try {
+            var outline = document.getElementById('outline');
+            var hasRows = !!(outline && outline.querySelector('tr'));
+            var canRun = !!(window.panes && typeof window.panes.runDataBrowser === 'function');
+            if (!hasRows || !canRun) {
+              window.location.reload();
+            }
+          } catch (_) {
+            window.location.reload();
+          }
         });
 
         function installAuthReloadFallback() {
