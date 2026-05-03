@@ -46,9 +46,11 @@ async function loginToken(baseUrl, email, password) {
 describe('PUT /idp/credentials — change password', () => {
   let server;
   let baseUrl;
+  let originalDataRoot;
   const DATA_DIR = './test-data-change-password';
 
   before(async () => {
+    originalDataRoot = process.env.DATA_ROOT;
     await fs.remove(DATA_DIR);
     await fs.ensureDir(DATA_DIR);
     const port = await getAvailablePort();
@@ -66,6 +68,8 @@ describe('PUT /idp/credentials — change password', () => {
   after(async () => {
     await server.close();
     await fs.remove(DATA_DIR);
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
   });
 
   it('rejects unauthenticated request with 401', async () => {

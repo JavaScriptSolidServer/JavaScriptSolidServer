@@ -210,7 +210,7 @@ async function validateDpopProof(proof, method, url) {
  *   200 { ok: true, webid, passwordChangedAt }
  *   400 missing fields
  *   401 unauthenticated, or currentPassword wrong
- *   403 caller's WebID does not match any account / cross-account write
+ *   403 caller's WebID does not match any account
  */
 export async function handleChangePassword(request, reply) {
   // 1. Authenticate caller
@@ -263,6 +263,7 @@ export async function handleChangePassword(request, reply) {
   const updated = await findByWebId(webId);
 
   reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
   return {
     ok: true,
     webid: account.webId,
