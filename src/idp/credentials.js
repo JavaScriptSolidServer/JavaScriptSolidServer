@@ -231,10 +231,11 @@ export async function handleChangePassword(request, reply) {
   const currentPassword = body?.currentPassword;
   const newPassword = body?.newPassword;
 
-  if (!currentPassword || !newPassword) {
+  if (typeof currentPassword !== 'string' || typeof newPassword !== 'string'
+      || !currentPassword || !newPassword) {
     return reply.code(400).send({
       error: 'invalid_request',
-      error_description: 'currentPassword and newPassword are required',
+      error_description: 'currentPassword and newPassword are required (strings)',
     });
   }
 
