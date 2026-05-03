@@ -21,6 +21,7 @@ import {
 import {
   handleCredentials,
   handleCredentialsInfo,
+  handleChangePassword,
 } from './credentials.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
@@ -262,6 +263,19 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleCredentials(request, reply, issuer);
+  });
+
+  // PUT credentials - authenticated owner rotates their own password (#351)
+  fastify.put('/idp/credentials', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleChangePassword(request, reply);
   });
 
   // Interaction routes (our custom login/consent UI)

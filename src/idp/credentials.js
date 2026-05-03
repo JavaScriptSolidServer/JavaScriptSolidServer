@@ -5,8 +5,9 @@
 
 import * as jose from 'jose';
 import crypto from 'crypto';
-import { authenticate } from './accounts.js';
+import { authenticate, findByWebId, updatePassword } from './accounts.js';
 import { getJwks } from './keys.js';
+import { getWebIdFromRequestAsync } from '../auth/token.js';
 
 /**
  * Handle POST /idp/credentials
@@ -196,6 +197,77 @@ async function validateDpopProof(proof, method, url) {
   const thumbprint = await jose.calculateJwkThumbprint(protectedHeader.jwk, 'sha256');
 
   return thumbprint;
+}
+
+/**
+ * Handle PUT /idp/credentials
+ * Authenticated owner rotates their own password.
+ *
+ * Auth: caller must be authenticated (Bearer/DPoP/Nostr-NIP-98).
+ * Body (JSON): { currentPassword, newPassword }
+ *
+ * Responses:
+ *   200 { ok: true, webid, passwordChangedAt }
+ *   400 missing fields
+ *   401 unauthenticated, or currentPassword wrong
+ *   403 caller's WebID does not match any account / cross-account write
+ */
+export async function handleChangePassword(request, reply) {
+  // 1. Authenticate caller
+  const { webId, error: authError } = await getWebIdFromRequestAsync(request);
+  if (!webId) {
+    return reply.code(401).send({
+      error: 'invalid_token',
+      error_description: authError || 'Authentication required',
+    });
+  }
+
+  // 2. Parse body
+  let body = request.body;
+  if (Buffer.isBuffer(body)) body = body.toString('utf-8');
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  const currentPassword = body?.currentPassword;
+  const newPassword = body?.newPassword;
+
+  if (!currentPassword || !newPassword) {
+    return reply.code(400).send({
+      error: 'invalid_request',
+      error_description: 'currentPassword and newPassword are required',
+    });
+  }
+
+  // 3. Resolve account from caller's WebID
+  const account = await findByWebId(webId);
+  if (!account) {
+    return reply.code(403).send({
+      error: 'forbidden',
+      error_description: 'No account found for authenticated WebID',
+    });
+  }
+
+  // 4. Verify currentPassword (re-auth proof)
+  const reauth = await authenticate(account.email, currentPassword);
+  if (!reauth || reauth.id !== account.id) {
+    return reply.code(401).send({
+      error: 'invalid_grant',
+      error_description: 'Current password is incorrect',
+    });
+  }
+
+  // 5. Rotate
+  await updatePassword(account.id, newPassword);
+
+  // Re-read to surface passwordChangedAt
+  const updated = await findByWebId(webId);
+
+  reply.header('Cache-Control', 'no-store');
+  return {
+    ok: true,
+    webid: account.webId,
+    passwordChangedAt: updated?.passwordChangedAt,
+  };
 }
 
 /**
