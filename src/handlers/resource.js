@@ -683,22 +683,27 @@ export async function handlePut(request, reply) {
   }
 
   const contentType = request.headers['content-type'] || '';
-
-  // ACL resources require a JSON-LD payload (application/ld+json or
-  // application/json). Round-trip serialization between JSON-LD and
-  // Turtle representations has limitations that can cause data loss
-  // when a client PUTs Turtle and later requests Turtle.
-  // Other RDF resources are unaffected. The guard fires regardless
-  // of conneg setting and also when Content-Type is missing.
   const ctMain = contentType.split(';')[0].trim().toLowerCase();
-  const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
-  if (urlPath.endsWith('.acl') && !isJsonLd) {
-    reply.header('Accept', 'application/ld+json, application/json');
-    reply.header('Accept-Put', 'application/ld+json, application/json');
-    return reply.code(415).send({
-      error: 'Unsupported Media Type',
-      message: 'ACL resources must be sent as application/ld+json or application/json.'
-    });
+
+  // ACL resources are RDF and follow conneg input rules. With conneg on,
+  // allow Turtle/N3 and convert to JSON-LD before write; with conneg off,
+  // allow only JSON-LD/JSON. Missing or unsupported types are rejected.
+  if (urlPath.endsWith('.acl')) {
+    const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
+    const isTurtleLike = ctMain === RDF_TYPES.TURTLE || ctMain === RDF_TYPES.N3;
+    const aclAcceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    if (!ctMain || (!isJsonLd && !(connegEnabled && isTurtleLike))) {
+      reply.header('Accept', aclAcceptValue);
+      reply.header('Accept-Put', aclAcceptValue);
+      return reply.code(415).send({
+        error: 'Unsupported Media Type',
+        message: connegEnabled
+          ? 'ACL resources require application/ld+json, application/json, text/turtle, or text/n3.'
+          : 'ACL resources require application/ld+json or application/json (enable conneg for Turtle/N3 support).'
+      });
+    }
   }
 
   // Check if we can accept this input type
