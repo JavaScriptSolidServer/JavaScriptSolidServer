@@ -9,13 +9,15 @@ const LDP = 'http://www.w3.org/ns/ldp#';
 // when its contents are ACL-gated, the *existence* gives attackers free
 // path-fingerprinting (#350).
 //
-// This list is intentionally NARROWER than the routing-layer dotfile guard
-// in server.js. Routing has to allow `.well-known/`, `.pods`, `.notifications`,
-// `.account` so Fastify-served discovery/control endpoints work; but on-disk
-// directories with those names hold internal state (token store, pay state,
-// etc. live under DATA_ROOT/.well-known/) that should not appear in listings.
-// Only canonical Solid per-resource sidecars belong here.
-const ALLOWED_DOTFILES = new Set(['.acl', '.meta']);
+// `.well-known` is allowed because JSS exposes legitimate public resources
+// there (e.g. the webledger registry at /.well-known/webledgers/...). Per-
+// resource WAC governs what's actually readable inside. Internal state that
+// JSS currently persists under `.well-known/` (token store, pay state) is a
+// separate concern — it shouldn't be in a public namespace at all; tracked
+// at #358.
+//
+// `.acl` and `.meta` are canonical Solid per-resource sidecars.
+const ALLOWED_DOTFILES = new Set(['.acl', '.meta', '.well-known']);
 
 function isHiddenEntry(name) {
   return name.startsWith('.') && !ALLOWED_DOTFILES.has(name);
