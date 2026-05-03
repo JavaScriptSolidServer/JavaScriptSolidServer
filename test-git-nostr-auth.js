@@ -18,8 +18,11 @@
  * 6. Cleans up
  */
 
-import { generateSecretKey, getPublicKey } from 'nostr-tools/pure';
-import { bytesToHex } from '@noble/hashes/utils';
+import { generateSecretKey, getPublicKey } from './src/nostr/event.js';
+
+// Avoid the @noble/hashes import here — Buffer does hex conversion natively
+// and keeps the script's import surface minimal.
+const bytesToHex = (bytes) => Buffer.from(bytes).toString('hex');
 import { execSync, spawn } from 'child_process';
 import fs from 'fs-extra';
 import path from 'path';

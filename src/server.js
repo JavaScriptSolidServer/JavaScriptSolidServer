@@ -94,7 +94,22 @@ export function createServer(options = {}) {
   const inviteOnly = options.inviteOnly ?? false;
   // Single-user mode - creates pod on startup, disables registration
   const singleUser = options.singleUser ?? false;
-  const singleUserName = options.singleUserName ?? 'me';
+  // Default null = root pod (#348). Pass an explicit singleUserName
+  // to mount the pod at /<name>/ instead. Normalize the
+  // historical `'/'` / `''` forms to null up front so downstream
+  // code (remoteStoragePlugin, decorators, etc.) doesn't have to
+  // re-check for the same three shapes.
+  //
+  // Pre-#348 installs (default 'me') that upgrade in place will see
+  // a fresh empty root pod alongside their /me/ data. The fix is to
+  // pass `--single-user-name me` on restart (or move data/me/* out
+  // to the data root). At v0.0.x we accept that one-time
+  // intervention rather than carrying detection magic in the code.
+  const rawSingleUserName = options.singleUserName ?? null;
+  const singleUserName =
+    (rawSingleUserName === '/' || rawSingleUserName === '')
+      ? null
+      : rawSingleUserName;
   const singleUserPassword = options.singleUserPassword ?? null;
   // Default storage quota per pod (50MB default, 0 = unlimited)
   const defaultQuota = options.defaultQuota ?? 50 * 1024 * 1024;
@@ -562,8 +577,10 @@ export function createServer(options = {}) {
       const baseUrl = idpIssuer?.replace(/\/$/, '') || `${protocol}://${host}:${port}`;
       const issuer = idpIssuer || `${baseUrl}/`;
 
-      // Root-level pod (empty or '/' name) vs named pod
-      const isRootPod = !singleUserName || singleUserName === '/';
+      // Root pod (no name) vs named pod. After the singleUserName
+      // normalization at the top of createServer(), null is the only
+      // root-pod shape we need to recognize here.
+      const isRootPod = !singleUserName;
       const podPath = isRootPod ? '/' : `/${singleUserName}/`;
       const podUri = isRootPod ? `${baseUrl}/` : `${baseUrl}/${singleUserName}/`;
       const displayName = isRootPod ? 'me' : singleUserName;
@@ -599,12 +616,22 @@ export function createServer(options = {}) {
       // this, single-user + --idp produces a pod but no credential, and
       // registration is intentionally disabled in single-user mode — so
       // the pod is unloggable until a password is set externally (#323).
-      if (idpEnabled && !isRootPod) {
+      //
+      // Root pods (#348) need this too: the pod has no name, but the IDP
+      // still needs *some* username for the login form. Default to 'me'
+      // — matches the WebID fragment, fits the historical convention.
+      if (idpEnabled) {
+        // The IDP also persists `podName` and surfaces it as the
+        // `name` claim under the OIDC `profile` scope (see
+        // src/idp/accounts.js). For root pods we use 'me' here too —
+        // a null podName would leak through as a null/missing
+        // profile.name on every login, which OIDC clients expect to
+        // be a non-empty human-readable string.
         await seedSingleUserIdpAccount({
           fastify,
-          username: singleUserName,
+          username: isRootPod ? 'me' : singleUserName,
           webId,
-          podName: singleUserName,
+          podName: isRootPod ? 'me' : singleUserName,
           providedPassword: singleUserPassword
         });
       }

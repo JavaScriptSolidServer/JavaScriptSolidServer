@@ -8,7 +8,7 @@
  * Endpoint: wss://your.pod/relay
  */
 
-import { validateEvent, verifyEvent } from 'nostr-tools';
+import { validateEvent, verifyEvent } from './event.js';
 import websocket from '@fastify/websocket';
 
 // Default max events to prevent memory exhaustion

@@ -458,6 +458,84 @@ describe('Identity Provider - Root pod type index ACLs', () => {
   });
 });
 
+// #348: --single-user with no name flag now defaults to a root pod
+// (was '/me/' historically). The server-side seed must land the
+// profile at /profile/card.jsonld, not /me/profile/card.jsonld.
+describe('Single-user default — root pod (#348)', () => {
+  let server;
+  let baseUrl;
+  const DEFAULT_DATA_DIR = './test-data-348-default-root';
+  const ROOT_POD_PASSWORD = 'root-pod-test-pw';
+
+  before(async () => {
+    await fs.remove(DEFAULT_DATA_DIR);
+    await fs.ensureDir(DEFAULT_DATA_DIR);
+
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+
+    server = createServer({
+      logger: false,
+      root: DEFAULT_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      // singleUserName intentionally omitted — exercises the new default.
+      // Provide a password so the seeding path runs non-interactively.
+      singleUserPassword: ROOT_POD_PASSWORD,
+      forceCloseConnections: true,
+    });
+
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(DEFAULT_DATA_DIR);
+  });
+
+  it('seeds the profile at /profile/card.jsonld (not /me/profile/...)', async () => {
+    const root = await fetch(`${baseUrl}/profile/card.jsonld`);
+    assert.strictEqual(root.status, 200,
+      '--single-user with no name should default to a root pod');
+    // Check the filesystem directly — an HTTP-only check could pass
+    // on a 401 even if /me/ data was somehow seeded, which would
+    // hide the regression we care about (root vs /me/ pod).
+    assert.strictEqual(await fs.pathExists(path.join(DEFAULT_DATA_DIR, 'me/profile/card.jsonld')), false,
+      'no /me/ pod files should be created when singleUserName is unset');
+    assert.strictEqual(await fs.pathExists(path.join(DEFAULT_DATA_DIR, 'me/profile/card')), false,
+      'no legacy /me/ pod files should be created either');
+  });
+
+  it('WebID resolves at the server origin', async () => {
+    const res = await fetch(`${baseUrl}/profile/card.jsonld`);
+    const body = await res.json();
+    const webId = `${baseUrl}/profile/card.jsonld#me`;
+    const matches = Array.isArray(body)
+      ? body.some(n => n['@id'] === webId)
+      : body['@id'] === webId || (body['@graph'] || []).some(n => n['@id'] === webId);
+    assert.ok(matches, `profile should declare WebID ${webId}, got: ${JSON.stringify(body).slice(0, 200)}`);
+  });
+
+  it('seeds an IDP account for "me" so the root pod is loggable', async () => {
+    // Round-2 review of #348: a regression here would mean a fresh
+    // `jss start --single-user --idp` produces a pod nobody can log
+    // in to (registration is disabled in single-user mode, so there
+    // would be no recovery path other than out-of-band account
+    // creation). Use the credentials endpoint as a black-box login
+    // probe — if it issues a token, the seed worked.
+    const res = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'me', password: ROOT_POD_PASSWORD }),
+    });
+    assert.strictEqual(res.status, 200,
+      `login as "me" should succeed for the default root pod (got ${res.status})`);
+    const body = await res.json();
+    assert.ok(body.access_token, 'response should carry an access token');
+  });
+});
+
 describe('Identity Provider - Accounts', () => {
   let server;
   let accountsUrl;
