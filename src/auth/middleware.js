@@ -472,5 +472,60 @@ async function authorizeAclAccess(request, urlPath, method, webId, authError) {
     requiredMode: AccessMode.CONTROL
   });
 
+  // Owner fallback: allow ACL read/edit even if acl:Control is missing
+  // or the ACL document is invalid/unparseable.
+  if (!allowed && isAclOwnerAclMethod(method) && isAclOwner(request, protectedUrl, webId)) {
+    return {
+      authorized: true,
+      webId,
+      wacAllow: 'user="read write append control", public=""',
+      authError
+    };
+  }
+
   return { authorized: allowed, webId, wacAllow, authError };
+}
+
+function isAclMutationMethod(method) {
+  const m = (method || '').toUpperCase();
+  return m === 'PUT' || m === 'PATCH' || m === 'DELETE' || m === 'POST';
+}
+
+function isAclOwnerAclMethod(method) {
+  const m = (method || '').toUpperCase();
+  return m === 'GET' || m === 'HEAD' || isAclMutationMethod(m);
+}
+
+function isAclOwner(request, protectedUrl, webId) {
+  if (!webId) return false;
+
+  const candidates = getOwnerWebIdCandidates(request, protectedUrl);
+  return candidates.includes(webId);
+}
+
+function getOwnerWebIdCandidates(request, protectedUrl) {
+  let parsed;
+  try {
+    parsed = new URL(protectedUrl);
+  } catch {
+    return [];
+  }
+
+  const origin = parsed.origin;
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+
+  // Path-based multi-user mode: first path segment is pod name.
+  if (!request.subdomainsEnabled && !request.singleUser && pathSegments.length > 0 && !pathSegments[0].startsWith('.')) {
+    const podName = pathSegments[0];
+    return [
+      `${origin}/${podName}/profile/card.jsonld#me`,
+      `${origin}/${podName}/profile/card#me`
+    ];
+  }
+
+  // Subdomain mode and single-user mode use an origin-scoped profile.
+  return [
+    `${origin}/profile/card.jsonld#me`,
+    `${origin}/profile/card#me`
+  ];
 }

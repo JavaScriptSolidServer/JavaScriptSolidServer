@@ -4,6 +4,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'fs-extra';
+import path from 'path';
 import {
   startTestServer,
   stopTestServer,
@@ -353,6 +355,106 @@ describe('Authentication', () => {
       // Test 3: Different authenticated user should also have access (key test!)
       const res3 = await request('/authuser1/authenticated-only/test.txt', { auth: 'authuser2' });
       assertStatus(res3, 200);
+    });
+
+    it('should allow owner to edit ACL even without acl:Control', async () => {
+      await createTestPod('aclowner1');
+      const baseUrl = getBaseUrl();
+
+      // Initial ACL update while owner still has Control via inherited defaults.
+      const noControlAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner-no-control',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' }
+            ]
+          }
+        ]
+      };
+
+      const setNoControl = await request('/aclowner1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(noControlAcl),
+        auth: 'aclowner1'
+      });
+      assert.ok(setNoControl.status < 300, `Initial ACL write failed: ${setNoControl.status}`);
+
+      // Second edit would normally fail (no acl:Control), but owner fallback should allow it.
+      const updatedAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner-updated',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' }
+            ]
+          }
+        ]
+      };
+
+      const secondEdit = await request('/aclowner1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(updatedAcl),
+        auth: 'aclowner1'
+      });
+      assert.ok(secondEdit.status < 300, `Owner should edit ACL without Control, got ${secondEdit.status}`);
+
+      // Owner should also be able to read ACL even without Control.
+      const readAcl = await request('/aclowner1/public/.acl', {
+        method: 'GET',
+        auth: 'aclowner1'
+      });
+      assert.ok(readAcl.status < 300, `Owner should read ACL without Control, got ${readAcl.status}`);
+    });
+
+    it('should allow owner to repair a broken ACL document', async () => {
+      await createTestPod('aclowner2');
+      const baseUrl = getBaseUrl();
+
+      // Corrupt the ACL on disk to simulate an invalid/unparseable ACL document.
+      const aclPath = path.join('data', 'aclowner2', 'public', '.acl');
+      await fs.writeFile(aclPath, 'this is not valid ACL content', 'utf8');
+
+      // Owner must still be able to repair the ACL afterwards.
+      const repairedAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner2/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner2/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          }
+        ]
+      };
+
+      const repair = await request('/aclowner2/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(repairedAcl),
+        auth: 'aclowner2'
+      });
+      assert.ok(repair.status < 300, `Owner should repair broken ACL, got ${repair.status}`);
     });
   });
 
