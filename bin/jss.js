@@ -33,6 +33,49 @@ program
   .version(pkg.version);
 
 /**
+ * Convert a camelCase option name back to its kebab-case CLI form for
+ * error messages (`singleUserName` → `single-user-name`).
+ */
+function camelToKebab (name) {
+  return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+}
+
+/**
+ * Reject any option value that looks like another flag (#103).
+ *
+ * Commander happily consumes the next argv as a value, so
+ *   `jss start --single-user-name --idp`
+ * silently sets `singleUserName="--idp"` and the IdP flag is lost.
+ * This validator runs as a `preAction` hook for every subcommand, so
+ * any option with a missing value gets a clear error instead of a
+ * confusing downstream failure ("issuer has no registration endpoint",
+ * "Single-user: --idp" in the banner, etc.).
+ */
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  const opts = actionCommand.opts();
+  for (const [key, value] of Object.entries(opts)) {
+    const flag = camelToKebab(key);
+    if (typeof value === 'string' && value.startsWith('--')) {
+      console.error(
+        `Error: --${flag} value "${value}" looks like a flag, not a value.\n` +
+        `Hint: did you forget to provide a value? e.g. --${flag} someValue`
+      );
+      process.exit(1);
+    }
+    // Numeric options (parseInt-coerced like --port) silently produce
+    // NaN when given a flag like `--idp`. Catch that too — same root
+    // cause, different surface.
+    if (typeof value === 'number' && Number.isNaN(value)) {
+      console.error(
+        `Error: --${flag} got a non-numeric value (parsed as NaN).\n` +
+        `Hint: did you forget to provide a number? e.g. --${flag} 8080`
+      );
+      process.exit(1);
+    }
+  }
+});
+
+/**
  * Start command
  */
 program
@@ -83,7 +126,7 @@ program
   .option('--invite-only', 'Require invite code for registration')
   .option('--no-invite-only', 'Allow open registration')
   .option('--single-user', 'Single-user mode (creates pod on startup, disables registration)')
-  .option('--single-user-name <name>', 'Username for single-user mode (default: me)')
+  .option('--single-user-name <name>', 'Mount the pod at /<name>/ instead of at the server root (default: root pod at /)')
   .option('--single-user-password <pw>', 'Initial IDP password to seed when creating the single-user pod (or set JSS_SINGLE_USER_PASSWORD)')
   .option('--webid-tls', 'Enable WebID-TLS client certificate authentication')
   .option('--no-webid-tls', 'Disable WebID-TLS authentication')

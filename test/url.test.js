@@ -33,6 +33,14 @@ describe('getPodName', () => {
       assert.strictEqual(getPodName(req), '.');
     });
 
+    it("returns '.' for a root pod (singleUserName null — #348 default)", () => {
+      // server.js normalizes '/' and '' to null at the top of
+      // createServer, so most root-pod requests now reach getPodName
+      // with singleUserName === null. Pin that path explicitly.
+      const req = { singleUser: true, singleUserName: null, url: '/index.html' };
+      assert.strictEqual(getPodName(req), '.');
+    });
+
     it('returns singleUserName for a named pod, regardless of URL', () => {
       const req = { singleUser: true, singleUserName: 'me', url: '/index.html' };
       assert.strictEqual(getPodName(req), 'me');

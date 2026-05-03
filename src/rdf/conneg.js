@@ -205,20 +205,33 @@ export function getVaryHeader(connegEnabled, mashlibEnabled = false) {
 }
 
 /**
- * Get Accept-* headers for responses
+ * Get Accept-* headers for responses.
+ *
+ * The explicitly listed RDF types are aligned with the formats this
+ * module accepts so clients can discover support consistently:
+ *   - JSON-LD (application/ld+json) and JSON (application/json alias)
+ *     are advertised in all conneg modes.
+ *   - Turtle (text/turtle) and N3 (text/n3) are advertised only when
+ *     conneg is enabled (SUPPORTED_INPUT in this file).
+ *
+ * Note: a wildcard (asterisk-slash-asterisk) is included as a broad
+ * interoperability hint for generic clients and proxies. It is not a
+ * strict contract that every media type matching the wildcard will be
+ * accepted by canAcceptInput() (e.g., application/n-triples and
+ * application/rdf+xml are not accepted).
  */
 export function getAcceptHeaders(connegEnabled, isContainer = false) {
   const headers = {};
 
   if (isContainer) {
     headers['Accept-Post'] = connegEnabled
-      ? `${RDF_TYPES.JSON_LD}, ${RDF_TYPES.TURTLE}, */*`
-      : `${RDF_TYPES.JSON_LD}, */*`;
+      ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, ${RDF_TYPES.N3}, */*`
+      : `${RDF_TYPES.JSON_LD}, application/json, */*`;
   }
 
   headers['Accept-Put'] = connegEnabled
-    ? `${RDF_TYPES.JSON_LD}, ${RDF_TYPES.TURTLE}, */*`
-    : `${RDF_TYPES.JSON_LD}, */*`;
+    ? `${RDF_TYPES.JSON_LD}, application/json, ${RDF_TYPES.TURTLE}, ${RDF_TYPES.N3}, */*`
+    : `${RDF_TYPES.JSON_LD}, application/json, */*`;
 
   headers['Accept-Patch'] = 'text/n3, application/sparql-update';
 

@@ -14,7 +14,8 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
+import { turtleToJsonLd } from '../rdf/turtle.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -238,9 +239,21 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+      // Phase 1 of #7: also embed the container's JSON-LD listing as a
+      // data island so consumers that look for `<script
+      // type="application/ld+json">` (search-engine rich-results,
+      // archival crawlers, future mashlib zero-fetch path) get the data
+      // without a second request. Use compact (no-whitespace) form for
+      // the embed so we don't burn bytes against DATA_ISLAND_MAX_BYTES
+      // on indentation that nothing will ever read.
+      const embedJsonLd = JSON.stringify(jsonLd);
       const html = request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule)
-        : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+        ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
+        : generateDatabrowserHtml(
+          resourceUrl,
+          request.mashlibCdn ? request.mashlibVersion : null,
+          { embedJsonLd }
+        );
       const headers = getAllHeaders({
         isContainer: true,
         etag: stats.etag,
@@ -318,9 +331,66 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+    // #7 / #344: embed the resource as a JSON-LD data island so
+    // non-mashlib consumers (search-engine rich-results, archival
+    // crawlers) get the data without a second request, and so the
+    // shape is uniform regardless of the URL extension.
+    //
+    // JSS stores all RDF as JSON-LD on disk (PUT converts Turtle/N3
+    // before write — see the conneg branch in handlePut), so for
+    // `.ttl` / `.n3` URLs the bytes on disk are usually already
+    // JSON-LD. Try JSON parse first; only fall back to a Turtle parse
+    // when that fails (covers files placed on the filesystem
+    // out-of-band in their native format).
+    //
+    // Cap-aware short-circuit: skip the read entirely when the file
+    // is already over the embed cap. The island would be dropped
+    // anyway, and large RDF resources would otherwise load into
+    // memory on every HTML navigation. Other formats (rdf+xml, etc.)
+    // are not handled — the wrapper still loads and mashlib
+    // XHR-fetches them as before.
+    const islandConvertible =
+      storedContentType === RDF_TYPES.JSON_LD ||
+      storedContentType === RDF_TYPES.TURTLE ||
+      storedContentType === RDF_TYPES.N3;
+    let embedJsonLd;
+    if (islandConvertible && stats.size <= DATA_ISLAND_MAX_BYTES) {
+      const buf = await storage.read(storagePath);
+      if (buf) {
+        if (storedContentType === RDF_TYPES.JSON_LD) {
+          // Pass the Buffer through. dataIsland() decodes once when
+          // it needs to; we don't pre-validate or pre-decode here.
+          embedJsonLd = buf;
+        } else {
+          // Turtle / N3 URL. JSS stores everything as JSON-LD on
+          // disk (PUT converts), so try JSON parse first and pass
+          // the *decoded text* through (avoids a second decode
+          // inside dataIsland's String() coercion). Fall back to a
+          // Turtle parse for files placed on the filesystem
+          // out-of-band in their native format.
+          const text = buf.toString('utf8');
+          try {
+            JSON.parse(text);
+            embedJsonLd = text;
+          } catch {
+            try {
+              const jsonLd = await turtleToJsonLd(text, resourceUrl);
+              embedJsonLd = JSON.stringify(jsonLd);
+            } catch {
+              // Both parses failed → drop the island. The wrapper
+              // still renders and mashlib XHR-fetches the original.
+            }
+          }
+        }
+      }
+    }
     const html = request.mashlibModule
-      ? generateModuleDatabrowserHtml(request.mashlibModule)
-      : generateDatabrowserHtml(resourceUrl, request.mashlibCdn ? request.mashlibVersion : null);
+      ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
+      : generateDatabrowserHtml(
+        resourceUrl,
+        request.mashlibCdn ? request.mashlibVersion : null,
+        { embedJsonLd }
+      );
     const headers = getAllHeaders({
       isContainer: false,
       etag: stats.etag,
@@ -614,13 +684,35 @@ export async function handlePut(request, reply) {
 
   const contentType = request.headers['content-type'] || '';
 
+  // ACL resources require a JSON-LD payload (application/ld+json or
+  // application/json). Round-trip serialization between JSON-LD and
+  // Turtle representations has limitations that can cause data loss
+  // when a client PUTs Turtle and later requests Turtle.
+  // Other RDF resources are unaffected. The guard fires regardless
+  // of conneg setting and also when Content-Type is missing.
+  const ctMain = contentType.split(';')[0].trim().toLowerCase();
+  const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
+  if (urlPath.endsWith('.acl') && !isJsonLd) {
+    reply.header('Accept', 'application/ld+json, application/json');
+    reply.header('Accept-Put', 'application/ld+json, application/json');
+    return reply.code(415).send({
+      error: 'Unsupported Media Type',
+      message: 'ACL resources must be sent as application/ld+json or application/json.'
+    });
+  }
+
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {
+    const acceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    reply.header('Accept', acceptValue);
+    reply.header('Accept-Put', acceptValue);
     return reply.code(415).send({
       error: 'Unsupported Media Type',
       message: connegEnabled
-        ? 'Supported types: application/ld+json, text/turtle, text/n3'
-        : 'Supported type: application/ld+json (enable conneg for Turtle support)'
+        ? 'Supported types: application/ld+json, application/json, text/turtle, text/n3'
+        : 'Supported types: application/ld+json, application/json (enable conneg for Turtle/N3 support)'
     });
   }
 

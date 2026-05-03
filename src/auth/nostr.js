@@ -11,7 +11,7 @@
  *   did:nostr:<64-char-hex-pubkey>
  */
 
-import { verifyEvent } from 'nostr-tools';
+import { verifyEvent, getEventHash } from '../nostr/event.js';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 
@@ -216,17 +216,11 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Invalid or missing pubkey' };
   }
 
-  // Compute event id if missing (lenient mode for nosdav compatibility)
+  // Compute event id if missing (lenient mode for nosdav compatibility).
+  // Uses the same canonical serialization as `verifyEvent` below so we
+  // can't drift out of sync with how the verifier hashes events.
   if (!event.id) {
-    const serialized = JSON.stringify([
-      0,
-      event.pubkey,
-      event.created_at,
-      event.kind,
-      event.tags,
-      event.content
-    ]);
-    event.id = crypto.createHash('sha256').update(serialized).digest('hex');
+    event.id = getEventHash(event);
   }
 
   // Verify Schnorr signature
