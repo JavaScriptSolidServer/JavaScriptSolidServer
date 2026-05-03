@@ -287,6 +287,12 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
     } catch {}
   })();
 
+  // bfcache: mobile Chrome restores frozen page state instead of re-running
+  // scripts — panes.runDataBrowser() never fires. Force a reload on restore.
+  window.addEventListener('pageshow', function(event) {
+    if (event.persisted) { window.location.reload(); }
+  });
+
   function showError(message) {
     document.body.innerHTML = '<p>' + message + '</p>';
   }
@@ -433,6 +439,12 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
             sessionStorage.removeItem('jssAuthRefreshPending');
           } catch {}
         })();
+
+        // bfcache: mobile Chrome restores frozen page state instead of re-running
+        // scripts — panes.runDataBrowser() never fires. Force a reload on restore.
+        window.addEventListener('pageshow', function(event) {
+          if (event.persisted) { window.location.reload(); }
+        });
 
         function installAuthReloadFallback() {
           if (window.__jssAuthReloadInstalled) return;
