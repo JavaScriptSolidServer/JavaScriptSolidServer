@@ -287,10 +287,13 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
     } catch {}
   })();
 
-  // bfcache: mobile Chrome restores frozen page state instead of re-running
-  // scripts — panes.runDataBrowser() never fires. Force a reload on restore.
+  // bfcache: Android Chrome can restore frozen page state instead of
+  // re-running scripts, so panes.runDataBrowser() never fires.
+  // Keep this workaround scoped to Android Chrome to avoid desktop side-effects.
   window.addEventListener('pageshow', function(event) {
-    if (event.persisted) { window.location.reload(); }
+    var ua = navigator.userAgent || '';
+    var isAndroidChrome = /Android/i.test(ua) && /Chrome\//i.test(ua) && !/EdgA\//i.test(ua);
+    if (event.persisted && isAndroidChrome) { window.location.reload(); }
   });
 
   function showError(message) {
@@ -440,10 +443,13 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
           } catch {}
         })();
 
-        // bfcache: mobile Chrome restores frozen page state instead of re-running
-        // scripts — panes.runDataBrowser() never fires. Force a reload on restore.
+        // bfcache: Android Chrome can restore frozen page state instead of
+        // re-running scripts, so panes.runDataBrowser() never fires.
+        // Keep this workaround scoped to Android Chrome to avoid desktop side-effects.
         window.addEventListener('pageshow', function(event) {
-          if (event.persisted) { window.location.reload(); }
+          var ua = navigator.userAgent || '';
+          var isAndroidChrome = /Android/i.test(ua) && /Chrome\//i.test(ua) && !/EdgA\//i.test(ua);
+          if (event.persisted && isAndroidChrome) { window.location.reload(); }
         });
 
         function installAuthReloadFallback() {
