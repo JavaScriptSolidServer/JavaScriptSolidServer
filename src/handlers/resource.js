@@ -144,7 +144,6 @@ export async function handleGet(request, reply) {
     if (!mashlibDecision.serve) {
       const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
       if (!check.ok && check.notModified) {
-        reply.header('X-JSS-Mashlib-Decision', `304:${mashlibDecision.reason}`);
         return reply.code(304).send();
       }
     }
@@ -254,7 +253,6 @@ export async function handleGet(request, reply) {
 
     // Check if we should serve Mashlib data browser for containers
     const containerMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, 'application/ld+json');
-    reply.header('X-JSS-Mashlib-Decision', containerMashlibDecision.reason);
     if (containerMashlibDecision.serve) {
       // Phase 1 of #7: also embed the container's JSON-LD listing as a
       // data island so consumers that look for `<script
@@ -348,7 +346,6 @@ export async function handleGet(request, reply) {
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
   const resourceMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, storedContentType);
-  reply.header('X-JSS-Mashlib-Decision', resourceMashlibDecision.reason);
   if (resourceMashlibDecision.serve) {
     // #7 / #344: embed the resource as a JSON-LD data island so
     // non-mashlib consumers (search-engine rich-results, archival

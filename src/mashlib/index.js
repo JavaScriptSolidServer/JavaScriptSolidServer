@@ -530,7 +530,7 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
 
 /**
  * Explain whether mashlib should serve this request.
- * Returns a stable reason code for response/debug headers.
+ * Returns both decision and a stable reason code.
  *
  * @param {object} request - Fastify request
  * @param {boolean} mashlibEnabled - Whether mashlib is enabled
