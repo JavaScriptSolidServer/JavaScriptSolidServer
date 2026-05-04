@@ -14,7 +14,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, getMashlibDecision, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 import { turtleToJsonLd } from '../rdf/turtle.js';
 
 /**
@@ -238,7 +238,9 @@ export async function handleGet(request, reply) {
     const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
     // Check if we should serve Mashlib data browser for containers
-    if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+    const containerMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, 'application/ld+json');
+    reply.header('X-JSS-Mashlib-Decision', containerMashlibDecision.reason);
+    if (containerMashlibDecision.serve) {
       // Phase 1 of #7: also embed the container's JSON-LD listing as a
       // data island so consumers that look for `<script
       // type="application/ld+json">` (search-engine rich-results,
@@ -330,7 +332,9 @@ export async function handleGet(request, reply) {
 
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
-  if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+  const resourceMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, storedContentType);
+  reply.header('X-JSS-Mashlib-Decision', resourceMashlibDecision.reason);
+  if (resourceMashlibDecision.serve) {
     // #7 / #344: embed the resource as a JSON-LD data island so
     // non-mashlib consumers (search-engine rich-results, archival
     // crawlers) get the data without a second request, and so the

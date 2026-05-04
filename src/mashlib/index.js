@@ -525,11 +525,26 @@ export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts 
  * @returns {boolean}
  */
 export function shouldServeMashlib(request, mashlibEnabled, contentType) {
-  const accept = request.headers.accept || '';
-  const secFetchDest = request.headers['sec-fetch-dest'] || '';
+  return getMashlibDecision(request, mashlibEnabled, contentType).serve;
+}
+
+/**
+ * Explain whether mashlib should serve this request.
+ * Returns a stable reason code for response/debug headers.
+ *
+ * @param {object} request - Fastify request
+ * @param {boolean} mashlibEnabled - Whether mashlib is enabled
+ * @param {string} contentType - Content type of the resource
+ * @returns {{serve: boolean, reason: string}}
+ */
+export function getMashlibDecision(request, mashlibEnabled, contentType) {
+  const accept = String(request.headers.accept || '').toLowerCase();
+  const secFetchDest = String(request.headers['sec-fetch-dest'] || '').toLowerCase();
+  const secFetchMode = String(request.headers['sec-fetch-mode'] || '').toLowerCase();
+  const secFetchUser = String(request.headers['sec-fetch-user'] || '').toLowerCase();
 
   if (!mashlibEnabled) {
-    return false;
+    return { serve: false, reason: 'disabled' };
   }
 
   // Block non-navigation sub-resource fetches (XHR, fetch API, scripts, etc.)
@@ -545,24 +560,34 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     'audio', 'fetch'
   ]);
   if (secFetchDest && nonDocumentDests.has(secFetchDest)) {
-    return false;
+    return { serve: false, reason: `non-document-dest:${secFetchDest}` };
   }
 
-  // Must explicitly accept HTML as a primary type (not via */*)
-  // Browser navigation: "text/html,application/xhtml+xml,..."
-  // Mashlib fetch: "application/rdf+xml;q=0.9, */*;q=0.1,..."
-  if (!accept.includes('text/html')) {
-    return false;
+  // Prefer explicit Accept: text/html, but tolerate navigation requests
+  // where intermediaries strip/normalize Accept on back/forward or reload.
+  // Mashlib/XHR fetches still get blocked by nonDocumentDests above.
+  const acceptsHtml = accept.includes('text/html');
+  const isLikelyNavigation =
+    secFetchMode === 'navigate' ||
+    secFetchUser === '?1' ||
+    secFetchDest === 'document' ||
+    secFetchDest === 'iframe' ||
+    secFetchDest === 'frame';
+  if (!acceptsHtml && !isLikelyNavigation) {
+    return { serve: false, reason: 'not-html-and-not-navigation' };
   }
 
-  // Don't serve mashlib if RDF types appear BEFORE text/html in Accept header
-  // This handles cases like "application/rdf+xml, text/html" where RDF is preferred
-  const htmlPos = accept.indexOf('text/html');
-  const acceptRdfTypes = ['application/rdf+xml', 'text/turtle', 'application/ld+json', 'text/n3', 'application/n-triples'];
-  for (const rdfType of acceptRdfTypes) {
-    const rdfPos = accept.indexOf(rdfType);
-    if (rdfPos !== -1 && rdfPos < htmlPos) {
-      return false; // RDF type is preferred over HTML
+  // If HTML is explicitly present, honor RDF preference ordering.
+  // (When HTML is absent but request looks like navigation, we still
+  // serve mashlib to avoid plain RDF on back/reload through proxies.)
+  if (acceptsHtml) {
+    const htmlPos = accept.indexOf('text/html');
+    const acceptRdfTypes = ['application/rdf+xml', 'text/turtle', 'application/ld+json', 'text/n3', 'application/n-triples'];
+    for (const rdfType of acceptRdfTypes) {
+      const rdfPos = accept.indexOf(rdfType);
+      if (rdfPos !== -1 && rdfPos < htmlPos) {
+        return { serve: false, reason: `rdf-preferred:${rdfType}` }; // RDF type is preferred over HTML
+      }
     }
   }
 
@@ -581,7 +606,10 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
   ];
 
   const baseType = contentType.split(';')[0].trim().toLowerCase();
-  return rdfTypes.includes(baseType);
+  if (!rdfTypes.includes(baseType)) {
+    return { serve: false, reason: `non-rdf-content:${baseType || 'unknown'}` };
+  }
+  return { serve: true, reason: 'serve' };
 }
 
 /**
