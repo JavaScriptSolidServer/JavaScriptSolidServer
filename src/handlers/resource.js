@@ -126,12 +126,27 @@ export async function handleGet(request, reply) {
     return reply.code(404).send({ error: 'Not Found' });
   }
 
-  // Check If-None-Match for conditional GET (304 Not Modified)
+  // Check If-None-Match for conditional GET (304 Not Modified).
+  // Important: don't short-circuit likely mashlib navigation requests,
+  // otherwise a top-level navigation can reuse a previously cached RDF
+  // variant (e.g., Turtle from mashlib XHR) and display raw text.
   const ifNoneMatch = request.headers['if-none-match'];
   if (ifNoneMatch) {
-    const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
-    if (!check.ok && check.notModified) {
-      return reply.code(304).send();
+    const decisionContentType = stats.isDirectory
+      ? 'application/ld+json'
+      : getContentType(storagePath);
+    const mashlibDecision = getMashlibDecision(
+      request,
+      request.mashlibEnabled,
+      decisionContentType
+    );
+
+    if (!mashlibDecision.serve) {
+      const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
+      if (!check.ok && check.notModified) {
+        reply.header('X-JSS-Mashlib-Decision', `304:${mashlibDecision.reason}`);
+        return reply.code(304).send();
+      }
     }
   }
 
