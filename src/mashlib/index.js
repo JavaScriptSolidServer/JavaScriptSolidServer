@@ -287,22 +287,6 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
     } catch {}
   })();
 
-  // bfcache can restore a stale/frozen shell where mashlib is not ready.
-  // On persisted restores, reload only when the shell looks uninitialized.
-  window.addEventListener('pageshow', function(event) {
-    if (!event.persisted) return;
-    try {
-      var outline = document.getElementById('outline');
-      var hasRows = !!(outline && outline.querySelector('tr'));
-      var canRun = !!(window.panes && typeof window.panes.runDataBrowser === 'function');
-      if (!hasRows || !canRun) {
-        window.location.reload();
-      }
-    } catch (_) {
-      window.location.reload();
-    }
-  });
-
   function showError(message) {
     document.body.innerHTML = '<p>' + message + '</p>';
   }
@@ -450,22 +434,6 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
           } catch {}
         })();
 
-        // bfcache can restore a stale/frozen shell where mashlib is not ready.
-        // On persisted restores, reload only when the shell looks uninitialized.
-        window.addEventListener('pageshow', function(event) {
-          if (!event.persisted) return;
-          try {
-            var outline = document.getElementById('outline');
-            var hasRows = !!(outline && outline.querySelector('tr'));
-            var canRun = !!(window.panes && typeof window.panes.runDataBrowser === 'function');
-            if (!hasRows || !canRun) {
-              window.location.reload();
-            }
-          } catch (_) {
-            window.location.reload();
-          }
-        });
-
         function installAuthReloadFallback() {
           if (window.__jssAuthReloadInstalled) return;
 
@@ -564,10 +532,19 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     return false;
   }
 
-  // Only serve mashlib for top-level document navigation
-  // sec-fetch-dest: 'document' = browser navigation (serve mashlib)
-  // sec-fetch-dest: 'empty' = JavaScript fetch/XHR (serve RDF data)
-  if (secFetchDest && secFetchDest !== 'document') {
+  // Block non-navigation sub-resource fetches (XHR, fetch API, scripts, etc.)
+  // sec-fetch-dest values that indicate non-document fetches are blocked.
+  // We do NOT require 'document' because on Android Chrome back navigation
+  // the header may be absent or differ from a fresh forward navigation.
+  // The Accept: text/html check below is the primary discriminator since
+  // mashlib XHR never includes text/html in its Accept header.
+  const nonDocumentDests = new Set([
+    'empty', 'script', 'worker', 'sharedworker', 'serviceworker',
+    'style', 'image', 'font', 'media', 'manifest', 'object', 'embed',
+    'report', 'xslt', 'audioworklet', 'paintworklet', 'track', 'video',
+    'audio', 'fetch'
+  ]);
+  if (secFetchDest && nonDocumentDests.has(secFetchDest)) {
     return false;
   }
 
