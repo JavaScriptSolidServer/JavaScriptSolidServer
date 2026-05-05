@@ -6,8 +6,10 @@ const LDP = 'http://www.w3.org/ns/ldp#';
 
 // Dotfiles allowed to appear in ldp:contains. Anything else starting with '.'
 // is server-internal state and must not leak into container listings — even
-// when its contents are ACL-gated, the *existence* gives attackers free
-// path-fingerprinting (#350).
+// when direct GETs are 403'd by the routing-layer dotfile guard in server.js
+// (which rejects non-allowlisted dotpaths before WAC even runs), listing the
+// *name* still leaks existence and gives attackers free path-fingerprinting
+// (#350).
 //
 // `.well-known` is allowed because JSS exposes legitimate public resources
 // there (e.g. the webledger registry at /.well-known/webledgers/...). The

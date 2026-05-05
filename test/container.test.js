@@ -2,9 +2,11 @@
  * Container listing generator — dotfile-allowlist regression (#350)
  *
  * Server-internal sidecars (.idp/, .quota.json, .server/, future .git/, etc.)
- * must NOT appear in ldp:contains, even when their contents are otherwise
- * ACL-gated — listing them leaks existence and gives attackers free
- * path-fingerprinting against root-pod (--single-user) deployments.
+ * must NOT appear in ldp:contains, even though direct GETs are 403'd by the
+ * routing-layer dotfile guard in server.js (which rejects non-allowlisted
+ * dotpaths before WAC runs). Listing the names still leaks existence and
+ * gives attackers free path-fingerprinting against root-pod (--single-user)
+ * deployments.
  */
 
 import { describe, it } from 'node:test';
