@@ -7,7 +7,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { getPodName, getContentType } from '../src/utils/url.js';
+import path from 'path';
+import { getPodName, getContentType, urlToPath, urlToPathWithPod } from '../src/utils/url.js';
 
 describe('getPodName', () => {
   describe('subdomain mode', () => {
@@ -123,6 +124,45 @@ describe('getContentType', () => {
 
     it('treats *.meta (extension) as application/ld+json', () => {
       assert.strictEqual(getContentType('/alice/resource.meta'), 'application/ld+json');
+    });
+  });
+});
+
+describe('urlToPath / urlToPathWithPod (#131 — leading-slash normalization)', () => {
+  // Bot probes hammer JSS with `//foo`, `///wp-admin/...`, etc. Without
+  // multi-slash stripping these used to escape dataRoot via path.resolve
+  // (which treats `/foo` as absolute) and 500 with "Path traversal detected"
+  // instead of the expected 404.
+  const dataRoot = path.resolve('./data');
+
+  describe('urlToPath', () => {
+    it('resolves a normal path inside dataRoot', () => {
+      assert.strictEqual(urlToPath('/alice/profile/card'), path.join(dataRoot, 'alice/profile/card'));
+    });
+
+    it('handles double leading slash without throwing (#131)', () => {
+      assert.strictEqual(urlToPath('//about.php'), path.join(dataRoot, 'about.php'));
+    });
+
+    it('handles many leading slashes (#131)', () => {
+      assert.strictEqual(urlToPath('////wp-admin/index.php'), path.join(dataRoot, 'wp-admin/index.php'));
+    });
+
+    it('still rejects real `..` traversal that escapes after normalization', () => {
+      // Security must be preserved: `/../etc/passwd` → strip leading slash →
+      // `../etc/passwd` → strip `..` → `/etc/passwd` (absolute residue) →
+      // path.resolve escapes dataRoot → guard fires.
+      assert.throws(() => urlToPath('/../etc/passwd'), /Path traversal/);
+    });
+  });
+
+  describe('urlToPathWithPod', () => {
+    it('resolves into the pod dir', () => {
+      assert.strictEqual(urlToPathWithPod('/profile/card', 'alice'), path.join(dataRoot, 'alice/profile/card'));
+    });
+
+    it('handles double leading slash (#131)', () => {
+      assert.strictEqual(urlToPathWithPod('//about.php', 'alice'), path.join(dataRoot, 'alice/about.php'));
     });
   });
 });
