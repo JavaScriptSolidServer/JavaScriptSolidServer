@@ -26,7 +26,8 @@ describe('generateContainerJsonLd dotfile filtering (#350)', () => {
 
   it('keeps allowed Solid resources (.acl, .meta, .well-known)', () => {
     // .well-known stays — JSS serves legitimate public resources there
-    // (e.g. webledger). Per-resource WAC governs what's actually readable.
+    // (e.g. webledger). Routing intentionally bypasses auth for
+    // /.well-known/* per RFC 8615; resources are public-by-design.
     const out = generateContainerJsonLd('https://example.com/pod/', [
       { name: '.acl', isDirectory: false },
       { name: '.meta', isDirectory: false },
