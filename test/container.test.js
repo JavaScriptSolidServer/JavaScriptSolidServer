@@ -50,6 +50,20 @@ describe('generateContainerJsonLd dotfile filtering (#350)', () => {
     assert.deepStrictEqual(out.contains, []);
   });
 
+  it('hides server control endpoints — listing allowlist is intentionally narrower than server.js routing allowlist', () => {
+    // .pods, .notifications, .account are routed to handlers in server.js
+    // (the broader 6-entry routing allowlist) but they're NOT public
+    // linked-data resources that belong in ldp:contains. Pinning this
+    // explicitly so that adding any of these to ALLOWED_DOTFILES would
+    // fail the suite — see PR #357 review comment.
+    const out = generateContainerJsonLd('https://example.com/', [
+      { name: '.pods', isDirectory: true },
+      { name: '.notifications', isDirectory: true },
+      { name: '.account', isDirectory: false },
+    ]);
+    assert.deepStrictEqual(out.contains, []);
+  });
+
   it('hides any unknown dotfile (default-deny on .git, .env, .DS_Store, etc.)', () => {
     const out = generateContainerJsonLd('https://example.com/pod/', [
       { name: '.git', isDirectory: true },
