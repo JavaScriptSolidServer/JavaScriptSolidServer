@@ -12,11 +12,18 @@ const LDP = 'http://www.w3.org/ns/ldp#';
 // (#350).
 //
 // `.well-known` is allowed because JSS exposes legitimate public resources
-// there (e.g. the webledger registry at /.well-known/webledgers/...). The
-// routing layer in server.js intentionally bypasses auth for `/.well-known/*`
-// per RFC 8615 — anything that lives there is public-by-design. Internal
-// state that JSS currently persists under `.well-known/` (token store, pay
-// state) shouldn't be in a public namespace at all; tracked at #358.
+// there (e.g. the webledger registry at /.well-known/webledgers/...). At the
+// origin root — including each pod's own origin in subdomain mode — server.js
+// bypasses auth for `/.well-known/*` per RFC 8615. For path-based pods at
+// `/pod/.well-known/`, the bypass does *not* apply (it matches root-relative
+// paths only) — that case is a regular subdirectory governed by ordinary WAC,
+// and listing the name is fine. We allow `.well-known` uniformly here so the
+// subdomain-pod and root-pod cases work without conditional logic on the
+// container path.
+//
+// Internal state that JSS currently persists under `.well-known/` (token
+// store, pay state) shouldn't be in a public namespace at all; tracked at
+// #358.
 //
 // `.acl` and `.meta` are canonical Solid per-resource sidecars.
 const ALLOWED_DOTFILES = new Set(['.acl', '.meta', '.well-known']);

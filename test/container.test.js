@@ -28,8 +28,10 @@ describe('generateContainerJsonLd dotfile filtering (#350)', () => {
 
   it('keeps allowed Solid resources (.acl, .meta, .well-known)', () => {
     // .well-known stays — JSS serves legitimate public resources there
-    // (e.g. webledger). Routing intentionally bypasses auth for
-    // /.well-known/* per RFC 8615; resources are public-by-design.
+    // (e.g. webledger). At origin-root (including each pod's origin in
+    // subdomain mode) the routing layer bypasses auth per RFC 8615; for
+    // path-based pods at /pod/.well-known/ the bypass doesn't apply but
+    // listing the name is still fine (regular subdirectory under WAC).
     const out = generateContainerJsonLd('https://example.com/pod/', [
       { name: '.acl', isDirectory: false },
       { name: '.meta', isDirectory: false },
