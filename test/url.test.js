@@ -5,7 +5,7 @@
  * Regression guard for #278 (single-user root-pod PUT → ENOTDIR).
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import path from 'path';
 import { getPodName, getContentType, urlToPath, urlToPathWithPod } from '../src/utils/url.js';
@@ -133,6 +133,20 @@ describe('urlToPath / urlToPathWithPod (#131 — leading-slash normalization)', 
   // multi-slash stripping these used to escape dataRoot via path.resolve
   // (which treats `/foo` as absolute) and 500 with "Path traversal detected"
   // instead of the expected 404.
+
+  // Save/restore DATA_ROOT — other test suites mutate process.env.DATA_ROOT
+  // (via createServer's root option) and don't always restore it. Pinning
+  // to './data' keeps the assertions stable across run order.
+  let originalDataRoot;
+  before(() => {
+    originalDataRoot = process.env.DATA_ROOT;
+    delete process.env.DATA_ROOT;  // forces getDataRoot() default of './data'
+  });
+  after(() => {
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
+  });
+
   const dataRoot = path.resolve('./data');
 
   describe('urlToPath', () => {
