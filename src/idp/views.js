@@ -620,7 +620,7 @@ export function landingPage(ctx = {}) {
       : '<a href="/idp/register" class="btn btn-primary" style="text-decoration: none;">Create Account</a>'}
 
     <div class="signin-note">
-      <strong>${singleUser ? 'Sign in' : 'Already have an account?'}</strong> ${singleUser ? 'from' : 'Sign in from'} a Solid app — for example, <a href="https://solid-apps.github.io/pilot/" target="_blank" rel="noopener">pilot</a> is a minimal console you can open right now. Point it at this server and click Sign In.
+      <strong>${singleUser ? 'Sign in' : 'Already have an account?'}</strong> ${singleUser ? 'from' : 'Sign in from'} a Solid app — for example, <a href="https://solid-apps.github.io/pilot/" target="_blank" rel="noopener">pilot</a> is a minimal console you can open right now. Point it at this server and click Sign In. Or <a href="https://solidproject.org/apps" target="_blank" rel="noopener">browse other Solid apps</a>.
     </div>
 
     ${issuer ? `<div class="issuer">Issuer: ${escapeHtml(issuer.replace(/\/$/, ''))}</div>` : ''}
