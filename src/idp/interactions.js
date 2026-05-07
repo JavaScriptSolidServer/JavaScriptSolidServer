@@ -5,6 +5,7 @@
 
 import { authenticate, findById, findByWebId, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
 import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } from './views.js';
+import { createAdapter } from './adapter.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
@@ -12,6 +13,46 @@ import { verifyNostrAuth } from '../auth/nostr.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
+
+async function finishInteractionOrError(request, reply, provider, result, options = { mergeWithLastSubmission: false }) {
+  try {
+    reply.hijack();
+    await provider.interactionFinished(request.raw, reply.raw, result, options);
+  } catch (err) {
+    request.log.error({
+      err: err.message,
+      error_description: err.error_description,
+      uid: request.params?.uid,
+    }, 'interactionFinished failed');
+    if (!reply.raw.writableEnded) {
+      reply.raw.statusCode = 500;
+      reply.raw.setHeader('Content-Type', 'text/html; charset=utf-8');
+      reply.raw.end(errorPage('Error', 'Could not complete interaction. Please try again.'));
+    }
+  }
+}
+
+async function clearInteractionSession(interaction) {
+  const sessionCookie = interaction.session?.cookie;
+  if (!sessionCookie) return;
+
+  const sessionAdapter = createAdapter('Session');
+  const sessionData = await sessionAdapter.find(sessionCookie);
+  if (!sessionData) return;
+
+  delete sessionData.accountId;
+  delete sessionData.loginTs;
+  delete sessionData.amr;
+  delete sessionData.acr;
+  delete sessionData.transient;
+  sessionData.authorizations = {};
+
+  const expiresIn = sessionData._expiresAt
+    ? Math.max(1, Math.ceil((sessionData._expiresAt - Date.now()) / 1000))
+    : undefined;
+
+  await sessionAdapter.upsert(sessionCookie, sessionData, expiresIn);
+}
 
 /**
  * Handle GET /idp/interaction/:uid
@@ -28,8 +69,8 @@ export async function handleInteractionGet(request, reply, provider) {
 
     const { prompt, params, session } = interaction;
 
-    // If we need login
-    if (prompt.name === 'login') {
+    // If we need login, or consent has no account bound (after relogin)
+    if (prompt.name === 'login' || (prompt.name === 'consent' && !session?.accountId)) {
       return reply.type('text/html').send(loginPage(uid, params.client_id, interaction.lastError));
     }
 
@@ -155,81 +196,25 @@ export async function handleLogin(request, reply, provider) {
       },
     };
 
-    // Save the login result to the interaction
+    // Save the login result to the interaction.
+    const returnTo = interaction.returnTo;
     interaction.result = result;
     await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
 
-    // For browsers (mashlib, etc): do a proper HTTP redirect
+    // For browsers: let oidc-provider finalize the interaction.
+    // This binds the authenticated account to the OIDC session.
     if (wantsBrowserRedirect) {
-      reply.hijack();
-      return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+      await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+      return;
     }
 
     // For CTH and programmatic clients: return JSON with location
     // CTH expects a 200 response with "location" in body (CSS v3+ style)
-    try {
-      reply.hijack();
-
-      // Create a mock response that captures the redirect and returns JSON
-      let capturedLocation = null;
-      let headersSent = false;
-      const mockRes = {
-        statusCode: 200,
-        headersSent: false,
-        setHeader: (name, value) => {
-          if (name.toLowerCase() === 'location') {
-            capturedLocation = value;
-          }
-          return mockRes;
-        },
-        getHeader: (name) => {
-          if (name.toLowerCase() === 'location') return capturedLocation;
-          return undefined;
-        },
-        removeHeader: () => mockRes,
-        writeHead: (status, headers) => {
-          if (headers) {
-            if (typeof headers === 'object' && !Array.isArray(headers)) {
-              for (const [key, value] of Object.entries(headers)) {
-                if (key.toLowerCase() === 'location') {
-                  capturedLocation = value;
-                }
-              }
-            }
-          }
-          return mockRes;
-        },
-        write: () => mockRes,
-        end: (body) => {
-          if (!headersSent) {
-            headersSent = true;
-            const location = capturedLocation || `/idp/auth/${uid}`;
-            reply.raw.writeHead(200, {
-              'Content-Type': 'application/json',
-              'Location': location,
-            });
-            reply.raw.end(JSON.stringify({ location }));
-          }
-        },
-        finished: false,
-        on: () => mockRes,
-        once: () => mockRes,
-        emit: () => mockRes,
-      };
-
-      await provider.interactionFinished(request.raw, mockRes, result, { mergeWithLastSubmission: false });
-      return;
-    } catch (err) {
-      request.log.warn({ err: err.message, errName: err.name, uid }, 'interactionFinished failed, using fallback');
-
-      // Fallback: return the redirect URL for manual following
-      const redirectTo = `/idp/auth/${uid}`;
-      return reply
-        .code(200)
-        .header('Location', redirectTo)
-        .type('application/json')
-        .send({ location: redirectTo });
-    }
+    return reply
+      .code(200)
+      .header('Location', returnTo)
+      .type('application/json')
+      .send({ location: returnTo });
   } catch (err) {
     request.log.error(err, 'Login error');
     return reply.code(500).type('text/html').send(errorPage('Login failed', err.message));
@@ -250,8 +235,32 @@ export async function handleConsent(request, reply, provider) {
     }
 
     const { prompt, params, session } = interaction;
+
     if (prompt.name !== 'consent') {
       return reply.code(400).type('text/html').send(errorPage('Invalid state', 'Not in consent stage.'));
+    }
+
+    let liveSession = null;
+    if (session?.uid) {
+      liveSession = await provider.Session.findByUid(session.uid);
+    }
+
+    // Fallback: when UID lookup fails but we still have a session cookie binding,
+    // recover the live session by cookie (jti) and repair the interaction snapshot.
+    // This prevents oidc-provider from failing with "session not found" at
+    // interactionFinished when interaction.session.uid is stale/missing.
+    if (!liveSession && session?.cookie) {
+      const byCookieSession = await provider.Session.find(session.cookie);
+
+      if (byCookieSession?.uid) {
+        interaction.session = {
+          ...(interaction.session || {}),
+          uid: byCookieSession.uid,
+          accountId: byCookieSession.accountId || interaction.session?.accountId,
+          cookie: byCookieSession.jti || interaction.session?.cookie,
+        };
+        await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+      }
     }
 
     // Grant consent
@@ -281,16 +290,8 @@ export async function handleConsent(request, reply, provider) {
       },
     };
 
-    // Mark reply as sent since interactionFinished will handle the response
-    reply.hijack();
-
-    // Use interactionFinished which handles the redirect directly
-    return provider.interactionFinished(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: true }
-    );
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: true });
+    return;
   } catch (err) {
     request.log.error(err, 'Consent error');
     return reply.code(500).type('text/html').send(errorPage('Consent failed', err.message));
@@ -311,16 +312,43 @@ export async function handleAbort(request, reply, provider) {
     };
 
     // oidc-provider is configured with /idp routes, so redirectTo will have correct path
-    const redirectTo = await provider.interactionResult(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: false }
-    );
-
-    return reply.redirect(redirectTo);
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Abort error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
+ * Handle GET /idp/interaction/:uid/relogin
+ * Clears the selected account for this interaction to allow switching WebID.
+ */
+export async function handleRelogin(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This login session has expired. Please try again.'));
+    }
+
+    await clearInteractionSession(interaction);
+
+    if (interaction.session && interaction.session.accountId) {
+      delete interaction.session.accountId;
+    }
+
+    if (interaction.result && interaction.result.login) {
+      delete interaction.result.login;
+    }
+
+    interaction.lastError = null;
+    await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
+
+    return reply.redirect(`/idp/interaction/${uid}`);
+  } catch (err) {
+    request.log.error(err, 'Relogin error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
   }
 }
@@ -529,8 +557,8 @@ export async function handlePasskeyComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Passkey login completed');
 
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Passkey complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -556,19 +584,23 @@ export async function handlePasskeySkip(request, reply, provider) {
     }
 
     // Get the pending login result
-    const result = interaction.result;
-    if (!result?.login?.accountId) {
+    const pending = interaction.result;
+    if (!pending?.login?.accountId) {
       return reply.code(400).type('text/html').send(errorPage('Invalid state', 'No pending login found.'));
     }
 
     // Mark passkey prompt as dismissed so we don't nag again
-    await setPasskeyPromptDismissed(result.login.accountId, true);
+    await setPasskeyPromptDismissed(pending.login.accountId, true);
 
-    request.log.info({ accountId: result.login.accountId, uid }, 'Passkey prompt skipped');
+    request.log.info({ accountId: pending.login.accountId, uid }, 'Passkey prompt skipped');
 
     // Complete the OIDC interaction
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    const result = {
+      login: pending.login,
+    };
+
+    await finishInteractionOrError(request, reply, provider, result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Passkey skip error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -684,8 +716,8 @@ export async function handleSchnorrComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Schnorr login completed');
 
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
+    await finishInteractionOrError(request, reply, provider, interaction.result, { mergeWithLastSubmission: false });
+    return;
   } catch (err) {
     request.log.error(err, 'Schnorr complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));

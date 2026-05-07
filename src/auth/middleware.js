@@ -7,8 +7,10 @@
 import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
+import { parseN3Patch } from '../patch/n3-patch.js';
+import { parseSparqlUpdate } from '../patch/sparql-update.js';
 import * as storage from '../storage/filesystem.js';
-import { getEffectiveUrlPath } from '../utils/url.js';
+import { getEffectiveUrlPath, getBaseDomainHost } from '../utils/url.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashlib/index.js';
 
 /**
@@ -26,8 +28,10 @@ import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashl
 export function buildResourceUrl(request, urlPath) {
   // Use request.headers.host (includes port) instead of request.hostname (strips port)
   const host = request.headers.host || request.hostname;
+  // request.hostname may include port — strip it for comparison
+  const hostnameOnly = request.hostname.includes(':') ? request.hostname.split(':')[0] : request.hostname;
   if (request.subdomainsEnabled && request.baseDomain &&
-      request.hostname === request.baseDomain && !request.podName) {
+      hostnameOnly === getBaseDomainHost(request.baseDomain) && !request.podName) {
     const pathMatch = urlPath.match(/^\/([^/]+)(\/.*)?$/);
     // Treat a path segment as a pod name only if it looks like one:
     //   - not a dotfile (.well-known, .acl, .meta, ...)
@@ -91,7 +95,13 @@ export async function authorize(request, reply, options = {}) {
   const resourceUrl = buildResourceUrl(request, urlPath);
 
   // Get required access mode - use override if provided, otherwise derive from method
-  const requiredMode = options.requiredMode || getRequiredMode(method);
+  let requiredMode = options.requiredMode || getRequiredMode(method);
+
+  // PATCH can be authorized as Append when it is insert-only.
+  // Any delete operation (or parse ambiguity) stays Write.
+  if (!options.requiredMode && method === 'PATCH') {
+    requiredMode = getPatchRequiredMode(request, resourceUrl);
+  }
 
   // For write operations on non-existent resources, check parent container
   let checkPath = storagePath;
@@ -118,6 +128,36 @@ export async function authorize(request, reply, options = {}) {
   });
 
   return { authorized: allowed, webId, wacAllow, authError, paymentRequired, paid, balance, currency };
+}
+
+/**
+ * Determine PATCH required mode from patch payload semantics.
+ * Insert-only patches require Append; delete-capable patches require Write.
+ */
+function getPatchRequiredMode(request, baseUri) {
+  const contentType = (request.headers['content-type'] || '').toLowerCase();
+  const rawBody = Buffer.isBuffer(request.body) ? request.body.toString() : request.body;
+
+  if (typeof rawBody !== 'string') {
+    return AccessMode.WRITE;
+  }
+
+  try {
+    if (contentType.includes('application/sparql-update')) {
+      const update = parseSparqlUpdate(rawBody, baseUri);
+      return update.deletes.length === 0 ? AccessMode.APPEND : AccessMode.WRITE;
+    }
+
+    if (contentType.includes('text/n3') || contentType.includes('application/n3')) {
+      const patch = parseN3Patch(rawBody, baseUri);
+      return patch.deletes.length === 0 ? AccessMode.APPEND : AccessMode.WRITE;
+    }
+  } catch {
+    // Fail closed to Write when patch parsing is invalid/ambiguous.
+    return AccessMode.WRITE;
+  }
+
+  return AccessMode.WRITE;
 }
 
 /**
@@ -155,10 +195,16 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     // If mashlib is enabled, serve mashlib instead of static error page
     // Mashlib has built-in login functionality via panes.runDataBrowser()
     if (request.mashlibEnabled) {
+      // OIDC code-flow callbacks often land back on protected resources with
+      // ?code=...&state=...; return 200 so the browser shell can process the
+      // callback instead of getting stuck on an HTTP 401 page.
+      const isOidcCallback = request.method === 'GET' &&
+        typeof request.query?.code === 'string' &&
+        typeof request.query?.state === 'string';
       const html = request.mashlibModule
         ? generateModuleDatabrowserHtml(request.mashlibModule)
         : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
-      return reply.code(statusCode).type('text/html').send(html);
+      return reply.code(isOidcCallback ? 200 : statusCode).type('text/html').send(html);
     }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));
   }
@@ -426,5 +472,60 @@ async function authorizeAclAccess(request, urlPath, method, webId, authError) {
     requiredMode: AccessMode.CONTROL
   });
 
+  // Owner fallback: allow ACL read/edit even if acl:Control is missing
+  // or the ACL document is invalid/unparseable.
+  if (!allowed && isAclOwnerAclMethod(method) && isAclOwner(request, protectedUrl, webId)) {
+    return {
+      authorized: true,
+      webId,
+      wacAllow: 'user="read write append control", public=""',
+      authError
+    };
+  }
+
   return { authorized: allowed, webId, wacAllow, authError };
+}
+
+function isAclMutationMethod(method) {
+  const m = (method || '').toUpperCase();
+  return m === 'PUT' || m === 'PATCH' || m === 'DELETE' || m === 'POST';
+}
+
+function isAclOwnerAclMethod(method) {
+  const m = (method || '').toUpperCase();
+  return m === 'GET' || m === 'HEAD' || isAclMutationMethod(m);
+}
+
+function isAclOwner(request, protectedUrl, webId) {
+  if (!webId) return false;
+
+  const candidates = getOwnerWebIdCandidates(request, protectedUrl);
+  return candidates.includes(webId);
+}
+
+function getOwnerWebIdCandidates(request, protectedUrl) {
+  let parsed;
+  try {
+    parsed = new URL(protectedUrl);
+  } catch {
+    return [];
+  }
+
+  const origin = parsed.origin;
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+
+  // Path-based multi-user mode: first path segment is pod name.
+  if (!request.subdomainsEnabled && !request.singleUser && pathSegments.length > 0 && !pathSegments[0].startsWith('.')) {
+    const podName = pathSegments[0];
+    return [
+      `${origin}/${podName}/profile/card.jsonld#me`,
+      `${origin}/${podName}/profile/card#me`
+    ];
+  }
+
+  // Subdomain mode and single-user mode use an origin-scoped profile.
+  return [
+    `${origin}/profile/card.jsonld#me`,
+    `${origin}/profile/card#me`
+  ];
 }

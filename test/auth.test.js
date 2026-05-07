@@ -4,6 +4,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'fs-extra';
+import path from 'path';
 import {
   startTestServer,
   stopTestServer,
@@ -142,6 +144,148 @@ describe('Authentication', () => {
       assertStatus(res, 201);
     });
 
+    it('should allow append-only PATCH for insert-only patch', async () => {
+      await createTestPod('appendpatch1');
+      await createTestPod('appendwriter1');
+
+      const baseUrl = getBaseUrl();
+
+      // Create target resource and container first.
+      await request('/appendpatch1/public/item.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify({
+          '@context': { ex: 'http://example.org/' },
+          '@id': '#it',
+          'ex:name': 'initial'
+        }),
+        auth: 'appendpatch1'
+      });
+
+      // Set container ACL: owner full control + authenticated append only.
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/appendpatch1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated-append',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Append' }
+            ]
+          }
+        ]
+      };
+
+      await request('/appendpatch1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'appendpatch1'
+      });
+
+      const insertOnlyPatch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix ex: <http://example.org/>.
+        _:patch a solid:InsertDeletePatch;
+          solid:inserts { <#it> ex:added "yes" }.
+      `;
+
+      const res = await request('/appendpatch1/public/item.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/n3' },
+        body: insertOnlyPatch,
+        auth: 'appendwriter1'
+      });
+
+      assertStatus(res, 204);
+    });
+
+    it('should deny append-only PATCH when patch includes deletes', async () => {
+      await createTestPod('appendpatch2');
+      await createTestPod('appendwriter2');
+
+      const baseUrl = getBaseUrl();
+
+      await request('/appendpatch2/public/item.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify({
+          '@context': { ex: 'http://example.org/' },
+          '@id': '#it',
+          'ex:name': 'initial'
+        }),
+        auth: 'appendpatch2'
+      });
+
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/appendpatch2/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated-append',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Append' }
+            ]
+          }
+        ]
+      };
+
+      await request('/appendpatch2/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'appendpatch2'
+      });
+
+      const deletePatch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix ex: <http://example.org/>.
+        _:patch a solid:InsertDeletePatch;
+          solid:deletes { <#it> ex:name "initial" }.
+      `;
+
+      const res = await request('/appendpatch2/public/item.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/n3' },
+        body: deletePatch,
+        auth: 'appendwriter2'
+      });
+
+      assertStatus(res, 403);
+    });
+
     it('should deny public read on inbox', async () => {
       await createTestPod('inboxread');
 
@@ -211,6 +355,106 @@ describe('Authentication', () => {
       // Test 3: Different authenticated user should also have access (key test!)
       const res3 = await request('/authuser1/authenticated-only/test.txt', { auth: 'authuser2' });
       assertStatus(res3, 200);
+    });
+
+    it('should allow owner to edit ACL even without acl:Control', async () => {
+      await createTestPod('aclowner1');
+      const baseUrl = getBaseUrl();
+
+      // Initial ACL update while owner still has Control via inherited defaults.
+      const noControlAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner-no-control',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' }
+            ]
+          }
+        ]
+      };
+
+      const setNoControl = await request('/aclowner1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(noControlAcl),
+        auth: 'aclowner1'
+      });
+      assert.ok(setNoControl.status < 300, `Initial ACL write failed: ${setNoControl.status}`);
+
+      // Second edit would normally fail (no acl:Control), but owner fallback should allow it.
+      const updatedAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner-updated',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' }
+            ]
+          }
+        ]
+      };
+
+      const secondEdit = await request('/aclowner1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(updatedAcl),
+        auth: 'aclowner1'
+      });
+      assert.ok(secondEdit.status < 300, `Owner should edit ACL without Control, got ${secondEdit.status}`);
+
+      // Owner should also be able to read ACL even without Control.
+      const readAcl = await request('/aclowner1/public/.acl', {
+        method: 'GET',
+        auth: 'aclowner1'
+      });
+      assert.ok(readAcl.status < 300, `Owner should read ACL without Control, got ${readAcl.status}`);
+    });
+
+    it('should allow owner to repair a broken ACL document', async () => {
+      await createTestPod('aclowner2');
+      const baseUrl = getBaseUrl();
+
+      // Corrupt the ACL on disk to simulate an invalid/unparseable ACL document.
+      const aclPath = path.join('data', 'aclowner2', 'public', '.acl');
+      await fs.writeFile(aclPath, 'this is not valid ACL content', 'utf8');
+
+      // Owner must still be able to repair the ACL afterwards.
+      const repairedAcl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/aclowner2/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/aclowner2/public/` },
+            'acl:default': { '@id': `${baseUrl}/aclowner2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          }
+        ]
+      };
+
+      const repair = await request('/aclowner2/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(repairedAcl),
+        auth: 'aclowner2'
+      });
+      assert.ok(repair.status < 300, `Owner should repair broken ACL, got ${repair.status}`);
     });
   });
 

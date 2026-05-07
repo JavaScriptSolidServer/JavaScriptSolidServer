@@ -20,13 +20,13 @@ export function createCollectionsHandler(config) {
     let items, totalItems
 
     if (collectionType === 'followers') {
-      const followers = getFollowers()
+      const followers = getFollowers(config.username)
       items = followers.map(f => f.actor)
-      totalItems = getFollowerCount()
+      totalItems = getFollowerCount(config.username)
     } else {
-      const following = getFollowing()
+      const following = getFollowing(config.username)
       items = following.map(f => f.actor)
-      totalItems = getFollowingCount()
+      totalItems = getFollowingCount(config.username)
     }
 
     const collection = {

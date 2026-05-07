@@ -22,6 +22,7 @@ import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
 import { registerErrorHandler } from './utils/error-handler.js';
+import { getBaseDomainHost } from './utils/url.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -220,11 +221,14 @@ export function createServer(options = {}) {
 
     // Extract pod name from subdomain if enabled
     if (subdomainsEnabled && baseDomain) {
-      const host = request.hostname;
-      // Check if host is a subdomain of baseDomain
-      if (host !== baseDomain && host.endsWith('.' + baseDomain)) {
+      // request.hostname may include port in some Fastify versions — strip it
+      const rawHost = request.hostname;
+      const host = rawHost.includes(':') ? rawHost.split(':')[0] : rawHost;
+      const baseDomainHost = getBaseDomainHost(baseDomain);
+      // Check if host is a subdomain of baseDomain (hostname part only)
+      if (host !== baseDomainHost && host.endsWith('.' + baseDomainHost)) {
         // Extract subdomain (e.g., "alice.example.com" -> "alice")
-        const subdomain = host.slice(0, -(baseDomain.length + 1));
+        const subdomain = host.slice(0, -(baseDomainHost.length + 1));
         // Only single-level subdomains (no dots)
         if (!subdomain.includes('.')) {
           request.podName = subdomain;
@@ -289,7 +293,9 @@ export function createServer(options = {}) {
       username: apUsername,
       displayName: apDisplayName,
       summary: apSummary,
-      nostrPubkey: apNostrPubkey
+      nostrPubkey: apNostrPubkey,
+      subdomains: subdomainsEnabled,
+      baseDomain
     });
   }
 
@@ -444,9 +450,15 @@ export function createServer(options = {}) {
   fastify.addHook('preHandler', async (request, reply) => {
     // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
-    const apPaths = ['/inbox', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
+    const apPaths = ['/inbox', '/posts/', '/profile/avatar.png', '/profile/header.png', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
       '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials',
+      '/api/v1/timelines/', '/api/v1/statuses', '/api/v1/accounts/', '/api/v1/notifications',
       '/oauth/authorize', '/oauth/token'];
+    const isApPublicPath = apPaths.some(p =>
+      request.url === p ||
+      request.url.startsWith(p + '?') ||
+      (p.endsWith('/') && request.url.startsWith(p))
+    );
     // Check if request wants ActivityPub content for profile
     const accept = request.headers.accept || '';
     const wantsAP = accept.includes('activity+json') || accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
@@ -460,7 +472,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/.well-known/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
-        (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
+        (activitypubEnabled && (request.url.startsWith('/api/v1/') || request.url.startsWith('/api/v2/') || isApPublicPath)) ||
         isProfileAP ||
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||

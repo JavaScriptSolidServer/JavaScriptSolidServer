@@ -14,7 +14,7 @@ import {
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
-import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
+import { generateDatabrowserHtml, generateModuleDatabrowserHtml, getMashlibDecision, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 import { turtleToJsonLd } from '../rdf/turtle.js';
 
 /**
@@ -126,12 +126,26 @@ export async function handleGet(request, reply) {
     return reply.code(404).send({ error: 'Not Found' });
   }
 
-  // Check If-None-Match for conditional GET (304 Not Modified)
+  // Check If-None-Match for conditional GET (304 Not Modified).
+  // Important: don't short-circuit likely mashlib navigation requests,
+  // otherwise a top-level navigation can reuse a previously cached RDF
+  // variant (e.g., Turtle from mashlib XHR) and display raw text.
   const ifNoneMatch = request.headers['if-none-match'];
   if (ifNoneMatch) {
-    const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
-    if (!check.ok && check.notModified) {
-      return reply.code(304).send();
+    const decisionContentType = stats.isDirectory
+      ? 'application/ld+json'
+      : getContentType(storagePath);
+    const mashlibDecision = getMashlibDecision(
+      request,
+      request.mashlibEnabled,
+      decisionContentType
+    );
+
+    if (!mashlibDecision.serve) {
+      const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
+      if (!check.ok && check.notModified) {
+        return reply.code(304).send();
+      }
     }
   }
 
@@ -238,7 +252,8 @@ export async function handleGet(request, reply) {
     const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
     // Check if we should serve Mashlib data browser for containers
-    if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+    const containerMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, 'application/ld+json');
+    if (containerMashlibDecision.serve) {
       // Phase 1 of #7: also embed the container's JSON-LD listing as a
       // data island so consumers that look for `<script
       // type="application/ld+json">` (search-engine rich-results,
@@ -330,7 +345,8 @@ export async function handleGet(request, reply) {
 
   // Check if we should serve Mashlib data browser
   // Only for RDF resources when Accept: text/html is requested
-  if (shouldServeMashlib(request, request.mashlibEnabled, storedContentType)) {
+  const resourceMashlibDecision = getMashlibDecision(request, request.mashlibEnabled, storedContentType);
+  if (resourceMashlibDecision.serve) {
     // #7 / #344: embed the resource as a JSON-LD data island so
     // non-mashlib consumers (search-engine rich-results, archival
     // crawlers) get the data without a second request, and so the
@@ -683,22 +699,27 @@ export async function handlePut(request, reply) {
   }
 
   const contentType = request.headers['content-type'] || '';
-
-  // ACL resources require a JSON-LD payload (application/ld+json or
-  // application/json). Round-trip serialization between JSON-LD and
-  // Turtle representations has limitations that can cause data loss
-  // when a client PUTs Turtle and later requests Turtle.
-  // Other RDF resources are unaffected. The guard fires regardless
-  // of conneg setting and also when Content-Type is missing.
   const ctMain = contentType.split(';')[0].trim().toLowerCase();
-  const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
-  if (urlPath.endsWith('.acl') && !isJsonLd) {
-    reply.header('Accept', 'application/ld+json, application/json');
-    reply.header('Accept-Put', 'application/ld+json, application/json');
-    return reply.code(415).send({
-      error: 'Unsupported Media Type',
-      message: 'ACL resources must be sent as application/ld+json or application/json.'
-    });
+
+  // ACL resources are RDF and follow conneg input rules. With conneg on,
+  // allow Turtle/N3 and convert to JSON-LD before write; with conneg off,
+  // allow only JSON-LD/JSON. Missing or unsupported types are rejected.
+  if (urlPath.endsWith('.acl')) {
+    const isJsonLd = ctMain === 'application/ld+json' || ctMain === 'application/json';
+    const isTurtleLike = ctMain === RDF_TYPES.TURTLE || ctMain === RDF_TYPES.N3;
+    const aclAcceptValue = connegEnabled
+      ? 'application/ld+json, application/json, text/turtle, text/n3'
+      : 'application/ld+json, application/json';
+    if (!ctMain || (!isJsonLd && !(connegEnabled && isTurtleLike))) {
+      reply.header('Accept', aclAcceptValue);
+      reply.header('Accept-Put', aclAcceptValue);
+      return reply.code(415).send({
+        error: 'Unsupported Media Type',
+        message: connegEnabled
+          ? 'ACL resources require application/ld+json, application/json, text/turtle, or text/n3.'
+          : 'ACL resources require application/ld+json or application/json (enable conneg for Turtle/N3 support).'
+      });
+    }
   }
 
   // Check if we can accept this input type

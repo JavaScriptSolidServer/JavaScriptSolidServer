@@ -11,6 +11,7 @@ import {
   handleLogin,
   handleConsent,
   handleAbort,
+  handleRelogin,
   handleRegisterGet,
   handleRegisterPost,
   handlePasskeyComplete,
@@ -322,6 +323,11 @@ export async function idpPlugin(fastify, options) {
   // POST abort
   fastify.post('/idp/interaction/:uid/abort', async (request, reply) => {
     return handleAbort(request, reply, provider);
+  });
+
+  // GET relogin - switch to a different account before consent
+  fastify.get('/idp/interaction/:uid/relogin', async (request, reply) => {
+    return handleRelogin(request, reply, provider);
   });
 
   // Registration routes (disabled in single-user mode)

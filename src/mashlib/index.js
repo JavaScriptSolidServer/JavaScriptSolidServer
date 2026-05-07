@@ -266,29 +266,230 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
   const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   if (cdnVersion) {
-    // CDN mode - use script.onload to ensure mashlib is fully loaded before init
-    // This avoids race conditions with defer + DOMContentLoaded
+    // CDN mode: load the matching mashlib databrowser shell template from CDN,
+    // then load CSS/JS from the same version while staying on this origin.
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
-    return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
-<link href="${cdnBase}/mash.css" rel="stylesheet"></head>
-<body id="PageBody">${island}${reader}<header id="PageHeader"></header>
-<div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
-<footer id="PageFooter"></footer>
+  return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>SolidOS Web App</title>${island}${reader}</head>
+<body id="PageBody"><p>Loading Mashlib…</p>
 <script>
 (function() {
-  var s = document.createElement('script');
-  s.src = '${cdnBase}/mashlib.min.js';
-  s.onload = function() { panes.runDataBrowser(); };
-  s.onerror = function() { document.body.innerHTML = '<p>Failed to load Mashlib from CDN</p>'; };
-  document.head.appendChild(s);
+  var cdnBase = '${cdnBase}';
+
+  (function cleanupRefreshParam() {
+    try {
+      var current = new URL(window.location.href);
+      if (current.searchParams.has('_jssr')) {
+        current.searchParams.delete('_jssr');
+        var next = current.pathname + (current.search ? current.search : '') + (current.hash ? current.hash : '');
+        window.history.replaceState(window.history.state, '', next);
+      }
+      sessionStorage.removeItem('jssAuthRefreshPending');
+    } catch {}
+  })();
+
+  function showError(message) {
+    document.body.innerHTML = '<p>' + message + '</p>';
+  }
+
+  function ensureStylesheet(href) {
+    var existing = document.querySelector('link[rel="stylesheet"][href="' + href + '"]');
+    if (existing) return;
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
+
+  function loadScript(src, onload, onerror) {
+    var script = document.createElement('script');
+    script.src = src;
+    script.onload = onload;
+    script.onerror = onerror;
+    document.head.appendChild(script);
+  }
+
+  function installAuthReloadFallback() {
+    if (window.__jssAuthReloadInstalled) return;
+
+    var installed = false;
+    function hardRefresh() {
+      try {
+        if (sessionStorage.getItem('jssAuthRefreshPending') === '1') return;
+        sessionStorage.setItem('jssAuthRefreshPending', '1');
+      } catch {}
+      var url = new URL(window.location.href);
+      url.searchParams.set('_jssr', String(Date.now()));
+      // Use navigation (not reload) to avoid serving a stale cached shell.
+      window.location.replace(url.toString());
+    }
+
+    document.addEventListener('account-menu-select', function(e) {
+      try {
+        var detail = e && e.detail;
+        if (detail && detail.action === 'logout') {
+          setTimeout(hardRefresh, 30);
+        }
+      } catch {}
+    }, true);
+
+    var attach = function() {
+      var authSession = window.SolidLogic && window.SolidLogic.authSession;
+      if (!authSession || !authSession.events || installed) return;
+
+      installed = true;
+      window.__jssAuthReloadInstalled = true;
+
+      var safeReload = function() {
+        // Keep this as a server-side safety net until client lifecycle
+        // handles logout rerender consistently.
+        hardRefresh();
+      };
+
+      authSession.events.on('logout', safeReload);
+    };
+
+    var attempts = 0;
+    var timer = setInterval(function() {
+      attempts += 1;
+      attach();
+      if (window.__jssAuthReloadInstalled || attempts > 30) {
+        clearInterval(timer);
+      }
+    }, 200);
+  }
+
+  function applyShellFromTemplate(htmlText) {
+    var parsed = new DOMParser().parseFromString(htmlText, 'text/html');
+
+    if (parsed.title) {
+      document.title = parsed.title;
+    }
+
+    if (parsed.body) {
+      var attrs = Array.from(parsed.body.attributes || []);
+      document.body.innerHTML = parsed.body.innerHTML;
+      for (var i = 0; i < attrs.length; i++) {
+        document.body.setAttribute(attrs[i].name, attrs[i].value);
+      }
+    }
+  }
+
+  function fetchFirst(urls) {
+    var i = 0;
+    function next() {
+      if (i >= urls.length) {
+        return Promise.reject(new Error('No shell template found on CDN'));
+      }
+      var url = urls[i++];
+      return fetch(url, { cache: 'no-store' }).then(function(res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.text();
+      }).catch(function() {
+        return next();
+      });
+    }
+    return next();
+  }
+
+  var shellCandidates = [
+    cdnBase + '/databrowser.html'
+  ];
+
+  fetchFirst(shellCandidates)
+    .then(function(shellHtml) {
+      applyShellFromTemplate(shellHtml);
+      ensureStylesheet(cdnBase + '/mash.css');
+      loadScript(
+        cdnBase + '/mashlib.min.js',
+        function() {
+          installAuthReloadFallback();
+          if (window.panes && typeof window.panes.runDataBrowser === 'function') {
+            window.panes.runDataBrowser();
+          } else {
+            showError('Mashlib loaded but panes.runDataBrowser is unavailable');
+          }
+        },
+        function() { showError('Failed to load Mashlib from CDN'); }
+      );
+    })
+    .catch(function() {
+      showError('Failed to load Mashlib shell from CDN');
+    });
 })();
 </script></body></html>`;
   }
 
   // Local mode - use defer (reliable when served locally)
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
-        panes.runDataBrowser()
-      })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}${reader}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>
+      (function() {
+        (function cleanupRefreshParam() {
+          try {
+            var current = new URL(window.location.href);
+            if (current.searchParams.has('_jssr')) {
+              current.searchParams.delete('_jssr');
+              var next = current.pathname + (current.search ? current.search : '') + (current.hash ? current.hash : '');
+              window.history.replaceState(window.history.state, '', next);
+            }
+            sessionStorage.removeItem('jssAuthRefreshPending');
+          } catch {}
+        })();
+
+        function installAuthReloadFallback() {
+          if (window.__jssAuthReloadInstalled) return;
+
+          var installed = false;
+          function hardRefresh() {
+            try {
+              if (sessionStorage.getItem('jssAuthRefreshPending') === '1') return;
+              sessionStorage.setItem('jssAuthRefreshPending', '1');
+            } catch {}
+            var url = new URL(window.location.href);
+            url.searchParams.set('_jssr', String(Date.now()));
+            // Use navigation (not reload) to avoid serving a stale cached shell.
+            window.location.replace(url.toString());
+          }
+
+          document.addEventListener('account-menu-select', function(e) {
+            try {
+              var detail = e && e.detail;
+              if (detail && detail.action === 'logout') {
+                setTimeout(hardRefresh, 30);
+              }
+            } catch {}
+          }, true);
+
+          var attach = function() {
+            var authSession = window.SolidLogic && window.SolidLogic.authSession;
+            if (!authSession || !authSession.events || installed) return;
+
+            installed = true;
+            window.__jssAuthReloadInstalled = true;
+
+            var safeReload = function() {
+              // Keep this as a server-side safety net until client lifecycle
+              // handles logout rerender consistently.
+              hardRefresh();
+            };
+
+            authSession.events.on('logout', safeReload);
+          };
+
+          var attempts = 0;
+          var timer = setInterval(function() {
+            attempts += 1;
+            attach();
+            if (window.__jssAuthReloadInstalled || attempts > 30) {
+              clearInterval(timer);
+            }
+          }, 200);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+          panes.runDataBrowser();
+          installAuthReloadFallback();
+        });
+      })();
+      </script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}${reader}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 
 /**
@@ -324,35 +525,69 @@ export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts 
  * @returns {boolean}
  */
 export function shouldServeMashlib(request, mashlibEnabled, contentType) {
-  const accept = request.headers.accept || '';
-  const secFetchDest = request.headers['sec-fetch-dest'] || '';
+  return getMashlibDecision(request, mashlibEnabled, contentType).serve;
+}
+
+/**
+ * Explain whether mashlib should serve this request.
+ * Returns both decision and a stable reason code.
+ *
+ * @param {object} request - Fastify request
+ * @param {boolean} mashlibEnabled - Whether mashlib is enabled
+ * @param {string} contentType - Content type of the resource
+ * @returns {{serve: boolean, reason: string}}
+ */
+export function getMashlibDecision(request, mashlibEnabled, contentType) {
+  const accept = String(request.headers.accept || '').toLowerCase();
+  const secFetchDest = String(request.headers['sec-fetch-dest'] || '').toLowerCase();
+  const secFetchMode = String(request.headers['sec-fetch-mode'] || '').toLowerCase();
+  const secFetchUser = String(request.headers['sec-fetch-user'] || '').toLowerCase();
 
   if (!mashlibEnabled) {
-    return false;
+    return { serve: false, reason: 'disabled' };
   }
 
-  // Only serve mashlib for top-level document navigation
-  // sec-fetch-dest: 'document' = browser navigation (serve mashlib)
-  // sec-fetch-dest: 'empty' = JavaScript fetch/XHR (serve RDF data)
-  if (secFetchDest && secFetchDest !== 'document') {
-    return false;
+  // Block non-navigation sub-resource fetches (XHR, fetch API, scripts, etc.)
+  // sec-fetch-dest values that indicate non-document fetches are blocked.
+  // We do NOT require 'document' because on Android Chrome back navigation
+  // the header may be absent or differ from a fresh forward navigation.
+  // The Accept: text/html check below is the primary discriminator since
+  // mashlib XHR never includes text/html in its Accept header.
+  const nonDocumentDests = new Set([
+    'empty', 'script', 'worker', 'sharedworker', 'serviceworker',
+    'style', 'image', 'font', 'media', 'manifest', 'object', 'embed',
+    'report', 'xslt', 'audioworklet', 'paintworklet', 'track', 'video',
+    'audio', 'fetch'
+  ]);
+  if (secFetchDest && nonDocumentDests.has(secFetchDest)) {
+    return { serve: false, reason: `non-document-dest:${secFetchDest}` };
   }
 
-  // Must explicitly accept HTML as a primary type (not via */*)
-  // Browser navigation: "text/html,application/xhtml+xml,..."
-  // Mashlib fetch: "application/rdf+xml;q=0.9, */*;q=0.1,..."
-  if (!accept.includes('text/html')) {
-    return false;
+  // Prefer explicit Accept: text/html, but tolerate navigation requests
+  // where intermediaries strip/normalize Accept on back/forward or reload.
+  // Mashlib/XHR fetches still get blocked by nonDocumentDests above.
+  const acceptsHtml = accept.includes('text/html');
+  const isLikelyNavigation =
+    secFetchMode === 'navigate' ||
+    secFetchUser === '?1' ||
+    secFetchDest === 'document' ||
+    secFetchDest === 'iframe' ||
+    secFetchDest === 'frame';
+  if (!acceptsHtml && !isLikelyNavigation) {
+    return { serve: false, reason: 'not-html-and-not-navigation' };
   }
 
-  // Don't serve mashlib if RDF types appear BEFORE text/html in Accept header
-  // This handles cases like "application/rdf+xml, text/html" where RDF is preferred
-  const htmlPos = accept.indexOf('text/html');
-  const acceptRdfTypes = ['application/rdf+xml', 'text/turtle', 'application/ld+json', 'text/n3', 'application/n-triples'];
-  for (const rdfType of acceptRdfTypes) {
-    const rdfPos = accept.indexOf(rdfType);
-    if (rdfPos !== -1 && rdfPos < htmlPos) {
-      return false; // RDF type is preferred over HTML
+  // If HTML is explicitly present, honor RDF preference ordering.
+  // (When HTML is absent but request looks like navigation, we still
+  // serve mashlib to avoid plain RDF on back/reload through proxies.)
+  if (acceptsHtml) {
+    const htmlPos = accept.indexOf('text/html');
+    const acceptRdfTypes = ['application/rdf+xml', 'text/turtle', 'application/ld+json', 'text/n3', 'application/n-triples'];
+    for (const rdfType of acceptRdfTypes) {
+      const rdfPos = accept.indexOf(rdfType);
+      if (rdfPos !== -1 && rdfPos < htmlPos) {
+        return { serve: false, reason: `rdf-preferred:${rdfType}` }; // RDF type is preferred over HTML
+      }
     }
   }
 
@@ -371,7 +606,10 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
   ];
 
   const baseType = contentType.split(';')[0].trim().toLowerCase();
-  return rdfTypes.includes(baseType);
+  if (!rdfTypes.includes(baseType)) {
+    return { serve: false, reason: `non-rdf-content:${baseType || 'unknown'}` };
+  }
+  return { serve: true, reason: 'serve' };
 }
 
 /**

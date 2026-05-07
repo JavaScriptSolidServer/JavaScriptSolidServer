@@ -290,11 +290,10 @@ describe('Content Negotiation (conneg enabled)', () => {
     });
   });
 
-  // ACL resources require a JSON-LD payload (application/ld+json or
-  // application/json) on PUT regardless of conneg setting: round-trip
-  // serialization between JSON-LD and Turtle has known limitations
-  // that can cause data loss. See #295.
-  describe('ACL content-type guard (#295)', () => {
+  // ACL resources follow conneg write rules:
+  // - conneg enabled: accept JSON-LD/JSON/Turtle/N3 and convert Turtle/N3 to JSON-LD
+  // - conneg disabled: accept JSON-LD/JSON only
+  describe('ACL content-type guard', () => {
     const aclJsonLd = {
       '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
       '@graph': [
@@ -308,37 +307,36 @@ describe('Content Negotiation (conneg enabled)', () => {
       ]
     };
 
-    it('rejects text/turtle PUT to .acl with 415', async () => {
+    it('accepts text/turtle PUT to .acl when conneg is enabled', async () => {
       const turtle = `
         @prefix acl: <http://www.w3.org/ns/auth/acl#>.
         <#owner> a acl:Authorization;
           acl:mode acl:Read.
       `;
-      const res = await request('/connegtest/public/turtle-reject.acl', {
+      const res = await request('/connegtest/public/turtle-accept.acl', {
         method: 'PUT',
         headers: { 'Content-Type': 'text/turtle' },
         body: turtle,
         auth: 'connegtest'
       });
-      assertStatus(res, 415);
-      assertHeaderContains(res, 'Accept', 'application/ld+json');
-      assertHeaderContains(res, 'Accept', 'application/json');
-      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
-      assertHeaderContains(res, 'Accept-Put', 'application/json');
+      assert.ok(res.status < 300, `text/turtle PUT to .acl should succeed with conneg, got ${res.status}`);
+
+      const getRes = await request('/connegtest/public/turtle-accept.acl', {
+        headers: { 'Accept': 'application/ld+json' },
+        auth: 'connegtest'
+      });
+      assertStatus(getRes, 200);
+      assertHeaderContains(getRes, 'Content-Type', 'application/ld+json');
     });
 
-    it('rejects text/n3 PUT to .acl with 415', async () => {
-      const res = await request('/connegtest/public/n3-reject.acl', {
+    it('accepts text/n3 PUT to .acl when conneg is enabled', async () => {
+      const res = await request('/connegtest/public/n3-accept.acl', {
         method: 'PUT',
         headers: { 'Content-Type': 'text/n3' },
         body: '@prefix acl: <http://www.w3.org/ns/auth/acl#>. <#x> a acl:Authorization.',
         auth: 'connegtest'
       });
-      assertStatus(res, 415);
-      assertHeaderContains(res, 'Accept', 'application/ld+json');
-      assertHeaderContains(res, 'Accept', 'application/json');
-      assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
-      assertHeaderContains(res, 'Accept-Put', 'application/json');
+      assert.ok(res.status < 300, `text/n3 PUT to .acl should succeed with conneg, got ${res.status}`);
     });
 
     it('rejects text/plain PUT to .acl with 415 (URL-extension protection)', async () => {
@@ -351,8 +349,12 @@ describe('Content Negotiation (conneg enabled)', () => {
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
       assertHeaderContains(res, 'Accept', 'application/json');
+      assertHeaderContains(res, 'Accept', 'text/turtle');
+      assertHeaderContains(res, 'Accept', 'text/n3');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
       assertHeaderContains(res, 'Accept-Put', 'application/json');
+      assertHeaderContains(res, 'Accept-Put', 'text/turtle');
+      assertHeaderContains(res, 'Accept-Put', 'text/n3');
     });
 
     it('rejects PUT to .acl with no Content-Type with 415', async () => {
@@ -366,8 +368,12 @@ describe('Content Negotiation (conneg enabled)', () => {
       assertStatus(res, 415);
       assertHeaderContains(res, 'Accept', 'application/ld+json');
       assertHeaderContains(res, 'Accept', 'application/json');
+      assertHeaderContains(res, 'Accept', 'text/turtle');
+      assertHeaderContains(res, 'Accept', 'text/n3');
       assertHeaderContains(res, 'Accept-Put', 'application/ld+json');
       assertHeaderContains(res, 'Accept-Put', 'application/json');
+      assertHeaderContains(res, 'Accept-Put', 'text/turtle');
+      assertHeaderContains(res, 'Accept-Put', 'text/n3');
     });
 
     it('accepts application/ld+json PUT to .acl', async () => {

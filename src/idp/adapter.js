@@ -22,6 +22,13 @@ function modelToDir(model) {
   return model.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
 }
 
+// Some models (e.g., accounts) store index files that are not oidc entities.
+// Do not skip every file starting with '_' because oidc IDs can legitimately
+// begin with '_' (nanoid alphabet includes '_').
+function isIndexFile(file) {
+  return /^_[^\\/]+_index\.json$/i.test(file);
+}
+
 /**
  * Filesystem adapter for oidc-provider
  * Implements the adapter interface required by oidc-provider
@@ -101,7 +108,7 @@ class FilesystemAdapter {
     try {
       const files = await fs.readdir(this.dir);
       for (const file of files) {
-        if (file.startsWith('_')) continue; // Skip index files
+        if (isIndexFile(file)) continue;
         const data = await fs.readJson(path.join(this.dir, file));
         if (data.userCode === userCode) {
           // Check expiry
@@ -126,7 +133,7 @@ class FilesystemAdapter {
     try {
       const files = await fs.readdir(this.dir);
       for (const file of files) {
-        if (file.startsWith('_')) continue; // Skip index files
+        if (isIndexFile(file)) continue;
         const data = await fs.readJson(path.join(this.dir, file));
         if (data.uid === uid) {
           // Check expiry
