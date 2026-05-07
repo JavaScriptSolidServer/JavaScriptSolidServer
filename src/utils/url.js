@@ -22,8 +22,11 @@ export function updateDataRoot() {
  * @throws {Error} - If path traversal is detected
  */
 export function urlToPath(urlPath) {
-  // Normalize: remove leading slash, decode URI
-  let normalized = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+  // Normalize: strip all leading slashes (#131 — `//foo` from bot probes
+  // would otherwise leave `/foo`, and path.resolve(root, '/foo') would
+  // treat the second arg as absolute, escape dataRoot, and trip the
+  // traversal guard with a 500 instead of resolving cleanly to a 404).
+  let normalized = urlPath.replace(/^\/+/, '');
   normalized = decodeURIComponent(normalized);
 
   // Security: remove path traversal attempts (multiple passes for ....// bypass)
@@ -54,8 +57,8 @@ export function urlToPath(urlPath) {
  * @throws {Error} - If path traversal is detected
  */
 export function urlToPathWithPod(urlPath, podName) {
-  // Normalize: remove leading slash, decode URI
-  let normalized = urlPath.startsWith('/') ? urlPath.slice(1) : urlPath;
+  // Normalize: strip all leading slashes (#131 — see urlToPath for context).
+  let normalized = urlPath.replace(/^\/+/, '');
   normalized = decodeURIComponent(normalized);
 
   // Security: remove path traversal attempts (multiple passes for ....// bypass)
