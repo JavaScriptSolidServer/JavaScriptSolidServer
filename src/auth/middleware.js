@@ -362,7 +362,7 @@ function getErrorPage(statusCode, isAuthenticated, request) {
       <p class="subtitle">${subtitle}</p>
 
       <div class="actions">
-        ${is401 ? `<a href="https://solidos.solidcommunity.net/?uri=${encodeURIComponent(baseUrl + request.url)}" class="btn btn-primary">
+        ${is401 ? `<a href="https://solidos.org/docs/browser/?uri=${encodeURIComponent(baseUrl + request.url)}" class="btn btn-primary">
           Open in Data Browser
         </a>` : ''}
         <a href="${baseUrl}/" class="btn btn-secondary">
