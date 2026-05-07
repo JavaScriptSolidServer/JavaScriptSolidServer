@@ -25,6 +25,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Git HTTP Backend** — Clone and push to pod containers
 - **Nostr Relay** — Integrated NIP-01 relay (`wss://your.pod/relay`)
 - **Nostr Auth** — NIP-98 signatures, did:nostr → WebID resolution
+- **End-to-End Encryption** — Encrypt pod content client-side via NIP-44 / NIP-04 using `did:nostr` keys ([docs](https://jss.live/docs/features/e2ee/), zero server-side changes)
 - **ActivityPub** — Fediverse federation with Mastodon-compatible API
 - **remoteStorage** — [draft-dejong-remotestorage-22](https://remotestorage.io/spec/) file sync
 - **MongoDB Storage** — Optional `/db/` route for JSON-LD at scale
