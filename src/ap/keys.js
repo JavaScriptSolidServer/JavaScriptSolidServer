@@ -7,7 +7,14 @@ import { generateKeyPairSync } from 'crypto'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname, join } from 'path'
 
-const DEFAULT_KEY_PATH = 'data/ap-keys.json'
+/**
+ * Get default key path under DATA_ROOT/.idp/ap/
+ * @param {string} username
+ */
+export function getDefaultKeyPath(username = 'me') {
+  const dataRoot = process.env.DATA_ROOT || './data'
+  return join(dataRoot, '.idp', 'ap', 'keys.json')
+}
 
 /**
  * Generate RSA keypair
@@ -25,27 +32,27 @@ export function generateKeypair(modulusLength = 2048) {
 
 /**
  * Load keypair from disk, generate if not exists
- * @param {string} path - Path to keys file
+ * @param {string} [path] - Path to keys file (defaults to DATA_ROOT/.idp/ap/keys.json)
  * @returns {{ publicKey: string, privateKey: string }}
  */
-export function loadOrCreateKeypair(path = DEFAULT_KEY_PATH) {
-  if (existsSync(path)) {
-    const data = JSON.parse(readFileSync(path, 'utf8'))
-    return data
+export function loadOrCreateKeypair(path) {
+  const resolvedPath = path || getDefaultKeyPath('me')
+  if (existsSync(resolvedPath)) {
+    return JSON.parse(readFileSync(resolvedPath, 'utf8'))
   }
 
   // Generate new keypair
   const keypair = generateKeypair()
 
   // Ensure directory exists
-  const dir = dirname(path)
+  const dir = dirname(resolvedPath)
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true })
   }
 
   // Save to disk
-  writeFileSync(path, JSON.stringify(keypair, null, 2))
-  console.log(`Generated new ActivityPub keypair: ${path}`)
+  writeFileSync(resolvedPath, JSON.stringify(keypair, null, 2))
+  console.log(`Generated new ActivityPub keypair: ${resolvedPath}`)
 
   return keypair
 }

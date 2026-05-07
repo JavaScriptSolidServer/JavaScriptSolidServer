@@ -23,9 +23,12 @@ export function createActorHandler(config, keypair) {
         } catch { /* ignore */ }
       }
     }
-    // If still no protocol and hostname looks like a public domain, assume https
-    const host = request.headers['x-forwarded-host'] || request.hostname
-    if (!protocol && host && !host.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
+    const requestHost = request.headers['x-forwarded-host'] || request.hostname
+    const host = (config.subdomains && config.baseDomain)
+      ? `${config.username}.${config.baseDomain}`
+      : requestHost
+    const hostNoPort = host.includes(':') ? host.split(':')[0] : host
+    if (!protocol && hostNoPort && !hostNoPort.match(/^(localhost|127\.|192\.168\.|10\.)/)) {
       protocol = 'https'
     }
     protocol = protocol || request.protocol

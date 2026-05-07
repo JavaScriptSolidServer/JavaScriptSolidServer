@@ -293,7 +293,9 @@ export function createServer(options = {}) {
       username: apUsername,
       displayName: apDisplayName,
       summary: apSummary,
-      nostrPubkey: apNostrPubkey
+      nostrPubkey: apNostrPubkey,
+      subdomains: subdomainsEnabled,
+      baseDomain
     });
   }
 
@@ -448,9 +450,15 @@ export function createServer(options = {}) {
   fastify.addHook('preHandler', async (request, reply) => {
     // Skip auth for pod creation, OPTIONS, IdP routes, mashlib, well-known, notifications, nostr, git, and AP
     const mashlibPaths = ['/mashlib.min.js', '/mash.css', '/841.mashlib.min.js'];
-    const apPaths = ['/inbox', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
+    const apPaths = ['/inbox', '/posts/', '/profile/avatar.png', '/profile/header.png', '/profile/card.jsonld/inbox', '/profile/card.jsonld/outbox', '/profile/card.jsonld/followers', '/profile/card.jsonld/following',
       '/api/v1/apps', '/api/v1/instance', '/api/v1/accounts/verify_credentials',
+      '/api/v1/timelines/', '/api/v1/statuses', '/api/v1/accounts/', '/api/v1/notifications',
       '/oauth/authorize', '/oauth/token'];
+    const isApPublicPath = apPaths.some(p =>
+      request.url === p ||
+      request.url.startsWith(p + '?') ||
+      (p.endsWith('/') && request.url.startsWith(p))
+    );
     // Check if request wants ActivityPub content for profile
     const accept = request.headers.accept || '';
     const wantsAP = accept.includes('activity+json') || accept.includes('ld+json; profile="https://www.w3.org/ns/activitystreams"');
@@ -464,7 +472,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/.well-known/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
-        (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
+        (activitypubEnabled && (request.url.startsWith('/api/v1/') || request.url.startsWith('/api/v2/') || isApPublicPath)) ||
         isProfileAP ||
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||

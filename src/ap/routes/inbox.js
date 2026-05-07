@@ -4,6 +4,8 @@
  */
 
 import { auth, outbox } from 'microfed'
+import { Agent } from 'undici'
+import { createSign } from 'crypto'
 import {
   saveActivity,
   addFollower,
@@ -13,6 +15,9 @@ import {
   getCachedActor
 } from '../store.js'
 import { getKeyId } from '../keys.js'
+
+// Allow self-signed certs when fetching local actors (e.g. server fetching itself)
+const insecureAgent = new Agent({ connect: { rejectUnauthorized: false } })
 
 /**
  * Fetch remote actor (with caching)
@@ -28,6 +33,7 @@ async function fetchActor(id, log) {
 
   try {
     const response = await fetch(fetchUrl, {
+      dispatcher: insecureAgent,
       headers: {
         'Accept': 'application/activity+json',
         'User-Agent': 'JSS/1.0 (+https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)'
@@ -143,7 +149,7 @@ export function createInboxHandler(config, keypair) {
 
     // Save activity
     if (activity.id) {
-      saveActivity(activity)
+      saveActivity(config.username, activity)
     }
 
     // Handle activity by type
@@ -157,15 +163,15 @@ export function createInboxHandler(config, keypair) {
 
     switch (activity.type) {
       case 'Follow':
-        await handleFollow(activity, actorId, profileUrl, keypair, request.log)
+        await handleFollow(config.username, activity, actorId, profileUrl, keypair, request.log)
         break
 
       case 'Undo':
-        await handleUndo(activity, request.log)
+        await handleUndo(config.username, activity, request.log)
         break
 
       case 'Accept':
-        handleAccept(activity, request.log)
+        handleAccept(config.username, activity, request.log)
         break
 
       case 'Create':
@@ -192,7 +198,7 @@ export function createInboxHandler(config, keypair) {
 /**
  * Handle Follow activity
  */
-async function handleFollow(activity, actorId, profileUrl, keypair, log) {
+async function handleFollow(username, activity, actorId, profileUrl, keypair, log) {
   const followerActor = await fetchActor(activity.actor, log)
   if (!followerActor) {
     log.warn('Could not fetch follower actor')
@@ -200,20 +206,38 @@ async function handleFollow(activity, actorId, profileUrl, keypair, log) {
   }
 
   // Add to followers
-  addFollower(activity.actor, followerActor.inbox)
+  addFollower(username, activity.actor, followerActor.inbox)
   log.info(`New follower: ${followerActor.preferredUsername || activity.actor}`)
 
-  // Send Accept
+  // Send Accept — use direct signed fetch to support self-signed certs
   const accept = outbox.createAccept(actorId, activity)
+  const body = JSON.stringify(accept)
+  const inboxUrl = new URL(followerActor.inbox)
+  const date = new Date().toUTCString()
+  const digest = `SHA-256=${Buffer.from(
+    (await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body)))
+  ).toString('base64')}`
+  const signingString = `(request-target): post ${inboxUrl.pathname}\nhost: ${inboxUrl.host}\ndate: ${date}\ndigest: ${digest}`
+  const signer = createSign('RSA-SHA256')
+  signer.update(signingString)
+  const signature = signer.sign(keypair.privateKey, 'base64')
+  const keyId = `${profileUrl}#main-key`
+  const signatureHeader = `keyId="${keyId}",algorithm="rsa-sha256",headers="(request-target) host date digest",signature="${signature}"`
 
   try {
-    await outbox.send({
-      activity: accept,
-      inbox: followerActor.inbox,
-      privateKey: keypair.privateKey,
-      keyId: `${profileUrl}#main-key`
+    const res = await fetch(followerActor.inbox, {
+      method: 'POST',
+      dispatcher: insecureAgent,
+      headers: {
+        'Content-Type': 'application/activity+json',
+        'Accept': 'application/activity+json',
+        'Date': date,
+        'Digest': digest,
+        'Signature': signatureHeader
+      },
+      body
     })
-    log.info(`Sent Accept to ${followerActor.inbox}`)
+    log.info(`Sent Accept to ${followerActor.inbox} — ${res.status}`)
   } catch (err) {
     log.error(`Failed to send Accept: ${err.message}`)
   }
@@ -222,9 +246,9 @@ async function handleFollow(activity, actorId, profileUrl, keypair, log) {
 /**
  * Handle Undo activity
  */
-async function handleUndo(activity, log) {
+async function handleUndo(username, activity, log) {
   if (activity.object?.type === 'Follow') {
-    removeFollower(activity.actor)
+    removeFollower(username, activity.actor)
     log.info(`Unfollowed by ${activity.actor}`)
   }
 }
@@ -232,13 +256,13 @@ async function handleUndo(activity, log) {
 /**
  * Handle Accept activity (our follow was accepted)
  */
-function handleAccept(activity, log) {
+function handleAccept(username, activity, log) {
   if (activity.object?.type === 'Follow') {
     const target = typeof activity.object.object === 'string'
       ? activity.object.object
       : activity.object.object?.id
     if (target) {
-      acceptFollowing(target)
+      acceptFollowing(username, target)
       log.info('Follow accepted!')
     }
   }
