@@ -504,13 +504,13 @@ export function consentPage(uid, client, params, account) {
     </div>
 
     ${account ? `
-      <p style="display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
+      <div style="display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; margin: 12px 0;">
         <span>Signed in as <strong>${escapeHtml(account.email)}</strong></span>
         <span style="color: #94a3b8;">·</span>
         <form method="POST" action="/idp/interaction/${uid}/switch" style="display: inline; margin: 0;">
           <button type="submit" style="background: none; border: 0; padding: 0; color: #2563eb; font: inherit; cursor: pointer; text-decoration: underline;">Sign in as a different user</button>
         </form>
-      </p>
+      </div>
     ` : ''}
 
     <div class="scopes">

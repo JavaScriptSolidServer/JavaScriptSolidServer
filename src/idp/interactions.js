@@ -318,6 +318,13 @@ export async function handleSwitchAccount(request, reply, provider) {
       return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This interaction may have expired. Try signing in again from your app.'));
     }
 
+    // The UI entrypoint is the consent page only. Refusing on other
+    // prompt states (login, passkey, etc.) prevents a crafted request
+    // from corrupting an in-flight non-consent interaction.
+    if (interaction.prompt?.name !== 'consent') {
+      return reply.code(400).type('text/html').send(errorPage('Cannot switch account here', 'Account switching is only available from the consent page.'));
+    }
+
     // Destroy the bound session so the new login starts cold. The cookie
     // becomes a stale reference; oidc-provider's Session.get treats a
     // missing session blob as "new browser", which is the shape we want.
@@ -327,11 +334,15 @@ export async function handleSwitchAccount(request, reply, provider) {
     }
 
     // Reset the interaction back to the login prompt, dropping the
-    // session reference. `prompt` and `session` are both in the
-    // oidc-provider Interaction IN_PAYLOAD allowlist, so this persists
-    // through the adapter. Original `params` (client_id, redirect_uri,
-    // state, etc.) are untouched, so resume picks them up after login.
+    // session reference and any prior `result` snapshot. `prompt`,
+    // `session`, and `result` are all in the oidc-provider Interaction
+    // IN_PAYLOAD allowlist, so the mutations persist through the
+    // adapter. Original `params` (client_id, redirect_uri, state, etc.)
+    // are untouched, so resume picks them up after login. Clearing
+    // `result` prevents a stale `result.login` from a previous identity
+    // influencing the next resume.
     interaction.session = undefined;
+    interaction.result = undefined;
     interaction.prompt = { name: 'login', reasons: ['no_session'], details: {} };
     interaction.lastError = undefined;
     const ttl = Math.max(1, interaction.exp - Math.floor(Date.now() / 1000));
@@ -339,16 +350,25 @@ export async function handleSwitchAccount(request, reply, provider) {
 
     // Clear the user-agent's session cookie too. Default oidc-provider
     // cookie name is `_session`; the `.legacy` and `.sig` variants are
-    // created during identifier rotation. Clearing all of them is safe
-    // — server-side state is already gone via session.destroy().
-    reply.clearCookie('_session', { path: '/' });
-    reply.clearCookie('_session.legacy', { path: '/' });
-    reply.clearCookie('_session.sig', { path: '/' });
+    // created during identifier rotation. JSS doesn't register
+    // @fastify/cookie, so we emit Set-Cookie headers directly with an
+    // expired Expires + Max-Age=0 to instruct the UA to drop them.
+    // Server-side state is already gone via session.destroy() above —
+    // this is just to keep the browser tidy.
+    const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
+    reply.header('Set-Cookie', [
+      `_session=; ${expired}`,
+      `_session.legacy=; ${expired}`,
+      `_session.sig=; ${expired}`,
+    ]);
 
     return reply.redirect(`/idp/interaction/${uid}`);
   } catch (err) {
     request.log.error(err, 'Switch-account error');
-    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+    // Don't surface raw err.message — adapter errors and stack-leaking
+    // strings on an auth endpoint are a soft info-leak. Full error is
+    // already in the server log via request.log.error above.
+    return reply.code(500).type('text/html').send(errorPage('Error', 'Something went wrong. Please try signing in again.'));
   }
 }
 
