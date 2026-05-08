@@ -176,16 +176,29 @@ function streamUpstream(reply, fetchResponse, maxBytes, abortController) {
     return reply.send();
   }
 
+  // Partial-slice emission at the cap: if a single chunk would push us
+  // over, emit only the bytes up to the cap, then end the stream. The
+  // earlier "drop the whole chunk" version meant a small maxBytes (e.g.
+  // 100 against a typical TLS record-sized chunk) returned an empty
+  // response, even though the cap was much larger than zero.
   let bytesSeen = 0;
   const counter = new Transform({
     transform(chunk, _encoding, callback) {
-      bytesSeen += chunk.length;
-      if (bytesSeen > maxBytes) {
-        abortController.abort();
-        this.push(null);
+      const remaining = maxBytes - bytesSeen;
+      if (remaining <= 0) {
+        // Already at cap; quietly drop subsequent chunks until upstream EOF.
         return callback();
       }
-      callback(null, chunk);
+      if (chunk.length <= remaining) {
+        bytesSeen += chunk.length;
+        return callback(null, chunk);
+      }
+      // Emit partial slice up to the cap, then end cleanly.
+      bytesSeen += remaining;
+      this.push(chunk.slice(0, remaining));
+      this.push(null);
+      abortController.abort();
+      return callback();
     }
   });
 
