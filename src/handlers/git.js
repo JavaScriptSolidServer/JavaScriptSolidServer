@@ -24,9 +24,11 @@ export function isGitWriteOperation(urlPath) {
 }
 
 /**
- * Extract the repository path from the URL with path traversal protection
+ * Extract the repository path from the URL with path traversal protection.
+ * Always returns a non-empty string: '.' for root/empty URL paths, the
+ * cleaned relative path otherwise.
  * @param {string} urlPath - The URL path
- * @returns {string|null} The repository relative path or null
+ * @returns {string} The repository relative path ('.' for root)
  */
 function extractRepoPath(urlPath) {
   // Remove git service suffixes to get the repo path
@@ -87,16 +89,21 @@ function findGitDir(repoPath) {
   return null;
 }
 
-/**
- * Apply the same CORS headers as a successful git response.
- * Browser-based git clients see a generic CORS/network error instead of
- * a readable status code if these are missing on a 4xx return path —
- * undermining the #371 work that wired up CORS in the first place.
- */
+// CORS headers for git responses. Single source of truth — used by the
+// success path (Fastify reply on the OPTIONS preflight, raw stream on
+// http-backend output) and by every 4xx early-return. Without these,
+// browser-based git clients (e.g. jss.live/git/) see a generic
+// CORS/network error instead of the actual status, undermining #371.
+const GIT_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Git-Protocol',
+};
+
 function setGitCorsHeaders(reply) {
-  reply.header('Access-Control-Allow-Origin', '*');
-  reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Git-Protocol');
+  for (const [k, v] of Object.entries(GIT_CORS_HEADERS)) {
+    reply.header(k, v);
+  }
 }
 
 /**
@@ -126,12 +133,9 @@ export async function handleGit(request, reply) {
   urlPath = urlPath.replace(/\/{2,}/g, '/');
   const queryString = request.url.split('?')[1] || '';
 
-  // Extract repository path
+  // extractRepoPath always returns a non-empty string ('.' for root) —
+  // no null check needed.
   const repoRelative = extractRepoPath(urlPath);
-  if (!repoRelative) {
-    setGitCorsHeaders(reply);
-    return reply.code(400).send({ error: 'Invalid git request' });
-  }
 
   // Handle subdomain mode
   let dataRoot = getDataRoot();
@@ -239,10 +243,11 @@ export async function handleGit(request, reply) {
             }
           }
 
-          // Add CORS headers for browser git clients
-          reply.raw.setHeader('Access-Control-Allow-Origin', '*');
-          reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Git-Protocol');
+          // Add CORS headers for browser git clients (same set as the
+          // 4xx return paths, kept in sync via GIT_CORS_HEADERS).
+          for (const [k, v] of Object.entries(GIT_CORS_HEADERS)) {
+            reply.raw.setHeader(k, v);
+          }
 
           reply.raw.writeHead(statusCode);
           headersSent = true;
