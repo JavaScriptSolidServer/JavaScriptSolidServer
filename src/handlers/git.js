@@ -101,13 +101,22 @@ export async function handleGit(request, reply) {
     return reply.code(200).send();
   }
 
-  // Collapse multi-slash sequences before they reach extractRepoPath or
-  // get forwarded as PATH_INFO. git http-backend rejects paths like
-  // `/foo/test//info/refs` as "aliased" and JSS would otherwise 500.
-  // Same shape as the #131 fix in src/utils/url.js — frontends and bots
-  // both produce these (frontend appends `/info/refs` to a URL the user
-  // ended with `/`, bots probe `///wp-admin/...`). #373.
-  let urlPath = decodeURIComponent(request.url.split('?')[0]);
+  // Defensive URL normalization. Two issues both surface as 500s without
+  // this block (#373):
+  //   1. Multi-slash sequences (e.g. `/foo/test//info/refs`) — git
+  //      http-backend rejects them as "aliased". Frontends and bots
+  //      both produce these (frontend appends `/info/refs` to a URL the
+  //      user ended with `/`, bots probe `///wp-admin/...`).
+  //   2. Malformed percent-encoding (`%g1`, truncated `%E0%`, etc.,
+  //      common in bot traffic) — decodeURIComponent throws URIError,
+  //      which Fastify surfaces as a 500.
+  // Same shape as the LDP fix in src/utils/url.js (#131).
+  let urlPath;
+  try {
+    urlPath = decodeURIComponent(request.url.split('?')[0]);
+  } catch {
+    return reply.code(400).send({ error: 'Invalid URL encoding' });
+  }
   urlPath = urlPath.replace(/\/{2,}/g, '/');
   const queryString = request.url.split('?')[1] || '';
 
