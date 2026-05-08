@@ -68,6 +68,16 @@ export function setProxyCorsHeaders(reply) {
   for (const [k, v] of Object.entries(PROXY_CORS_HEADERS)) {
     reply.header(k, v);
   }
+  // Hardening against the proxy being used as an XSS vector: if a user
+  // navigates a browser to /proxy?url=https://evil/page.html, the
+  // upstream HTML would otherwise execute in this pod's origin and
+  // could exfiltrate other pod resources. CSP `sandbox` neutralizes
+  // scripts/plugins/navigation when rendered as a document; nosniff
+  // prevents MIME-sniffing tricks. fetch()-based callers are
+  // unaffected (they consume the raw bytes regardless of these
+  // response-side defenses).
+  reply.header('Content-Security-Policy', 'sandbox');
+  reply.header('X-Content-Type-Options', 'nosniff');
 }
 
 // Headers we forward from the caller to the upstream. Anything not on
@@ -119,6 +129,12 @@ const UPSTREAM_AUTH_HEADER = 'x-upstream-authorization';
 // exceeded. Forwarding the upstream Content-Length in either case
 // causes ERR_CONTENT_LENGTH_MISMATCH or hangs in the client. Node sends
 // the actual length (or chunked) automatically.
+//
+// WAC-Allow / X-Cost / X-Balance / X-Pay-Currency are stripped because
+// they describe *this* pod's ACL decision; if the upstream sets them
+// they'd override our local values and let the upstream spoof auth or
+// payment state. server.js re-applies our values after the upstream
+// headers are copied in.
 const STRIP_RESPONSE_HEADERS = new Set([
   'content-encoding',
   'content-length',
@@ -128,6 +144,11 @@ const STRIP_RESPONSE_HEADERS = new Set([
   // Strip set-cookie — we never want to forward upstream cookies into
   // our origin's domain (would let upstream set cookies on the pod).
   'set-cookie',
+  // Pod-authoritative headers: never accept upstream values for these.
+  'wac-allow',
+  'x-cost',
+  'x-balance',
+  'x-pay-currency',
 ]);
 
 const DEFAULT_MAX_REDIRECTS = 5;
