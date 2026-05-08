@@ -399,7 +399,13 @@ export function createServer(options = {}) {
       return;
     }
 
-    const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
+    // Only inspect the path component — splitting the full URL on '/'
+    // would catch dot-prefixed segments inside query-string values
+    // (e.g. /proxy?url=https://example.com/.git/config), rejecting
+    // legitimate proxy requests for upstream URLs that happen to
+    // contain dotfile-like path segments. The dotfile guard is about
+    // *this* pod's filesystem, not what the URL looks like.
+    const segments = request.url.split('?')[0].split('/');
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
       seg.length > 1 &&

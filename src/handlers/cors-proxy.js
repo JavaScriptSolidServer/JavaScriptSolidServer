@@ -364,15 +364,21 @@ export async function handleCorsProxy(request, reply, options = {}) {
         return reply.code(502).send({ error: 'Upstream redirect with malformed Location', location });
       }
       if ([301, 302, 303].includes(upstream.status)) {
-        // Method/body change is mandated by RFC 7231: redirected request
-        // becomes GET with no body. Also drop content-length / content-type
-        // so we don't send headers that no longer match the body.
-        currentMethod = 'GET';
-        body = null;
-        delete forwardHeaders['content-length'];
-        delete forwardHeaders['Content-Length'];
-        delete forwardHeaders['content-type'];
-        delete forwardHeaders['Content-Type'];
+        // Per fetch / RFC 7231 redirect semantics:
+        //   - 303: any non-GET/HEAD becomes GET with no body
+        //   - 301/302: POST → GET with no body (legacy quirk; spec
+        //     technically says preserve method, but every real client
+        //     downgrades POST to GET); HEAD stays HEAD; GET stays GET
+        // HEAD must never be turned into GET — it'd cause an
+        // unexpected body to stream on what was a body-less request.
+        if (currentMethod !== 'GET' && currentMethod !== 'HEAD') {
+          currentMethod = 'GET';
+          body = null;
+          delete forwardHeaders['content-length'];
+          delete forwardHeaders['Content-Length'];
+          delete forwardHeaders['content-type'];
+          delete forwardHeaders['Content-Type'];
+        }
       }
       // Cross-origin redirect: strip Authorization to prevent leaking
       // the X-Upstream-Authorization-derived credential to a different
