@@ -57,7 +57,16 @@ export function buildResourceUrl(request, urlPath) {
  *   Without this flag, POST/PUT/PATCH on a missing resource is authorized
  *   against the parent (e.g. `/proxy` falls back to `/`), which is too
  *   permissive for endpoints whose ACL is meant to live at that path.
- * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string, authError: string|null, paymentRequired?: object}>}
+ * @returns {Promise<{
+ *   authorized: boolean,
+ *   webId: string|null,
+ *   wacAllow: string,
+ *   authError: string|null,
+ *   paymentRequired?: object,
+ *   paid?: boolean,
+ *   balance?: number,
+ *   currency?: string
+ * }>}
  */
 export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];

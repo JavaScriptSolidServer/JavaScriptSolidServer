@@ -84,9 +84,12 @@ export function setProxyCorsHeaders(reply) {
 //
 // DPoP is similarly not forwarded — it's bound to this pod's URL and
 // would be rejected by any upstream anyway.
-// Note: Content-Length is *not* forwarded. We may transform the body
-// (Fastify-parsed JSON gets re-stringified before the upstream fetch),
-// so the caller's declared length may not match what we send. Node's
+// Note: Content-Length is *not* forwarded. JSS registers a wildcard
+// parseAs:'buffer' content parser (server.js), so request bodies arrive
+// as a Buffer that we pass through to fetch unchanged — but we keep a
+// defensive JSON.stringify branch downstream in case anything ever
+// changes that and a parsed object lands here. Either way, the
+// caller-declared length isn't reliable for the upstream call. Node's
 // fetch sets Content-Length automatically based on the actual body.
 // (Browsers send Content-Length on simple requests without needing it
 // in Access-Control-Allow-Headers, since it's CORS-safelisted.)
