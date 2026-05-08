@@ -484,6 +484,7 @@ export function createServer(options = {}) {
       // payment-gated /proxy ACLs behave consistently.
       if (paymentRequired) {
         setProxyCorsHeaders(reply);
+        reply.header('WAC-Allow', wacAllow);
         return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
       }
 

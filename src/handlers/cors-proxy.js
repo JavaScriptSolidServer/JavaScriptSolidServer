@@ -235,6 +235,8 @@ export async function handleCorsProxy(request, reply, options = {}) {
   }
 
   if (!ALLOWED_METHODS.has(request.method)) {
+    // HTTP requires 405 to carry an Allow header listing supported methods.
+    reply.header('Allow', [...ALLOWED_METHODS].join(', '));
     return reply.code(405).send({ error: 'Method not allowed', method: request.method });
   }
 
@@ -371,10 +373,11 @@ export async function handleCorsProxy(request, reply, options = {}) {
 }
 
 /**
- * Match a request URL against the proxy route.
+ * Match a request URL *path* (not full URL) against the proxy route.
  * Used by server.js to decide whether the proxy preHandler should fire
- * and whether the standard WAC hook should skip.
+ * and whether the standard WAC hook should skip. Callers must pass the
+ * already-split path component (e.g. `request.url.split('?')[0]`).
  */
 export function isCorsProxyRequest(urlPath) {
-  return urlPath === '/proxy' || urlPath.startsWith('/proxy?');
+  return urlPath === '/proxy';
 }
