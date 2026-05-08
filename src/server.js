@@ -463,6 +463,20 @@ export function createServer(options = {}) {
         return;
       }
 
+      // OPTIONS preflight short-circuits to the handler (which returns
+      // 204 + proxy CORS headers) without going through authorize() at
+      // all. authorize() does have its own OPTIONS short-circuit, but
+      // routing through here keeps the preflight off the auth/payment
+      // path entirely — preflights must never debit ledgers or evaluate
+      // PaymentConditions.
+      if (request.method === 'OPTIONS') {
+        return handleCorsProxy(request, reply, {
+          maxBytes: corsProxyMaxBytes,
+          timeoutMs: corsProxyTimeoutMs,
+          maxRedirects: corsProxyMaxRedirects,
+        });
+      }
+
       // Don't override requiredMode — let authorize() derive it from the
       // request method via getRequiredMode(). GET/HEAD need READ on the
       // /proxy resource, POST needs APPEND/WRITE — pod owners can grant

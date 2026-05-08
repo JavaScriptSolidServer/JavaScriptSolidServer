@@ -63,10 +63,13 @@ export function buildResourceUrl(request, urlPath) {
  *   wacAllow: string,
  *   authError: string|null,
  *   paymentRequired?: object,
- *   paid?: boolean,
+ *   paid?: number,
  *   balance?: number,
  *   currency?: string
  * }>}
+ *   `paid` is the cost actually debited (number, not boolean) — see
+ *   checkAccess() in src/wac/checker.js:189; callers stringify it for
+ *   the X-Cost response header.
  */
 export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];
