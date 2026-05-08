@@ -236,8 +236,13 @@ describe('Identity Provider', () => {
       // session. Per the Fetch spec, Set-Cookie is a forbidden header
       // name on .get(); use the array-returning getSetCookie() helper.
       const setCookies = res.headers.getSetCookie?.() || [];
-      assert.ok(setCookies.length >= 3, `expected at least 3 Set-Cookie headers, got ${setCookies.length}`);
-      assert.ok(setCookies.some(c => c.startsWith('_session=')), 'should clear _session');
+      assert.ok(setCookies.length >= 4, `expected at least 4 Set-Cookie headers, got ${setCookies.length}`);
+      // All four signed-cookie names should be cleared:
+      // _session + _session.sig + _session.legacy + _session.legacy.sig.
+      for (const name of ['_session=', '_session.sig=', '_session.legacy=', '_session.legacy.sig=']) {
+        assert.ok(setCookies.some(c => c.startsWith(name)),
+          `should clear ${name.slice(0, -1)}`);
+      }
       assert.ok(setCookies.every(c => /Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
         'all Set-Cookies should be expirations');
     });
