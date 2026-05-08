@@ -26,20 +26,42 @@ import { Readable, Transform } from 'stream';
 // CORS headers applied to every proxy response. Same shape/source-of-truth
 // pattern as GIT_CORS_HEADERS in src/handlers/git.js (#374).
 //
-// Allow-Headers includes:
+// Allow-Headers must list every request header the proxy actually
+// forwards (see FORWARD_REQUEST_HEADERS) — otherwise browsers reject
+// preflight before the request reaches us. Plus:
 //   - Authorization, DPoP — for WAC + Solid-OIDC auth to *this* pod
 //   - X-Upstream-Authorization — opt-in upstream credential (renamed to
 //     Authorization on the way out, see pickRequestHeaders)
-//   - Git-Protocol — for browser-side smart-HTTP v2 clients
-//   - Accept*, Content-Type — standard fetch headers
 //
 // Expose-Headers includes WAC-Allow so browser clients can render auth
 // UX based on the pod's policy, plus the usual content/etag/location set.
+//
+// Allow-Credentials is set explicitly to 'false' to override the
+// server-wide global CORS hook (which uses 'true' for the rest of the
+// pod). Combining 'true' with `Allow-Origin: *` is a CORS spec
+// violation that browsers reject — and an anonymous-readable proxy
+// doesn't have a use case for credentialed cross-origin anyway (Cookie
+// is stripped before forwarding).
 export const PROXY_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Credentials': 'false',
   'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, DPoP, X-Upstream-Authorization, Git-Protocol, Accept, Accept-Encoding, Accept-Language',
-  'Access-Control-Expose-Headers': 'Content-Type, Content-Length, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow',
+  'Access-Control-Allow-Headers': [
+    'Content-Type',
+    'Authorization',
+    'DPoP',
+    'X-Upstream-Authorization',
+    'Git-Protocol',
+    'Accept',
+    'Accept-Encoding',
+    'Accept-Language',
+    'If-Match',
+    'If-None-Match',
+    'If-Modified-Since',
+    'Range',
+    'User-Agent',
+  ].join(', '),
+  'Access-Control-Expose-Headers': 'Content-Type, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow',
 };
 
 export function setProxyCorsHeaders(reply) {
@@ -82,8 +104,16 @@ const UPSTREAM_AUTH_HEADER = 'x-upstream-authorization';
 // caller. Encoding-related ones are removed because Node's fetch already
 // transparently decodes; passing through Content-Encoding would
 // double-decompress in the browser.
+//
+// Content-Length is stripped because (a) we strip Content-Encoding so
+// the body length may differ from the upstream-declared length after
+// decompression, and (b) we may truncate mid-stream when maxBytes is
+// exceeded. Forwarding the upstream Content-Length in either case
+// causes ERR_CONTENT_LENGTH_MISMATCH or hangs in the client. Node sends
+// the actual length (or chunked) automatically.
 const STRIP_RESPONSE_HEADERS = new Set([
   'content-encoding',
+  'content-length',
   'transfer-encoding',
   'connection',
   'keep-alive',
