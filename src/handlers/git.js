@@ -24,9 +24,11 @@ export function isGitWriteOperation(urlPath) {
 }
 
 /**
- * Extract the repository path from the URL with path traversal protection
+ * Extract the repository path from the URL with path traversal protection.
+ * Always returns a non-empty string: '.' for root/empty URL paths, the
+ * cleaned relative path otherwise.
  * @param {string} urlPath - The URL path
- * @returns {string|null} The repository relative path or null
+ * @returns {string} The repository relative path ('.' for root)
  */
 function extractRepoPath(urlPath) {
   // Remove git service suffixes to get the repo path
@@ -87,6 +89,23 @@ function findGitDir(repoPath) {
   return null;
 }
 
+// CORS headers for git responses. Single source of truth — used by the
+// success path (Fastify reply on the OPTIONS preflight, raw stream on
+// http-backend output) and by every 4xx early-return. Without these,
+// browser-based git clients (e.g. jss.live/git/) see a generic
+// CORS/network error instead of the actual status, undermining #371.
+const GIT_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Git-Protocol',
+};
+
+function setGitCorsHeaders(reply) {
+  for (const [k, v] of Object.entries(GIT_CORS_HEADERS)) {
+    reply.header(k, v);
+  }
+}
+
 /**
  * Handle Git HTTP requests using git http-backend
  * @param {FastifyRequest} request
@@ -95,20 +114,28 @@ function findGitDir(repoPath) {
 export async function handleGit(request, reply) {
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
-    reply.header('Access-Control-Allow-Origin', '*');
-    reply.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Git-Protocol');
+    setGitCorsHeaders(reply);
     return reply.code(200).send();
   }
 
-  const urlPath = decodeURIComponent(request.url.split('?')[0]);
+  // Collapse multi-slash sequences before they reach extractRepoPath or
+  // get forwarded as PATH_INFO. git http-backend rejects paths like
+  // `/foo/test//info/refs` as "aliased" and JSS would otherwise 500.
+  // Frontends and bots both produce these (frontend appends `/info/refs`
+  // to a URL the user ended with `/`, bots probe `///wp-admin/...`).
+  // Same shape as the LDP fix in src/utils/url.js (#131).
+  //
+  // Note: Fastify's URL parser rejects malformed percent-encoding
+  // (`%g1`, truncated `%E0%`, invalid UTF-8 like `%C3%28`) with a 400
+  // FST_ERR_BAD_URL before this handler runs — verified empirically — so
+  // decodeURIComponent here is safe in practice on current Fastify.
+  let urlPath = decodeURIComponent(request.url.split('?')[0]);
+  urlPath = urlPath.replace(/\/{2,}/g, '/');
   const queryString = request.url.split('?')[1] || '';
 
-  // Extract repository path
+  // extractRepoPath always returns a non-empty string ('.' for root) —
+  // no null check needed.
   const repoRelative = extractRepoPath(urlPath);
-  if (!repoRelative) {
-    return reply.code(400).send({ error: 'Invalid git request' });
-  }
 
   // Handle subdomain mode
   let dataRoot = getDataRoot();
@@ -120,12 +147,14 @@ export async function handleGit(request, reply) {
 
   // Security: verify resolved path is within data root (path traversal protection)
   if (!isPathWithinDataRoot(repoAbs, getDataRoot())) {
+    setGitCorsHeaders(reply);
     return reply.code(403).send({ error: 'Path traversal detected' });
   }
 
   // Find git directory
   const gitInfo = findGitDir(repoAbs);
   if (!gitInfo) {
+    setGitCorsHeaders(reply);
     return reply.code(404).send({ error: 'Not a git repository' });
   }
 
@@ -214,10 +243,11 @@ export async function handleGit(request, reply) {
             }
           }
 
-          // Add CORS headers for browser git clients
-          reply.raw.setHeader('Access-Control-Allow-Origin', '*');
-          reply.raw.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          reply.raw.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Git-Protocol');
+          // Add CORS headers for browser git clients (same set as the
+          // 4xx return paths, kept in sync via GIT_CORS_HEADERS).
+          for (const [k, v] of Object.entries(GIT_CORS_HEADERS)) {
+            reply.raw.setHeader(k, v);
+          }
 
           reply.raw.writeHead(statusCode);
           headersSent = true;
