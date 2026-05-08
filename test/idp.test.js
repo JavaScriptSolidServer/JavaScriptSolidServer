@@ -4,6 +4,7 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import http from 'node:http';
 import { createServer } from '../src/server.js';
 import fs from 'fs-extra';
 import path from 'path';
@@ -179,6 +180,122 @@ describe('Identity Provider', () => {
       });
 
       assert.ok(res.status >= 200 && res.status < 600, `got valid HTTP status ${res.status}`);
+    });
+  });
+
+  // Regression coverage for #384 — "Sign in as a different user" on consent
+  describe('Switch account on consent (#384)', () => {
+    // The IDP's filesystem adapter stores Interaction records as JSON at
+    // <DATA_ROOT>/.idp/interaction/<uid>.json (model name "Interaction"
+    // → dir "interaction" via the adapter's modelToDir camelCase split).
+    // Tests write a synthetic interaction directly so we don't have to
+    // walk a full OIDC client flow to set up state.
+    const interactionDir = `${DATA_DIR}/.idp/interaction`;
+
+    function writeInteraction(uid, payload) {
+      const ttlSec = 3600;
+      const data = {
+        ...payload,
+        kind: 'Interaction',
+        jti: uid,
+        exp: Math.floor(Date.now() / 1000) + ttlSec,
+        iat: Math.floor(Date.now() / 1000),
+        _id: uid,
+        _expiresAt: Date.now() + ttlSec * 1000,
+      };
+      return fs.outputJson(`${interactionDir}/${uid}.json`, data, { spaces: 2 });
+    }
+
+    // Use node:http directly for the cookie-clearing assertion. fetch's
+    // Headers.getSetCookie() is only available on Node 19.7+, but the
+    // package declares engines.node >= 18. http.request gives us
+    // res.headers['set-cookie'] as a real array on every supported
+    // Node version, no version-gated branches needed.
+    function rawPost(urlString) {
+      return new Promise((resolve, reject) => {
+        const u = new URL(urlString);
+        const req = http.request({
+          method: 'POST',
+          hostname: u.hostname,
+          port: u.port,
+          path: u.pathname + u.search,
+        }, (res) => {
+          let body = '';
+          res.on('data', (c) => body += c);
+          res.on('end', () => resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            body,
+          }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    }
+
+    it('redirects back to /idp/interaction/:uid and resets the prompt to login', async () => {
+      const uid = 'test-switch-' + Math.random().toString(36).slice(2);
+      await writeInteraction(uid, {
+        prompt: { name: 'consent', reasons: [], details: {} },
+        session: { uid: 'fake-session-uid', accountId: 'acct-foo' },
+        params: { client_id: 'test-client', redirect_uri: 'http://localhost', state: 'xyz' },
+      });
+
+      const res = await rawPost(`${baseUrl}/idp/interaction/${uid}/switch`);
+
+      // 303 See Other — forces UA to GET the Location target so a
+      // (broken) UA can't loop by re-POSTing to /switch.
+      assert.strictEqual(res.statusCode, 303);
+      assert.strictEqual(res.headers.location, `/idp/interaction/${uid}`);
+
+      // Verify the interaction was mutated as expected.
+      const saved = await fs.readJson(`${interactionDir}/${uid}.json`);
+      assert.strictEqual(saved.prompt.name, 'login');
+      assert.ok(saved.session === undefined || saved.session === null,
+        'session should be cleared');
+      // Original params survive so resume can continue the authz request.
+      assert.strictEqual(saved.params.client_id, 'test-client');
+      assert.strictEqual(saved.params.state, 'xyz');
+
+      // Cookies should be cleared so the user's UA forgets the prior
+      // session. Node's http module gives Set-Cookie as an array on
+      // every supported version, so no Node 19.7+ gating needed.
+      const setCookies = Array.isArray(res.headers['set-cookie']) ? res.headers['set-cookie'] : [];
+      assert.ok(setCookies.length >= 4, `expected at least 4 Set-Cookie headers, got ${setCookies.length}`);
+      // All four signed-cookie names should be cleared:
+      // _session + _session.sig + _session.legacy + _session.legacy.sig.
+      for (const name of ['_session=', '_session.sig=', '_session.legacy=', '_session.legacy.sig=']) {
+        assert.ok(setCookies.some(c => c.startsWith(name)),
+          `should clear ${name.slice(0, -1)}`);
+      }
+      assert.ok(setCookies.every(c => /Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
+        'all Set-Cookies should be expirations');
+    });
+
+    it('returns 400 when the interaction is not on the consent prompt', async () => {
+      const uid = 'test-switch-bad-' + Math.random().toString(36).slice(2);
+      await writeInteraction(uid, {
+        prompt: { name: 'login', reasons: ['no_session'], details: {} },
+        params: { client_id: 'test-client' },
+      });
+
+      const res = await fetch(`${baseUrl}/idp/interaction/${uid}/switch`, {
+        method: 'POST',
+        redirect: 'manual',
+      });
+
+      assert.strictEqual(res.status, 400);
+      // Original interaction should be untouched.
+      const saved = await fs.readJson(`${interactionDir}/${uid}.json`);
+      assert.strictEqual(saved.prompt.name, 'login');
+    });
+
+    it('returns 404 for an unknown interaction uid', async () => {
+      const res = await fetch(`${baseUrl}/idp/interaction/does-not-exist-${Date.now()}/switch`, {
+        method: 'POST',
+        redirect: 'manual',
+      });
+      assert.strictEqual(res.status, 404);
     });
   });
 

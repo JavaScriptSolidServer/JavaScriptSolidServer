@@ -298,6 +298,89 @@ export async function handleConsent(request, reply, provider) {
 }
 
 /**
+ * Handle POST /idp/interaction/:uid/switch
+ *
+ * "Sign in as a different user" from the consent page (#384). Destroys
+ * the current OIDC session, mutates the in-flight interaction back to
+ * the login prompt, and redirects the user to the same /idp/interaction
+ * URL — which `handleInteractionGet` will render as the login page.
+ *
+ * Re-using the same interaction uid (rather than starting a fresh
+ * /idp/auth flow) preserves the original authz request params so the
+ * caller's redirect_uri / state / nonce all flow through unchanged.
+ */
+export async function handleSwitchAccount(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This interaction may have expired. Try signing in again from your app.'));
+    }
+
+    // The UI entrypoint is the consent page only. Refusing on other
+    // prompt states (login, passkey, etc.) prevents a crafted request
+    // from corrupting an in-flight non-consent interaction.
+    if (interaction.prompt?.name !== 'consent') {
+      return reply.code(400).type('text/html').send(errorPage('Cannot switch account here', 'Account switching is only available from the consent page.'));
+    }
+
+    // Destroy the bound session so the new login starts cold. The cookie
+    // becomes a stale reference; oidc-provider's Session.get treats a
+    // missing session blob as "new browser", which is the shape we want.
+    if (interaction.session?.uid) {
+      const sess = await provider.Session.findByUid(interaction.session.uid);
+      if (sess) await sess.destroy();
+    }
+
+    // Reset the interaction back to the login prompt, dropping the
+    // session reference and any prior `result` snapshot. `prompt`,
+    // `session`, and `result` are all in the oidc-provider Interaction
+    // IN_PAYLOAD allowlist, so the mutations persist through the
+    // adapter. Original `params` (client_id, redirect_uri, state, etc.)
+    // are untouched, so resume picks them up after login. Clearing
+    // `result` prevents a stale `result.login` from a previous identity
+    // influencing the next resume.
+    interaction.session = undefined;
+    interaction.result = undefined;
+    interaction.prompt = { name: 'login', reasons: ['no_session'], details: {} };
+    interaction.lastError = undefined;
+    const ttl = Math.max(1, interaction.exp - Math.floor(Date.now() / 1000));
+    await interaction.save(ttl);
+
+    // Clear the user-agent's session cookie too. The IdP runs with
+    // signed cookies (provider.js cookies.long.signed = true), so each
+    // session cookie has a paired `.sig`. The `.legacy` variant is
+    // created during identifier rotation and likewise has its own
+    // `.sig`. Clearing all four keeps the browser fully tidy. JSS
+    // doesn't register @fastify/cookie, so we emit Set-Cookie headers
+    // directly with an expired Expires + Max-Age=0. Server-side state
+    // is already gone via session.destroy() above — these expirations
+    // are belt-and-suspenders.
+    const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
+    reply.header('Set-Cookie', [
+      `_session=; ${expired}`,
+      `_session.sig=; ${expired}`,
+      `_session.legacy=; ${expired}`,
+      `_session.legacy.sig=; ${expired}`,
+    ]);
+
+    // 303 See Other — explicitly forces the UA to issue GET on the
+    // Location target. 302 leaves it ambiguous (and some legacy UAs
+    // repeat the POST), which would re-trigger this handler in a loop.
+    // Status-then-URL arg order matches the rest of the codebase
+    // (src/server.js:637, src/tunnel/index.js:222).
+    return reply.redirect(303, `/idp/interaction/${uid}`);
+  } catch (err) {
+    request.log.error(err, 'Switch-account error');
+    // Don't surface raw err.message — adapter errors and stack-leaking
+    // strings on an auth endpoint are a soft info-leak. Full error is
+    // already in the server log via request.log.error above.
+    return reply.code(500).type('text/html').send(errorPage('Error', 'Something went wrong. Please try signing in again.'));
+  }
+}
+
+/**
  * Handle POST /idp/interaction/:uid/abort
  * User cancelled the flow
  */
