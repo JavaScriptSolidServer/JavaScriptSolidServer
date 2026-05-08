@@ -48,8 +48,28 @@ export function buildResourceUrl(request, urlPath) {
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
  * @param {object} options - Optional settings
- * @param {string} options.requiredMode - Override the required access mode (e.g., 'Write' for git push)
- * @returns {Promise<{authorized: boolean, webId: string|null, wacAllow: string, authError: string|null}>}
+ * @param {string} [options.requiredMode] - Override the required access mode
+ *   (e.g., 'Write' for git push). Defaults to getRequiredMode(method).
+ * @param {boolean} [options.skipParentForMissing] - When true, skip the
+ *   "non-existent resource + write method → check parent container"
+ *   fallback. Used by virtual endpoints (e.g. `/proxy` in #378) that have
+ *   no backing storage but still want WAC checked against the URL itself.
+ *   Without this flag, POST/PUT/PATCH on a missing resource is authorized
+ *   against the parent (e.g. `/proxy` falls back to `/`), which is too
+ *   permissive for endpoints whose ACL is meant to live at that path.
+ * @returns {Promise<{
+ *   authorized: boolean,
+ *   webId: string|null,
+ *   wacAllow: string,
+ *   authError: string|null,
+ *   paymentRequired?: object,
+ *   paid?: number,
+ *   balance?: number,
+ *   currency?: string
+ * }>}
+ *   `paid` is the cost actually debited (number, not boolean) — see
+ *   checkAccess() in src/wac/checker.js:189; callers stringify it for
+ *   the X-Cost response header.
  */
 export async function authorize(request, reply, options = {}) {
   const urlPath = request.url.split('?')[0];
@@ -98,7 +118,7 @@ export async function authorize(request, reply, options = {}) {
   let checkUrl = resourceUrl;
   let checkIsContainer = isContainer;
 
-  if (!resourceExists && (method === 'PUT' || method === 'POST' || method === 'PATCH')) {
+  if (!resourceExists && (method === 'PUT' || method === 'POST' || method === 'PATCH') && !options.skipParentForMissing) {
     // Check write permission on parent container
     const parentPath = getParentPath(storagePath);
     checkPath = parentPath;
@@ -107,6 +127,10 @@ export async function authorize(request, reply, options = {}) {
     checkUrl = buildResourceUrl(request, parentUrlPath);
     checkIsContainer = true;
   }
+  // skipParentForMissing: callers with virtual endpoints (e.g. /proxy in
+  // #378) want WAC checked against the URL path itself even when no
+  // backing storage exists. Without this opt-out, POST /proxy on a
+  // single-user pod gets authorized against /, which is too permissive.
 
   // Check WAC permissions
   const { allowed, wacAllow, paymentRequired, paid, balance, currency } = await checkAccess({

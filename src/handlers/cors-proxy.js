@@ -1,0 +1,423 @@
+/**
+ * CORS proxy handler — fetches an arbitrary upstream URL on behalf of a
+ * browser-side caller and returns the response with CORS headers, so
+ * pod-hosted apps can talk to non-CORS-friendly origins (#378).
+ *
+ * URL shape: `/proxy?url=<absolute-url>` — query-param keeps the path a
+ * plain Solid resource for WAC purposes (acl can sit at /proxy or /.acl
+ * and inherit normally).
+ *
+ * Auth: WAC. The standard /proxy resource is checked by server.js's
+ * authorize() pipeline before this handler runs; pod owner controls
+ * access by writing an .acl on /proxy.
+ *
+ * SSRF: validateExternalUrl() runs on the user-supplied URL AND on every
+ * redirect target. Manual redirect following is non-negotiable — letting
+ * fetch() follow redirects automatically would let an attacker host a
+ * 302 to 169.254.169.254 and bypass the initial guard.
+ *
+ * Body limits: streamed, with a configurable max-bytes ceiling enforced
+ * during streaming. Timeout via AbortController.
+ */
+
+import { validateExternalUrl } from '../utils/ssrf.js';
+import { Readable, Transform } from 'stream';
+
+// CORS headers applied to every proxy response. Same shape/source-of-truth
+// pattern as GIT_CORS_HEADERS in src/handlers/git.js (#374).
+//
+// Allow-Headers must list every request header the proxy actually
+// forwards (see FORWARD_REQUEST_HEADERS) — otherwise browsers reject
+// preflight before the request reaches us. Plus:
+//   - Authorization, DPoP — for WAC + Solid-OIDC auth to *this* pod
+//   - X-Upstream-Authorization — opt-in upstream credential (renamed to
+//     Authorization on the way out, see pickRequestHeaders)
+//
+// Expose-Headers includes WAC-Allow so browser clients can render auth
+// UX based on the pod's policy, plus the usual content/etag/location set.
+//
+// Allow-Credentials is set explicitly to 'false' to override the
+// server-wide global CORS hook (which uses 'true' for the rest of the
+// pod). Combining 'true' with `Allow-Origin: *` is a CORS spec
+// violation that browsers reject — and an anonymous-readable proxy
+// doesn't have a use case for credentialed cross-origin anyway (Cookie
+// is stripped before forwarding).
+export const PROXY_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Credentials': 'false',
+  'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
+  'Access-Control-Allow-Headers': [
+    'Content-Type',
+    'Authorization',
+    'DPoP',
+    'X-Upstream-Authorization',
+    'Git-Protocol',
+    'Accept',
+    'Accept-Encoding',
+    'Accept-Language',
+    'If-Match',
+    'If-None-Match',
+    'If-Modified-Since',
+    'Range',
+    'User-Agent',
+  ].join(', '),
+  'Access-Control-Expose-Headers': 'Content-Type, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow, X-Cost, X-Balance, X-Pay-Currency',
+};
+
+export function setProxyCorsHeaders(reply) {
+  for (const [k, v] of Object.entries(PROXY_CORS_HEADERS)) {
+    reply.header(k, v);
+  }
+  // Hardening against the proxy being used as an XSS vector: if a user
+  // navigates a browser to /proxy?url=https://evil/page.html, the
+  // upstream HTML would otherwise execute in this pod's origin and
+  // could exfiltrate other pod resources. CSP `sandbox` neutralizes
+  // scripts/plugins/navigation when rendered as a document; nosniff
+  // prevents MIME-sniffing tricks. fetch()-based callers are
+  // unaffected (they consume the raw bytes regardless of these
+  // response-side defenses).
+  reply.header('Content-Security-Policy', 'sandbox');
+  reply.header('X-Content-Type-Options', 'nosniff');
+}
+
+// Headers we forward from the caller to the upstream. Anything not on
+// this list is dropped — origin/cookie/host/referer would either confuse
+// upstream auth or leak the proxying pod's identity.
+//
+// Authorization is deliberately NOT forwarded by default: the browser
+// uses it to authenticate to *this* pod (WAC, Solid-OIDC bearer/DPoP),
+// and silently leaking that token to an arbitrary upstream is a security
+// hole. Callers who genuinely need to send credentials to the upstream
+// (e.g. a GitHub PAT for a private repo) opt in via the
+// X-Upstream-Authorization header — pickRequestHeaders renames that to
+// Authorization on the way out.
+//
+// DPoP is similarly not forwarded — it's bound to this pod's URL and
+// would be rejected by any upstream anyway.
+// Note: Content-Length is *not* forwarded. JSS registers a wildcard
+// parseAs:'buffer' content parser (server.js), so request bodies arrive
+// as a Buffer that we pass through to fetch unchanged — but we keep a
+// defensive JSON.stringify branch downstream in case anything ever
+// changes that and a parsed object lands here. Either way, the
+// caller-declared length isn't reliable for the upstream call. Node's
+// fetch sets Content-Length automatically based on the actual body.
+// (Browsers send Content-Length on simple requests without needing it
+// in Access-Control-Allow-Headers, since it's CORS-safelisted.)
+const FORWARD_REQUEST_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'content-type',
+  'git-protocol',
+  'if-match',
+  'if-none-match',
+  'if-modified-since',
+  'range',
+  'user-agent',
+]);
+
+const UPSTREAM_AUTH_HEADER = 'x-upstream-authorization';
+
+// Headers we strip from the upstream response before returning to the
+// caller. Encoding-related ones are removed because Node's fetch already
+// transparently decodes; passing through Content-Encoding would
+// double-decompress in the browser.
+//
+// Content-Length is stripped because (a) we strip Content-Encoding so
+// the body length may differ from the upstream-declared length after
+// decompression, and (b) we may truncate mid-stream when maxBytes is
+// exceeded. Forwarding the upstream Content-Length in either case
+// causes ERR_CONTENT_LENGTH_MISMATCH or hangs in the client. Node sends
+// the actual length (or chunked) automatically.
+//
+// WAC-Allow / X-Cost / X-Balance / X-Pay-Currency are stripped because
+// they describe *this* pod's ACL decision and ledger debit; an upstream
+// must not be able to spoof them. server.js sets these headers *before*
+// calling handleCorsProxy (in the proxy preHandler, after authorize()),
+// and stripping them here ensures copyResponseHeaders can never
+// overwrite the local values when iterating upstream headers.
+const STRIP_RESPONSE_HEADERS = new Set([
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+  'connection',
+  'keep-alive',
+  // Strip set-cookie — we never want to forward upstream cookies into
+  // our origin's domain (would let upstream set cookies on the pod).
+  'set-cookie',
+  // Pod-authoritative headers: never accept upstream values for these.
+  'wac-allow',
+  'x-cost',
+  'x-balance',
+  'x-pay-currency',
+  // Range/206 mismatch: we may truncate the body at maxBytes, in which
+  // case the upstream's Content-Range no longer matches the bytes the
+  // client gets. Stripping both Content-Range and Accept-Ranges means
+  // callers don't trust a stale range — they receive whatever bytes
+  // actually streamed and can re-request with a smaller window if
+  // needed. Phase 2 could revisit if someone needs byte-accurate range
+  // proxying.
+  'content-range',
+  'accept-ranges',
+]);
+
+const DEFAULT_MAX_REDIRECTS = 5;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+const ALLOWED_METHODS = new Set(['GET', 'POST', 'HEAD', 'OPTIONS']);
+
+function pickRequestHeaders(reqHeaders) {
+  const out = {};
+  for (const [k, v] of Object.entries(reqHeaders)) {
+    if (v == null) continue;
+    const lower = k.toLowerCase();
+    if (FORWARD_REQUEST_HEADERS.has(lower)) {
+      out[k] = v;
+    } else if (lower === UPSTREAM_AUTH_HEADER) {
+      // Opt-in upstream credential: client supplies the token under
+      // X-Upstream-Authorization, we relay it as Authorization upstream.
+      // Pod's own Authorization (used to auth to /proxy) never leaves
+      // the pod — see FORWARD_REQUEST_HEADERS.
+      out['Authorization'] = v;
+    }
+  }
+  return out;
+}
+
+function copyResponseHeaders(reply, fetchResponse) {
+  for (const [k, v] of fetchResponse.headers) {
+    if (STRIP_RESPONSE_HEADERS.has(k.toLowerCase())) continue;
+    reply.header(k, v);
+  }
+}
+
+/**
+ * Stream the upstream body to the caller, enforcing a byte cap mid-stream.
+ * Uses Node 18+ Readable.fromWeb to bridge the fetch ReadableStream into
+ * a Node Readable, then a Transform passthrough counts bytes and ends
+ * the stream cleanly if maxBytes is exceeded.
+ *
+ * Note on the timeout: once status/headers are sent we can't change the
+ * status code (Fastify throws ERR_HTTP_HEADERS_SENT), so the deadline
+ * applies to the headers-received phase only. A slow-streaming upstream
+ * past the deadline is *not* killed mid-stream in Phase 1 — see the
+ * follow-up tracked in #378 / the open issue list. Mid-stream errors
+ * (byte cap, fetch error) terminate the response with a truncated body
+ * rather than a thrown error.
+ */
+function streamUpstream(reply, fetchResponse, maxBytes, abortController) {
+  if (!fetchResponse.body) {
+    return reply.send();
+  }
+
+  // Byte cap with two boundary cases handled:
+  //   - chunk smaller than remaining: pass through, keep counting
+  //   - chunk meets or exceeds remaining: emit just enough to fill the
+  //     cap and end the stream right then. Previously a chunk that hit
+  //     the cap *exactly* (chunk.length === remaining) was passed
+  //     through without ending — subsequent chunks fell into the
+  //     "remaining <= 0" branch and were dropped silently while the
+  //     stream stayed open, which can hang slow-streaming clients.
+  let bytesSeen = 0;
+  const counter = new Transform({
+    transform(chunk, _encoding, callback) {
+      const remaining = maxBytes - bytesSeen;
+      if (remaining <= 0) {
+        // Defensive: shouldn't happen because we end on first overflow,
+        // but if a chunk arrives after we've started shutting down,
+        // drop it.
+        return callback();
+      }
+      if (chunk.length < remaining) {
+        bytesSeen += chunk.length;
+        return callback(null, chunk);
+      }
+      // chunk fills or exceeds the cap — emit (up to) `remaining` bytes
+      // and end the stream right now.
+      const slice = chunk.length === remaining ? chunk : chunk.slice(0, remaining);
+      bytesSeen += slice.length;
+      this.push(slice);
+      this.push(null);
+      abortController.abort();
+      return callback();
+    }
+  });
+
+  Readable.fromWeb(fetchResponse.body)
+    .on('error', () => counter.end())
+    .pipe(counter);
+
+  return reply.send(counter);
+}
+
+/**
+ * Handle a CORS proxy request.
+ *
+ * @param {FastifyRequest} request
+ * @param {FastifyReply} reply
+ * @param {object} options
+ * @param {number} [options.maxBytes]
+ * @param {number} [options.timeoutMs]
+ * @param {number} [options.maxRedirects]
+ */
+export async function handleCorsProxy(request, reply, options = {}) {
+  setProxyCorsHeaders(reply);
+
+  // CORS preflight — short-circuit without fetching.
+  if (request.method === 'OPTIONS') {
+    return reply.code(204).send();
+  }
+
+  if (!ALLOWED_METHODS.has(request.method)) {
+    // HTTP requires 405 to carry an Allow header listing supported methods.
+    reply.header('Allow', [...ALLOWED_METHODS].join(', '));
+    return reply.code(405).send({ error: 'Method not allowed', method: request.method });
+  }
+
+  const targetUrl = request.query?.url;
+  if (!targetUrl || typeof targetUrl !== 'string') {
+    return reply.code(400).send({ error: 'Missing required query parameter: url' });
+  }
+
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+
+  // Validate the initial URL, then follow redirects manually re-validating
+  // each hop's Location header. Required because fetch's automatic redirect
+  // following bypasses our SSRF guard at the second hop.
+  let currentUrl = targetUrl;
+  let currentMethod = request.method;
+  let redirectsLeft = maxRedirects;
+
+  // Body for non-GET/HEAD methods. Read once up front; we may need it on
+  // the first hop and (for 307/308) on redirected hops.
+  let body = null;
+  if (currentMethod !== 'GET' && currentMethod !== 'HEAD') {
+    body = request.rawBody ?? request.body;
+    if (typeof body === 'object' && !(body instanceof Buffer) && body !== null) {
+      body = JSON.stringify(body);
+    }
+  }
+
+  // Forwarded headers are computed once and reused across redirect hops,
+  // EXCEPT Authorization. If the client opted in via X-Upstream-Authorization,
+  // its credential is now in forwardHeaders.Authorization. We must strip
+  // it on cross-origin redirects: a redirect to evil.com would otherwise
+  // leak the user's upstream token (e.g. a GitHub PAT) to whoever the
+  // attacker controls. See cross-origin redirect handling below.
+  const forwardHeaders = pickRequestHeaders(request.headers);
+  const initialOrigin = (() => {
+    try { return new URL(currentUrl).origin; } catch { return null; }
+  })();
+
+  while (true) {
+    const validation = await validateExternalUrl(currentUrl, {
+      requireHttps: false, // allow http:// — pod operator can lock down via .acl scope
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) {
+      return reply.code(400).send({ error: 'Invalid upstream URL', detail: validation.error });
+    }
+
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+
+    let upstream;
+    try {
+      upstream = await fetch(currentUrl, {
+        method: currentMethod,
+        headers: forwardHeaders,
+        body: (currentMethod === 'GET' || currentMethod === 'HEAD') ? undefined : body,
+        redirect: 'manual',
+        signal: abortController.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        return reply.code(504).send({ error: 'Upstream timeout' });
+      }
+      return reply.code(502).send({ error: 'Upstream fetch failed', detail: err.message });
+    }
+    // Headers received — clear the deadline. Streaming-phase timeouts
+    // are a known Phase 1 limitation: once Fastify has sent headers we
+    // can't change the status code, and the destroy-source-during-pipe
+    // pattern doesn't reliably terminate the response. Tracked as a
+    // follow-up.
+    clearTimeout(timeoutId);
+
+    // Manual redirect handling: 301/302/303 → GET (per HTTP semantics),
+    // 307/308 → preserve method and body.
+    if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+      const location = upstream.headers.get('location');
+      if (!location) {
+        return reply.code(502).send({ error: 'Upstream redirect with no Location header' });
+      }
+      if (--redirectsLeft < 0) {
+        return reply.code(502).send({ error: `Exceeded ${maxRedirects} redirects` });
+      }
+      // Resolve relative redirects against the previous URL. Malformed
+      // Location values throw — bubble that up as a 502 instead of 500.
+      try {
+        currentUrl = new URL(location, currentUrl).toString();
+      } catch {
+        return reply.code(502).send({ error: 'Upstream redirect with malformed Location', location });
+      }
+      if ([301, 302, 303].includes(upstream.status)) {
+        // Per fetch / RFC 7231 redirect semantics:
+        //   - 303: any non-GET/HEAD becomes GET with no body
+        //   - 301/302: POST → GET with no body (legacy quirk; spec
+        //     technically says preserve method, but every real client
+        //     downgrades POST to GET); HEAD stays HEAD; GET stays GET
+        // HEAD must never be turned into GET — it'd cause an
+        // unexpected body to stream on what was a body-less request.
+        if (currentMethod !== 'GET' && currentMethod !== 'HEAD') {
+          currentMethod = 'GET';
+          body = null;
+          delete forwardHeaders['content-length'];
+          delete forwardHeaders['Content-Length'];
+          delete forwardHeaders['content-type'];
+          delete forwardHeaders['Content-Type'];
+        }
+      }
+      // Cross-origin redirect: strip Authorization to prevent leaking
+      // the X-Upstream-Authorization-derived credential to a different
+      // origin. Curl, browsers, and well-behaved HTTP clients all do
+      // this. The opt-in upstream auth is bound to the origin the
+      // client requested.
+      try {
+        const nextOrigin = new URL(currentUrl).origin;
+        if (initialOrigin && nextOrigin !== initialOrigin) {
+          delete forwardHeaders['authorization'];
+          delete forwardHeaders['Authorization'];
+        }
+      } catch {
+        // currentUrl was just validated above, so this should never
+        // throw; if it somehow does, drop Authorization to fail safe.
+        delete forwardHeaders['authorization'];
+        delete forwardHeaders['Authorization'];
+      }
+      // Drain the redirect body to free the connection; we never return it.
+      try { await upstream.body?.cancel(); } catch { /* ignore */ }
+      continue;
+    }
+
+    // Final response — stream it back.
+    reply.code(upstream.status);
+    copyResponseHeaders(reply, upstream);
+    setProxyCorsHeaders(reply); // reapply in case copyResponseHeaders set conflicting CORS values
+
+    return streamUpstream(reply, upstream, maxBytes, abortController);
+  }
+}
+
+/**
+ * Match a request URL *path* (not full URL) against the proxy route.
+ * Used by server.js to decide whether the proxy preHandler should fire
+ * and whether the standard WAC hook should skip. Callers must pass the
+ * already-split path component (e.g. `request.url.split('?')[0]`).
+ */
+export function isCorsProxyRequest(urlPath) {
+  return urlPath === '/proxy';
+}

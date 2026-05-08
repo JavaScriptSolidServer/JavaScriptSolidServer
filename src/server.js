@@ -12,6 +12,7 @@ import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
+import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { createPayHandler, isPayRequest } from './handlers/pay.js';
@@ -71,6 +72,18 @@ export function createServer(options = {}) {
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
+  // CORS proxy (#378) — OFF by default. Numeric settings get the
+  // sane-default fallback if the env var or config file supplies a
+  // non-finite/non-positive value (e.g. JSS_CORS_PROXY_MAX_BYTES=banana
+  // would otherwise leave the cap as the string "banana", making
+  // `bytesSeen > "banana"` always false and silently disabling the
+  // safety limit).
+  const positiveInt = (v, fallback) =>
+    (typeof v === 'number' && Number.isFinite(v) && v > 0) ? v : fallback;
+  const corsProxyEnabled = options.corsProxy === true;
+  const corsProxyMaxBytes = positiveInt(options.corsProxyMaxBytes, 50 * 1024 * 1024);
+  const corsProxyTimeoutMs = positiveInt(options.corsProxyTimeoutMs, 30_000);
+  const corsProxyMaxRedirects = positiveInt(options.corsProxyMaxRedirects, 5);
   // Nostr relay is OFF by default
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
@@ -386,7 +399,13 @@ export function createServer(options = {}) {
       return;
     }
 
-    const segments = request.url.split('/').map(s => s.split('?')[0]); // Remove query strings
+    // Only inspect the path component — splitting the full URL on '/'
+    // would catch dot-prefixed segments inside query-string values
+    // (e.g. /proxy?url=https://example.com/.git/config), rejecting
+    // legitimate proxy requests for upstream URLs that happen to
+    // contain dotfile-like path segments. The dotfile guard is about
+    // *this* pod's filesystem, not what the URL looks like.
+    const segments = request.url.split('?')[0].split('/');
     const hasForbiddenDotfile = segments.some(seg =>
       seg.startsWith('.') &&
       seg.length > 1 &&
@@ -439,6 +458,92 @@ export function createServer(options = {}) {
     fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress, payToken, payRate, payChains }));
   }
 
+  // CORS proxy (#378) — WAC-gated. Standard authorize() path runs against
+  // /proxy as a virtual resource; pod owner controls access by writing an
+  // .acl on /proxy (or inheriting from /.acl). OPTIONS preflight returns
+  // 204 directly without auth so browser CORS checks succeed before sign-in.
+  if (corsProxyEnabled) {
+    fastify.addHook('preHandler', async (request, reply) => {
+      const urlPath = request.url.split('?')[0];
+      if (!isCorsProxyRequest(urlPath)) {
+        return;
+      }
+
+      // OPTIONS preflight short-circuits to the handler (which returns
+      // 204 + proxy CORS headers) without going through authorize() at
+      // all. authorize() does have its own OPTIONS short-circuit, but
+      // routing through here keeps the preflight off the auth/payment
+      // path entirely — preflights must never debit ledgers or evaluate
+      // PaymentConditions.
+      if (request.method === 'OPTIONS') {
+        return handleCorsProxy(request, reply, {
+          maxBytes: corsProxyMaxBytes,
+          timeoutMs: corsProxyTimeoutMs,
+          maxRedirects: corsProxyMaxRedirects,
+        });
+      }
+
+      // Don't override requiredMode — let authorize() derive it from the
+      // request method via getRequiredMode(). GET/HEAD need READ on the
+      // /proxy resource, POST needs APPEND/WRITE — pod owners can grant
+      // these separately via ACL modes (e.g. acl:Read for browse-only,
+      // acl:Append/Write for proxying side-effecting POSTs upstream).
+      //
+      // skipParentForMissing prevents authorize()'s "non-existent resource +
+      // write method → check parent container" fallback from kicking in.
+      // /proxy is a virtual endpoint with no backing storage, so the
+      // fallback would route POST authorization to / (the root) instead
+      // of /proxy — too permissive. With this flag, authorize() checks
+      // ACLs against /proxy directly regardless of storage existence.
+      const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } =
+        await authorize(request, reply, { skipParentForMissing: true });
+      request.webId = webId;
+      request.wacAllow = wacAllow;
+
+      // Surface paid-access bookkeeping the same way the standard WAC
+      // hook does (lines 564-569 below). When a /proxy ACL uses a
+      // PaymentCondition and the caller has sufficient balance,
+      // checkAccess() returns paid (the cost), balance, and currency —
+      // browser-side renders charge UI off these. Without this, ledger
+      // debit happens silently.
+      if (paid !== undefined) {
+        reply.header('X-Cost', String(paid));
+        reply.header('X-Balance', String(balance));
+        if (currency) reply.header('X-Pay-Currency', currency);
+      }
+
+      // Set WAC-Allow on success too, matching the global WAC hook
+      // (line 562 area). Browser clients read it via Expose-Headers
+      // to render auth UX. Without this, only 401/403/402 responses
+      // carry WAC-Allow, which is inconsistent.
+      reply.header('WAC-Allow', wacAllow);
+
+      // ACL with a PaymentCondition surfaces as 402 here — mirrors the
+      // git handler at src/server.js:418 and the standard WAC hook so
+      // payment-gated /proxy ACLs behave consistently.
+      if (paymentRequired) {
+        setProxyCorsHeaders(reply);
+        reply.header('WAC-Allow', wacAllow);
+        return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
+      }
+
+      if (request.method !== 'OPTIONS' && !authorized) {
+        // Apply proxy CORS headers BEFORE handleUnauthorized so the 401/403
+        // is readable by browser clients (without these the browser surfaces
+        // the response as a generic CORS failure — same shape as #374).
+        setProxyCorsHeaders(reply);
+        reply.header('WAC-Allow', wacAllow);
+        return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);
+      }
+
+      return handleCorsProxy(request, reply, {
+        maxBytes: corsProxyMaxBytes,
+        timeoutMs: corsProxyTimeoutMs,
+        maxRedirects: corsProxyMaxRedirects,
+      });
+    });
+  }
+
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
@@ -460,6 +565,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/.well-known/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
+        (corsProxyEnabled && isCorsProxyRequest(request.url.split('?')[0])) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
         isProfileAP ||
         request.url.startsWith('/storage/') ||

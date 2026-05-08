@@ -46,6 +46,13 @@ export const defaults = {
   // Git HTTP backend
   git: false,
 
+  // CORS proxy (#378) — pod-hosted, WAC-gated proxy for browser apps to
+  // fetch arbitrary upstreams that don't return CORS headers.
+  corsProxy: false,
+  corsProxyMaxBytes: 50 * 1024 * 1024, // 50 MB ceiling on upstream response size
+  corsProxyTimeoutMs: 30_000,           // 30 s deadline for upstream to send headers (504 if exceeded). The timeout does not apply during body streaming — body size is capped by corsProxyMaxBytes; see follow-up for streaming-phase timeout.
+  corsProxyMaxRedirects: 5,             // each redirect re-validated for SSRF
+
   // Nostr relay
   nostr: false,
   nostrPath: '/relay',
@@ -147,6 +154,10 @@ const envMap = {
   JSS_MASHLIB_VERSION: 'mashlibVersion',
   JSS_MASHLIB_MODULE: 'mashlibModule',
   JSS_GIT: 'git',
+  JSS_CORS_PROXY: 'corsProxy',
+  JSS_CORS_PROXY_MAX_BYTES: 'corsProxyMaxBytes',
+  JSS_CORS_PROXY_TIMEOUT_MS: 'corsProxyTimeoutMs',
+  JSS_CORS_PROXY_MAX_REDIRECTS: 'corsProxyMaxRedirects',
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
@@ -208,6 +219,7 @@ const BOOLEAN_KEYS = new Set([
   'mashlib',
   'mashlibCdn',
   'git',
+  'corsProxy',
   'nostr',
   'webrtc',
   'terminal',
@@ -243,7 +255,13 @@ function parseEnvValue(value, key) {
   }
 
   // Numeric values for known numeric keys
-  if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost' || key === 'payRate') && !isNaN(value)) {
+  if ((key === 'port' ||
+       key === 'nostrMaxEvents' ||
+       key === 'payCost' ||
+       key === 'payRate' ||
+       key === 'corsProxyMaxBytes' ||
+       key === 'corsProxyTimeoutMs' ||
+       key === 'corsProxyMaxRedirects') && !isNaN(value)) {
     return parseInt(value, 10);
   }
 
