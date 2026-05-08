@@ -101,7 +101,14 @@ export async function handleGit(request, reply) {
     return reply.code(200).send();
   }
 
-  const urlPath = decodeURIComponent(request.url.split('?')[0]);
+  // Collapse multi-slash sequences before they reach extractRepoPath or
+  // get forwarded as PATH_INFO. git http-backend rejects paths like
+  // `/foo/test//info/refs` as "aliased" and JSS would otherwise 500.
+  // Same shape as the #131 fix in src/utils/url.js — frontends and bots
+  // both produce these (frontend appends `/info/refs` to a URL the user
+  // ended with `/`, bots probe `///wp-admin/...`). #373.
+  let urlPath = decodeURIComponent(request.url.split('?')[0]);
+  urlPath = urlPath.replace(/\/{2,}/g, '/');
   const queryString = request.url.split('?')[1] || '';
 
   // Extract repository path
