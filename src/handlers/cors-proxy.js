@@ -176,26 +176,33 @@ function streamUpstream(reply, fetchResponse, maxBytes, abortController) {
     return reply.send();
   }
 
-  // Partial-slice emission at the cap: if a single chunk would push us
-  // over, emit only the bytes up to the cap, then end the stream. The
-  // earlier "drop the whole chunk" version meant a small maxBytes (e.g.
-  // 100 against a typical TLS record-sized chunk) returned an empty
-  // response, even though the cap was much larger than zero.
+  // Byte cap with two boundary cases handled:
+  //   - chunk smaller than remaining: pass through, keep counting
+  //   - chunk meets or exceeds remaining: emit just enough to fill the
+  //     cap and end the stream right then. Previously a chunk that hit
+  //     the cap *exactly* (chunk.length === remaining) was passed
+  //     through without ending — subsequent chunks fell into the
+  //     "remaining <= 0" branch and were dropped silently while the
+  //     stream stayed open, which can hang slow-streaming clients.
   let bytesSeen = 0;
   const counter = new Transform({
     transform(chunk, _encoding, callback) {
       const remaining = maxBytes - bytesSeen;
       if (remaining <= 0) {
-        // Already at cap; quietly drop subsequent chunks until upstream EOF.
+        // Defensive: shouldn't happen because we end on first overflow,
+        // but if a chunk arrives after we've started shutting down,
+        // drop it.
         return callback();
       }
-      if (chunk.length <= remaining) {
+      if (chunk.length < remaining) {
         bytesSeen += chunk.length;
         return callback(null, chunk);
       }
-      // Emit partial slice up to the cap, then end cleanly.
-      bytesSeen += remaining;
-      this.push(chunk.slice(0, remaining));
+      // chunk fills or exceeds the cap — emit (up to) `remaining` bytes
+      // and end the stream right now.
+      const slice = chunk.length === remaining ? chunk : chunk.slice(0, remaining);
+      bytesSeen += slice.length;
+      this.push(slice);
       this.push(null);
       abortController.abort();
       return callback();

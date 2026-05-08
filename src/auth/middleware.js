@@ -98,7 +98,7 @@ export async function authorize(request, reply, options = {}) {
   let checkUrl = resourceUrl;
   let checkIsContainer = isContainer;
 
-  if (!resourceExists && (method === 'PUT' || method === 'POST' || method === 'PATCH')) {
+  if (!resourceExists && (method === 'PUT' || method === 'POST' || method === 'PATCH') && !options.skipParentForMissing) {
     // Check write permission on parent container
     const parentPath = getParentPath(storagePath);
     checkPath = parentPath;
@@ -107,6 +107,10 @@ export async function authorize(request, reply, options = {}) {
     checkUrl = buildResourceUrl(request, parentUrlPath);
     checkIsContainer = true;
   }
+  // skipParentForMissing: callers with virtual endpoints (e.g. /proxy in
+  // #378) want WAC checked against the URL path itself even when no
+  // backing storage exists. Without this opt-out, POST /proxy on a
+  // single-user pod gets authorized against /, which is too permissive.
 
   // Check WAC permissions
   const { allowed, wacAllow, paymentRequired, paid, balance, currency } = await checkAccess({

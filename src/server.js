@@ -468,7 +468,14 @@ export function createServer(options = {}) {
       // /proxy resource, POST needs APPEND/WRITE — pod owners can grant
       // these separately via ACL modes (e.g. acl:Read for browse-only,
       // acl:Append/Write for proxying side-effecting POSTs upstream).
-      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply);
+      //
+      // skipParentForMissing prevents authorize()'s "non-existent resource +
+      // write method → check parent container" fallback from kicking in.
+      // /proxy is a virtual endpoint with no backing storage, so the
+      // fallback would route POST authorization to / (the root) instead
+      // of /proxy — too permissive. With this flag, authorize() checks
+      // ACLs against /proxy directly regardless of storage existence.
+      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply, { skipParentForMissing: true });
       request.webId = webId;
       request.wacAllow = wacAllow;
 
