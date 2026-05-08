@@ -11,6 +11,7 @@ import {
   handleLogin,
   handleConsent,
   handleAbort,
+  handleSwitchAccount,
   handleRegisterGet,
   handleRegisterPost,
   handlePasskeyComplete,
@@ -322,6 +323,13 @@ export async function idpPlugin(fastify, options) {
   // POST abort
   fastify.post('/idp/interaction/:uid/abort', async (request, reply) => {
     return handleAbort(request, reply, provider);
+  });
+
+  // POST "Sign in as a different user" (#384) — destroys the OIDC
+  // session and bounces back to the login prompt while preserving the
+  // in-flight authz request.
+  fastify.post('/idp/interaction/:uid/switch', async (request, reply) => {
+    return handleSwitchAccount(request, reply, provider);
   });
 
   // Registration routes (disabled in single-user mode)

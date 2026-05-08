@@ -298,6 +298,61 @@ export async function handleConsent(request, reply, provider) {
 }
 
 /**
+ * Handle POST /idp/interaction/:uid/switch
+ *
+ * "Sign in as a different user" from the consent page (#384). Destroys
+ * the current OIDC session, mutates the in-flight interaction back to
+ * the login prompt, and redirects the user to the same /idp/interaction
+ * URL — which `handleInteractionGet` will render as the login page.
+ *
+ * Re-using the same interaction uid (rather than starting a fresh
+ * /idp/auth flow) preserves the original authz request params so the
+ * caller's redirect_uri / state / nonce all flow through unchanged.
+ */
+export async function handleSwitchAccount(request, reply, provider) {
+  const { uid } = request.params;
+
+  try {
+    const interaction = await provider.Interaction.find(uid);
+    if (!interaction) {
+      return reply.code(404).type('text/html').send(errorPage('Interaction not found', 'This interaction may have expired. Try signing in again from your app.'));
+    }
+
+    // Destroy the bound session so the new login starts cold. The cookie
+    // becomes a stale reference; oidc-provider's Session.get treats a
+    // missing session blob as "new browser", which is the shape we want.
+    if (interaction.session?.uid) {
+      const sess = await provider.Session.findByUid(interaction.session.uid);
+      if (sess) await sess.destroy();
+    }
+
+    // Reset the interaction back to the login prompt, dropping the
+    // session reference. `prompt` and `session` are both in the
+    // oidc-provider Interaction IN_PAYLOAD allowlist, so this persists
+    // through the adapter. Original `params` (client_id, redirect_uri,
+    // state, etc.) are untouched, so resume picks them up after login.
+    interaction.session = undefined;
+    interaction.prompt = { name: 'login', reasons: ['no_session'], details: {} };
+    interaction.lastError = undefined;
+    const ttl = Math.max(1, interaction.exp - Math.floor(Date.now() / 1000));
+    await interaction.save(ttl);
+
+    // Clear the user-agent's session cookie too. Default oidc-provider
+    // cookie name is `_session`; the `.legacy` and `.sig` variants are
+    // created during identifier rotation. Clearing all of them is safe
+    // — server-side state is already gone via session.destroy().
+    reply.clearCookie('_session', { path: '/' });
+    reply.clearCookie('_session.legacy', { path: '/' });
+    reply.clearCookie('_session.sig', { path: '/' });
+
+    return reply.redirect(`/idp/interaction/${uid}`);
+  } catch (err) {
+    request.log.error(err, 'Switch-account error');
+    return reply.code(500).type('text/html').send(errorPage('Error', err.message));
+  }
+}
+
+/**
  * Handle POST /idp/interaction/:uid/abort
  * User cancelled the flow
  */
