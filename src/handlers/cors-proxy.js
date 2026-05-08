@@ -264,10 +264,16 @@ export async function handleCorsProxy(request, reply, options = {}) {
     }
   }
 
-  // Forwarded headers are computed once (not per-hop) — Content-Length
-  // gets dropped when we switch to GET on 301/302/303 to avoid sending
-  // a stale length for an absent body.
+  // Forwarded headers are computed once and reused across redirect hops,
+  // EXCEPT Authorization. If the client opted in via X-Upstream-Authorization,
+  // its credential is now in forwardHeaders.Authorization. We must strip
+  // it on cross-origin redirects: a redirect to evil.com would otherwise
+  // leak the user's upstream token (e.g. a GitHub PAT) to whoever the
+  // attacker controls. See cross-origin redirect handling below.
   const forwardHeaders = pickRequestHeaders(request.headers);
+  const initialOrigin = (() => {
+    try { return new URL(currentUrl).origin; } catch { return null; }
+  })();
 
   while (true) {
     const validation = await validateExternalUrl(currentUrl, {
@@ -332,6 +338,23 @@ export async function handleCorsProxy(request, reply, options = {}) {
         delete forwardHeaders['Content-Length'];
         delete forwardHeaders['content-type'];
         delete forwardHeaders['Content-Type'];
+      }
+      // Cross-origin redirect: strip Authorization to prevent leaking
+      // the X-Upstream-Authorization-derived credential to a different
+      // origin. Curl, browsers, and well-behaved HTTP clients all do
+      // this. The opt-in upstream auth is bound to the origin the
+      // client requested.
+      try {
+        const nextOrigin = new URL(currentUrl).origin;
+        if (initialOrigin && nextOrigin !== initialOrigin) {
+          delete forwardHeaders['authorization'];
+          delete forwardHeaders['Authorization'];
+        }
+      } catch {
+        // currentUrl was just validated above, so this should never
+        // throw; if it somehow does, drop Authorization to fail safe.
+        delete forwardHeaders['authorization'];
+        delete forwardHeaders['Authorization'];
       }
       // Drain the redirect body to free the connection; we never return it.
       try { await upstream.body?.cancel(); } catch { /* ignore */ }
