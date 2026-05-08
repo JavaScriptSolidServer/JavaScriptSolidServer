@@ -218,7 +218,9 @@ describe('Identity Provider', () => {
         redirect: 'manual',
       });
 
-      assert.strictEqual(res.status, 302);
+      // 303 See Other — forces UA to GET the Location target so a
+      // (broken) UA can't loop by re-POSTing to /switch.
+      assert.strictEqual(res.status, 303);
       assert.strictEqual(res.headers.get('location'), `/idp/interaction/${uid}`);
 
       // Verify the interaction was mutated as expected.
@@ -230,9 +232,14 @@ describe('Identity Provider', () => {
       assert.strictEqual(saved.params.client_id, 'test-client');
       assert.strictEqual(saved.params.state, 'xyz');
 
-      // Cookies should be cleared so the user's UA forgets the prior session.
-      const setCookie = res.headers.get('set-cookie') || '';
-      assert.match(setCookie, /_session/);
+      // Cookies should be cleared so the user's UA forgets the prior
+      // session. Per the Fetch spec, Set-Cookie is a forbidden header
+      // name on .get(); use the array-returning getSetCookie() helper.
+      const setCookies = res.headers.getSetCookie?.() || [];
+      assert.ok(setCookies.length >= 3, `expected at least 3 Set-Cookie headers, got ${setCookies.length}`);
+      assert.ok(setCookies.some(c => c.startsWith('_session=')), 'should clear _session');
+      assert.ok(setCookies.every(c => /Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
+        'all Set-Cookies should be expirations');
     });
 
     it('returns 400 when the interaction is not on the consent prompt', async () => {

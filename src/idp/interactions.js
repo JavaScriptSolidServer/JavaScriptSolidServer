@@ -362,7 +362,10 @@ export async function handleSwitchAccount(request, reply, provider) {
       `_session.sig=; ${expired}`,
     ]);
 
-    return reply.redirect(`/idp/interaction/${uid}`);
+    // 303 See Other — explicitly forces the UA to issue GET on the
+    // Location target. 302 leaves it ambiguous (and some legacy UAs
+    // repeat the POST), which would re-trigger this handler in a loop.
+    return reply.redirect(`/idp/interaction/${uid}`, 303);
   } catch (err) {
     request.log.error(err, 'Switch-account error');
     // Don't surface raw err.message — adapter errors and stack-leaking
