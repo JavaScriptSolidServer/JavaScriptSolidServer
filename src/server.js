@@ -475,9 +475,22 @@ export function createServer(options = {}) {
       // fallback would route POST authorization to / (the root) instead
       // of /proxy — too permissive. With this flag, authorize() checks
       // ACLs against /proxy directly regardless of storage existence.
-      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply, { skipParentForMissing: true });
+      const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } =
+        await authorize(request, reply, { skipParentForMissing: true });
       request.webId = webId;
       request.wacAllow = wacAllow;
+
+      // Surface paid-access bookkeeping the same way the standard WAC
+      // hook does (lines 564-569 below). When a /proxy ACL uses a
+      // PaymentCondition and the caller has sufficient balance,
+      // checkAccess() returns paid (the cost), balance, and currency —
+      // browser-side renders charge UI off these. Without this, ledger
+      // debit happens silently.
+      if (paid !== undefined) {
+        reply.header('X-Cost', String(paid));
+        reply.header('X-Balance', String(balance));
+        if (currency) reply.header('X-Pay-Currency', currency);
+      }
 
       // ACL with a PaymentCondition surfaces as 402 here — mirrors the
       // git handler at src/server.js:418 and the standard WAC hook so
