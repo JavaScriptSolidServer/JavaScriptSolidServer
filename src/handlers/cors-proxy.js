@@ -149,6 +149,15 @@ const STRIP_RESPONSE_HEADERS = new Set([
   'x-cost',
   'x-balance',
   'x-pay-currency',
+  // Range/206 mismatch: we may truncate the body at maxBytes, in which
+  // case the upstream's Content-Range no longer matches the bytes the
+  // client gets. Stripping both Content-Range and Accept-Ranges means
+  // callers don't trust a stale range — they receive whatever bytes
+  // actually streamed and can re-request with a smaller window if
+  // needed. Phase 2 could revisit if someone needs byte-accurate range
+  // proxying.
+  'content-range',
+  'accept-ranges',
 ]);
 
 const DEFAULT_MAX_REDIRECTS = 5;
