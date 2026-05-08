@@ -235,7 +235,12 @@ describe('Identity Provider', () => {
       // Cookies should be cleared so the user's UA forgets the prior
       // session. Per the Fetch spec, Set-Cookie is a forbidden header
       // name on .get(); use the array-returning getSetCookie() helper.
-      const setCookies = res.headers.getSetCookie?.() || [];
+      // Available on Node 19.7+ (we don't fall back silently — if the
+      // method is missing the test should fail loudly so we know to
+      // adjust rather than passing on an empty array).
+      assert.strictEqual(typeof res.headers.getSetCookie, 'function',
+        'Headers.getSetCookie() unavailable — needs Node 19.7+; bump engines.node or adjust this test');
+      const setCookies = res.headers.getSetCookie();
       assert.ok(setCookies.length >= 4, `expected at least 4 Set-Cookie headers, got ${setCookies.length}`);
       // All four signed-cookie names should be cleared:
       // _session + _session.sig + _session.legacy + _session.legacy.sig.

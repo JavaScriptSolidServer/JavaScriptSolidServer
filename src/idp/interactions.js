@@ -368,7 +368,9 @@ export async function handleSwitchAccount(request, reply, provider) {
     // 303 See Other — explicitly forces the UA to issue GET on the
     // Location target. 302 leaves it ambiguous (and some legacy UAs
     // repeat the POST), which would re-trigger this handler in a loop.
-    return reply.redirect(`/idp/interaction/${uid}`, 303);
+    // Status-then-URL arg order matches the rest of the codebase
+    // (src/server.js:637, src/tunnel/index.js:222).
+    return reply.redirect(303, `/idp/interaction/${uid}`);
   } catch (err) {
     request.log.error(err, 'Switch-account error');
     // Don't surface raw err.message — adapter errors and stack-leaking
