@@ -105,6 +105,11 @@ program
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
+  .option('--cors-proxy', 'Enable CORS proxy at /proxy?url=... for browser apps (WAC-gated)')
+  .option('--no-cors-proxy', 'Disable CORS proxy')
+  .option('--cors-proxy-max-bytes <n>', 'CORS proxy upstream response size cap (default 50MB)', parseInt)
+  .option('--cors-proxy-timeout-ms <ms>', 'CORS proxy upstream request timeout (default 30s)', parseInt)
+  .option('--cors-proxy-max-redirects <n>', 'CORS proxy max redirect hops, each re-validated (default 5)', parseInt)
   .option('--nostr', 'Enable Nostr relay')
   .option('--no-nostr', 'Disable Nostr relay')
   .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
@@ -191,6 +196,10 @@ program
         mashlibVersion: config.mashlibVersion,
         mashlibModule: config.mashlibModule,
         git: config.git,
+        corsProxy: config.corsProxy,
+        corsProxyMaxBytes: config.corsProxyMaxBytes,
+        corsProxyTimeoutMs: config.corsProxyTimeoutMs,
+        corsProxyMaxRedirects: config.corsProxyMaxRedirects,
         nostr: config.nostr,
         nostrPath: config.nostrPath,
         nostrMaxEvents: config.nostrMaxEvents,
@@ -242,6 +251,7 @@ program
         }
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
         if (config.git) console.log('  Git: enabled (clone/push support)');
+        if (config.corsProxy) console.log('  CORS proxy: enabled (/proxy?url=..., WAC-gated)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);
         if (config.webrtc) console.log(`  WebRTC: enabled (${config.webrtcPath || '/.webrtc'})`);
         if (config.terminal) console.log('  Terminal: enabled (/.terminal)');

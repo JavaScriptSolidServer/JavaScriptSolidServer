@@ -12,6 +12,7 @@ import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
+import { handleCorsProxy, isCorsProxyRequest } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { createPayHandler, isPayRequest } from './handlers/pay.js';
@@ -71,6 +72,11 @@ export function createServer(options = {}) {
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
+  // CORS proxy (#378) — OFF by default
+  const corsProxyEnabled = options.corsProxy ?? false;
+  const corsProxyMaxBytes = options.corsProxyMaxBytes ?? 50 * 1024 * 1024;
+  const corsProxyTimeoutMs = options.corsProxyTimeoutMs ?? 30_000;
+  const corsProxyMaxRedirects = options.corsProxyMaxRedirects ?? 5;
   // Nostr relay is OFF by default
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
@@ -439,6 +445,34 @@ export function createServer(options = {}) {
     fastify.addHook('preHandler', createPayHandler({ cost: payCost, mempoolUrl: payMempoolUrl, payAddress, payToken, payRate, payChains }));
   }
 
+  // CORS proxy (#378) — WAC-gated. Standard authorize() path runs against
+  // /proxy as a virtual resource; pod owner controls access by writing an
+  // .acl on /proxy (or inheriting from /.acl). OPTIONS preflight returns
+  // 204 directly without auth so browser CORS checks succeed before sign-in.
+  if (corsProxyEnabled) {
+    fastify.addHook('preHandler', async (request, reply) => {
+      const urlPath = request.url.split('?')[0];
+      if (!isCorsProxyRequest(urlPath)) {
+        return;
+      }
+
+      const { authorized, webId, wacAllow, authError } = await authorize(request, reply, { requiredMode: AccessMode.READ });
+      request.webId = webId;
+      request.wacAllow = wacAllow;
+
+      if (request.method !== 'OPTIONS' && !authorized) {
+        reply.header('WAC-Allow', wacAllow);
+        return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);
+      }
+
+      return handleCorsProxy(request, reply, {
+        maxBytes: corsProxyMaxBytes,
+        timeoutMs: corsProxyTimeoutMs,
+        maxRedirects: corsProxyMaxRedirects,
+      });
+    });
+  }
+
   // Authorization hook - check WAC permissions
   // Skip for pod creation endpoint (needs special handling)
   fastify.addHook('preHandler', async (request, reply) => {
@@ -460,6 +494,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/.well-known/') ||
         (nostrEnabled && request.url.startsWith(nostrPath)) ||
         (gitEnabled && isGitRequest(request.url)) ||
+        (corsProxyEnabled && isCorsProxyRequest(request.url.split('?')[0])) ||
         (activitypubEnabled && apPaths.some(p => request.url === p || request.url.startsWith(p + '?'))) ||
         isProfileAP ||
         request.url.startsWith('/storage/') ||
