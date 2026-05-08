@@ -25,14 +25,24 @@ import { Readable, Transform } from 'stream';
 
 // CORS headers applied to every proxy response. Same shape/source-of-truth
 // pattern as GIT_CORS_HEADERS in src/handlers/git.js (#374).
-const PROXY_CORS_HEADERS = {
+//
+// Allow-Headers includes:
+//   - Authorization, DPoP — for WAC + Solid-OIDC auth to *this* pod
+//   - X-Upstream-Authorization — opt-in upstream credential (renamed to
+//     Authorization on the way out, see pickRequestHeaders)
+//   - Git-Protocol — for browser-side smart-HTTP v2 clients
+//   - Accept*, Content-Type — standard fetch headers
+//
+// Expose-Headers includes WAC-Allow so browser clients can render auth
+// UX based on the pod's policy, plus the usual content/etag/location set.
+export const PROXY_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, HEAD, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization, Git-Protocol, Accept, Accept-Encoding, Accept-Language',
-  'Access-Control-Expose-Headers': 'Content-Type, Content-Length, ETag, Last-Modified, Link, Location, WWW-Authenticate',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, DPoP, X-Upstream-Authorization, Git-Protocol, Accept, Accept-Encoding, Accept-Language',
+  'Access-Control-Expose-Headers': 'Content-Type, Content-Length, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow',
 };
 
-function setProxyCorsHeaders(reply) {
+export function setProxyCorsHeaders(reply) {
   for (const [k, v] of Object.entries(PROXY_CORS_HEADERS)) {
     reply.header(k, v);
   }
@@ -41,11 +51,21 @@ function setProxyCorsHeaders(reply) {
 // Headers we forward from the caller to the upstream. Anything not on
 // this list is dropped — origin/cookie/host/referer would either confuse
 // upstream auth or leak the proxying pod's identity.
+//
+// Authorization is deliberately NOT forwarded by default: the browser
+// uses it to authenticate to *this* pod (WAC, Solid-OIDC bearer/DPoP),
+// and silently leaking that token to an arbitrary upstream is a security
+// hole. Callers who genuinely need to send credentials to the upstream
+// (e.g. a GitHub PAT for a private repo) opt in via the
+// X-Upstream-Authorization header — pickRequestHeaders renames that to
+// Authorization on the way out.
+//
+// DPoP is similarly not forwarded — it's bound to this pod's URL and
+// would be rejected by any upstream anyway.
 const FORWARD_REQUEST_HEADERS = new Set([
   'accept',
   'accept-encoding',
   'accept-language',
-  'authorization',
   'content-type',
   'content-length',
   'git-protocol',
@@ -55,6 +75,8 @@ const FORWARD_REQUEST_HEADERS = new Set([
   'range',
   'user-agent',
 ]);
+
+const UPSTREAM_AUTH_HEADER = 'x-upstream-authorization';
 
 // Headers we strip from the upstream response before returning to the
 // caller. Encoding-related ones are removed because Node's fetch already
@@ -79,8 +101,15 @@ function pickRequestHeaders(reqHeaders) {
   const out = {};
   for (const [k, v] of Object.entries(reqHeaders)) {
     if (v == null) continue;
-    if (FORWARD_REQUEST_HEADERS.has(k.toLowerCase())) {
+    const lower = k.toLowerCase();
+    if (FORWARD_REQUEST_HEADERS.has(lower)) {
       out[k] = v;
+    } else if (lower === UPSTREAM_AUTH_HEADER) {
+      // Opt-in upstream credential: client supplies the token under
+      // X-Upstream-Authorization, we relay it as Authorization upstream.
+      // Pod's own Authorization (used to auth to /proxy) never leaves
+      // the pod — see FORWARD_REQUEST_HEADERS.
+      out['Authorization'] = v;
     }
   }
   return out;
@@ -155,17 +184,23 @@ export async function handleCorsProxy(request, reply, options = {}) {
   // each hop's Location header. Required because fetch's automatic redirect
   // following bypasses our SSRF guard at the second hop.
   let currentUrl = targetUrl;
+  let currentMethod = request.method;
   let redirectsLeft = maxRedirects;
 
   // Body for non-GET/HEAD methods. Read once up front; we may need it on
   // the first hop and (for 307/308) on redirected hops.
   let body = null;
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
+  if (currentMethod !== 'GET' && currentMethod !== 'HEAD') {
     body = request.rawBody ?? request.body;
     if (typeof body === 'object' && !(body instanceof Buffer) && body !== null) {
       body = JSON.stringify(body);
     }
   }
+
+  // Forwarded headers are computed once (not per-hop) — Content-Length
+  // gets dropped when we switch to GET on 301/302/303 to avoid sending
+  // a stale length for an absent body.
+  const forwardHeaders = pickRequestHeaders(request.headers);
 
   while (true) {
     const validation = await validateExternalUrl(currentUrl, {
@@ -183,9 +218,9 @@ export async function handleCorsProxy(request, reply, options = {}) {
     let upstream;
     try {
       upstream = await fetch(currentUrl, {
-        method: request.method,
-        headers: pickRequestHeaders(request.headers),
-        body,
+        method: currentMethod,
+        headers: forwardHeaders,
+        body: (currentMethod === 'GET' || currentMethod === 'HEAD') ? undefined : body,
         redirect: 'manual',
         signal: abortController.signal,
       });
@@ -198,7 +233,8 @@ export async function handleCorsProxy(request, reply, options = {}) {
     }
     clearTimeout(timeoutId);
 
-    // Manual redirect handling: 301/302/303 → GET, 307/308 → preserve method
+    // Manual redirect handling: 301/302/303 → GET (per HTTP semantics),
+    // 307/308 → preserve method and body.
     if ([301, 302, 303, 307, 308].includes(upstream.status)) {
       const location = upstream.headers.get('location');
       if (!location) {
@@ -207,11 +243,23 @@ export async function handleCorsProxy(request, reply, options = {}) {
       if (--redirectsLeft < 0) {
         return reply.code(502).send({ error: `Exceeded ${maxRedirects} redirects` });
       }
-      // Resolve relative redirects against the previous URL.
-      currentUrl = new URL(location, currentUrl).toString();
-      // 301/302/303 force the next request to GET with no body.
+      // Resolve relative redirects against the previous URL. Malformed
+      // Location values throw — bubble that up as a 502 instead of 500.
+      try {
+        currentUrl = new URL(location, currentUrl).toString();
+      } catch {
+        return reply.code(502).send({ error: 'Upstream redirect with malformed Location', location });
+      }
       if ([301, 302, 303].includes(upstream.status)) {
+        // Method/body change is mandated by RFC 7231: redirected request
+        // becomes GET with no body. Also drop content-length / content-type
+        // so we don't send headers that no longer match the body.
+        currentMethod = 'GET';
         body = null;
+        delete forwardHeaders['content-length'];
+        delete forwardHeaders['Content-Length'];
+        delete forwardHeaders['content-type'];
+        delete forwardHeaders['Content-Type'];
       }
       // Drain the redirect body to free the connection; we never return it.
       try { await upstream.body?.cancel(); } catch { /* ignore */ }

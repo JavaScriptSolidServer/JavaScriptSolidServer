@@ -12,7 +12,7 @@ import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
-import { handleCorsProxy, isCorsProxyRequest } from './handlers/cors-proxy.js';
+import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { createPayHandler, isPayRequest } from './handlers/pay.js';
@@ -461,6 +461,10 @@ export function createServer(options = {}) {
       request.wacAllow = wacAllow;
 
       if (request.method !== 'OPTIONS' && !authorized) {
+        // Apply proxy CORS headers BEFORE handleUnauthorized so the 401/403
+        // is readable by browser clients (without these the browser surfaces
+        // the response as a generic CORS failure — same shape as #374).
+        setProxyCorsHeaders(reply);
         reply.header('WAC-Allow', wacAllow);
         return handleUnauthorized(request, reply, webId !== null, wacAllow, authError);
       }

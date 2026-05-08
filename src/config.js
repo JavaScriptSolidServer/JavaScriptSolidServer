@@ -219,6 +219,7 @@ const BOOLEAN_KEYS = new Set([
   'mashlib',
   'mashlibCdn',
   'git',
+  'corsProxy',
   'nostr',
   'webrtc',
   'terminal',
@@ -254,7 +255,13 @@ function parseEnvValue(value, key) {
   }
 
   // Numeric values for known numeric keys
-  if ((key === 'port' || key === 'nostrMaxEvents' || key === 'payCost' || key === 'payRate') && !isNaN(value)) {
+  if ((key === 'port' ||
+       key === 'nostrMaxEvents' ||
+       key === 'payCost' ||
+       key === 'payRate' ||
+       key === 'corsProxyMaxBytes' ||
+       key === 'corsProxyTimeoutMs' ||
+       key === 'corsProxyMaxRedirects') && !isNaN(value)) {
     return parseInt(value, 10);
   }
 
