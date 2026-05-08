@@ -72,11 +72,18 @@ export function createServer(options = {}) {
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
-  // CORS proxy (#378) — OFF by default
-  const corsProxyEnabled = options.corsProxy ?? false;
-  const corsProxyMaxBytes = options.corsProxyMaxBytes ?? 50 * 1024 * 1024;
-  const corsProxyTimeoutMs = options.corsProxyTimeoutMs ?? 30_000;
-  const corsProxyMaxRedirects = options.corsProxyMaxRedirects ?? 5;
+  // CORS proxy (#378) — OFF by default. Numeric settings get the
+  // sane-default fallback if the env var or config file supplies a
+  // non-finite/non-positive value (e.g. JSS_CORS_PROXY_MAX_BYTES=banana
+  // would otherwise leave the cap as the string "banana", making
+  // `bytesSeen > "banana"` always false and silently disabling the
+  // safety limit).
+  const positiveInt = (v, fallback) =>
+    (typeof v === 'number' && Number.isFinite(v) && v > 0) ? v : fallback;
+  const corsProxyEnabled = options.corsProxy === true;
+  const corsProxyMaxBytes = positiveInt(options.corsProxyMaxBytes, 50 * 1024 * 1024);
+  const corsProxyTimeoutMs = positiveInt(options.corsProxyTimeoutMs, 30_000);
+  const corsProxyMaxRedirects = positiveInt(options.corsProxyMaxRedirects, 5);
   // Nostr relay is OFF by default
   const nostrEnabled = options.nostr ?? false;
   const nostrPath = options.nostrPath ?? '/relay';
@@ -456,7 +463,12 @@ export function createServer(options = {}) {
         return;
       }
 
-      const { authorized, webId, wacAllow, authError } = await authorize(request, reply, { requiredMode: AccessMode.READ });
+      // Don't override requiredMode — let authorize() derive it from the
+      // request method via getRequiredMode(). GET/HEAD need READ on the
+      // /proxy resource, POST needs APPEND/WRITE — pod owners can grant
+      // these separately via ACL modes (e.g. acl:Read for browse-only,
+      // acl:Append/Write for proxying side-effecting POSTs upstream).
+      const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
       request.webId = webId;
       request.wacAllow = wacAllow;
 
