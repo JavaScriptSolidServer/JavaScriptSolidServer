@@ -506,6 +506,12 @@ export function createServer(options = {}) {
         if (currency) reply.header('X-Pay-Currency', currency);
       }
 
+      // Set WAC-Allow on success too, matching the global WAC hook
+      // (line 562 area). Browser clients read it via Expose-Headers
+      // to render auth UX. Without this, only 401/403/402 responses
+      // carry WAC-Allow, which is inconsistent.
+      reply.header('WAC-Allow', wacAllow);
+
       // ACL with a PaymentCondition surfaces as 402 here — mirrors the
       // git handler at src/server.js:418 and the standard WAC hook so
       // payment-gated /proxy ACLs behave consistently.

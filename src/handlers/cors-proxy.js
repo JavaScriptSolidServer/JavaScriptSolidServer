@@ -61,7 +61,7 @@ export const PROXY_CORS_HEADERS = {
     'Range',
     'User-Agent',
   ].join(', '),
-  'Access-Control-Expose-Headers': 'Content-Type, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow',
+  'Access-Control-Expose-Headers': 'Content-Type, ETag, Last-Modified, Link, Location, WWW-Authenticate, WAC-Allow, X-Cost, X-Balance, X-Pay-Currency',
 };
 
 export function setProxyCorsHeaders(reply) {
