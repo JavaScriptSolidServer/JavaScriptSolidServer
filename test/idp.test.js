@@ -4,6 +4,7 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import http from 'node:http';
 import { createServer } from '../src/server.js';
 import fs from 'fs-extra';
 import path from 'path';
@@ -205,6 +206,33 @@ describe('Identity Provider', () => {
       return fs.outputJson(`${interactionDir}/${uid}.json`, data, { spaces: 2 });
     }
 
+    // Use node:http directly for the cookie-clearing assertion. fetch's
+    // Headers.getSetCookie() is only available on Node 19.7+, but the
+    // package declares engines.node >= 18. http.request gives us
+    // res.headers['set-cookie'] as a real array on every supported
+    // Node version, no version-gated branches needed.
+    function rawPost(urlString) {
+      return new Promise((resolve, reject) => {
+        const u = new URL(urlString);
+        const req = http.request({
+          method: 'POST',
+          hostname: u.hostname,
+          port: u.port,
+          path: u.pathname + u.search,
+        }, (res) => {
+          let body = '';
+          res.on('data', (c) => body += c);
+          res.on('end', () => resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            body,
+          }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    }
+
     it('redirects back to /idp/interaction/:uid and resets the prompt to login', async () => {
       const uid = 'test-switch-' + Math.random().toString(36).slice(2);
       await writeInteraction(uid, {
@@ -213,15 +241,12 @@ describe('Identity Provider', () => {
         params: { client_id: 'test-client', redirect_uri: 'http://localhost', state: 'xyz' },
       });
 
-      const res = await fetch(`${baseUrl}/idp/interaction/${uid}/switch`, {
-        method: 'POST',
-        redirect: 'manual',
-      });
+      const res = await rawPost(`${baseUrl}/idp/interaction/${uid}/switch`);
 
       // 303 See Other — forces UA to GET the Location target so a
       // (broken) UA can't loop by re-POSTing to /switch.
-      assert.strictEqual(res.status, 303);
-      assert.strictEqual(res.headers.get('location'), `/idp/interaction/${uid}`);
+      assert.strictEqual(res.statusCode, 303);
+      assert.strictEqual(res.headers.location, `/idp/interaction/${uid}`);
 
       // Verify the interaction was mutated as expected.
       const saved = await fs.readJson(`${interactionDir}/${uid}.json`);
@@ -233,14 +258,9 @@ describe('Identity Provider', () => {
       assert.strictEqual(saved.params.state, 'xyz');
 
       // Cookies should be cleared so the user's UA forgets the prior
-      // session. Per the Fetch spec, Set-Cookie is a forbidden header
-      // name on .get(); use the array-returning getSetCookie() helper.
-      // Available on Node 19.7+ (we don't fall back silently — if the
-      // method is missing the test should fail loudly so we know to
-      // adjust rather than passing on an empty array).
-      assert.strictEqual(typeof res.headers.getSetCookie, 'function',
-        'Headers.getSetCookie() unavailable — needs Node 19.7+; bump engines.node or adjust this test');
-      const setCookies = res.headers.getSetCookie();
+      // session. Node's http module gives Set-Cookie as an array on
+      // every supported version, so no Node 19.7+ gating needed.
+      const setCookies = Array.isArray(res.headers['set-cookie']) ? res.headers['set-cookie'] : [];
       assert.ok(setCookies.length >= 4, `expected at least 4 Set-Cookie headers, got ${setCookies.length}`);
       // All four signed-cookie names should be cleared:
       // _session + _session.sig + _session.legacy + _session.legacy.sig.
