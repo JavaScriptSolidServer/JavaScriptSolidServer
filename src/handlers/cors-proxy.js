@@ -125,10 +125,18 @@ function copyResponseHeaders(reply, fetchResponse) {
 /**
  * Stream the upstream body to the caller, enforcing a byte cap mid-stream.
  * Uses Node 18+ Readable.fromWeb to bridge the fetch ReadableStream into
- * a Node Readable, then a Transform passthrough counts bytes and errors
- * the pipeline if maxBytes is exceeded.
+ * a Node Readable, then a Transform passthrough counts bytes and ends
+ * the stream cleanly if maxBytes is exceeded.
+ *
+ * Note on the timeout: once status/headers are sent we can't change the
+ * status code (Fastify throws ERR_HTTP_HEADERS_SENT), so the deadline
+ * applies to the headers-received phase only. A slow-streaming upstream
+ * past the deadline is *not* killed mid-stream in Phase 1 — see the
+ * follow-up tracked in #378 / the open issue list. Mid-stream errors
+ * (byte cap, fetch error) terminate the response with a truncated body
+ * rather than a thrown error.
  */
-function streamWithCap(reply, fetchResponse, maxBytes, abortController) {
+function streamUpstream(reply, fetchResponse, maxBytes, abortController) {
   if (!fetchResponse.body) {
     return reply.send();
   }
@@ -139,13 +147,17 @@ function streamWithCap(reply, fetchResponse, maxBytes, abortController) {
       bytesSeen += chunk.length;
       if (bytesSeen > maxBytes) {
         abortController.abort();
-        return callback(new Error(`Upstream response exceeded ${maxBytes} bytes`));
+        this.push(null);
+        return callback();
       }
       callback(null, chunk);
     }
   });
 
-  Readable.fromWeb(fetchResponse.body).on('error', (err) => counter.destroy(err)).pipe(counter);
+  Readable.fromWeb(fetchResponse.body)
+    .on('error', () => counter.end())
+    .pipe(counter);
+
   return reply.send(counter);
 }
 
@@ -231,6 +243,11 @@ export async function handleCorsProxy(request, reply, options = {}) {
       }
       return reply.code(502).send({ error: 'Upstream fetch failed', detail: err.message });
     }
+    // Headers received — clear the deadline. Streaming-phase timeouts
+    // are a known Phase 1 limitation: once Fastify has sent headers we
+    // can't change the status code, and the destroy-source-during-pipe
+    // pattern doesn't reliably terminate the response. Tracked as a
+    // follow-up.
     clearTimeout(timeoutId);
 
     // Manual redirect handling: 301/302/303 → GET (per HTTP semantics),
@@ -271,7 +288,7 @@ export async function handleCorsProxy(request, reply, options = {}) {
     copyResponseHeaders(reply, upstream);
     setProxyCorsHeaders(reply); // reapply in case copyResponseHeaders set conflicting CORS values
 
-    return streamWithCap(reply, upstream, maxBytes, abortController);
+    return streamUpstream(reply, upstream, maxBytes, abortController);
   }
 }
 

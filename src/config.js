@@ -50,7 +50,7 @@ export const defaults = {
   // fetch arbitrary upstreams that don't return CORS headers.
   corsProxy: false,
   corsProxyMaxBytes: 50 * 1024 * 1024, // 50 MB ceiling on upstream response size
-  corsProxyTimeoutMs: 30_000,           // 30 s overall request deadline
+  corsProxyTimeoutMs: 30_000,           // 30 s deadline for upstream to send headers (504 if exceeded). Body streaming is not currently capped; see follow-up.
   corsProxyMaxRedirects: 5,             // each redirect re-validated for SSRF
 
   // Nostr relay
