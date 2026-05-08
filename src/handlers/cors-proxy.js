@@ -84,12 +84,17 @@ export function setProxyCorsHeaders(reply) {
 //
 // DPoP is similarly not forwarded — it's bound to this pod's URL and
 // would be rejected by any upstream anyway.
+// Note: Content-Length is *not* forwarded. We may transform the body
+// (Fastify-parsed JSON gets re-stringified before the upstream fetch),
+// so the caller's declared length may not match what we send. Node's
+// fetch sets Content-Length automatically based on the actual body.
+// (Browsers send Content-Length on simple requests without needing it
+// in Access-Control-Allow-Headers, since it's CORS-safelisted.)
 const FORWARD_REQUEST_HEADERS = new Set([
   'accept',
   'accept-encoding',
   'accept-language',
   'content-type',
-  'content-length',
   'git-protocol',
   'if-match',
   'if-none-match',

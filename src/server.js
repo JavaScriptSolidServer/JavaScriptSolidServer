@@ -468,9 +468,17 @@ export function createServer(options = {}) {
       // /proxy resource, POST needs APPEND/WRITE — pod owners can grant
       // these separately via ACL modes (e.g. acl:Read for browse-only,
       // acl:Append/Write for proxying side-effecting POSTs upstream).
-      const { authorized, webId, wacAllow, authError } = await authorize(request, reply);
+      const { authorized, webId, wacAllow, authError, paymentRequired } = await authorize(request, reply);
       request.webId = webId;
       request.wacAllow = wacAllow;
+
+      // ACL with a PaymentCondition surfaces as 402 here — mirrors the
+      // git handler at src/server.js:418 and the standard WAC hook so
+      // payment-gated /proxy ACLs behave consistently.
+      if (paymentRequired) {
+        setProxyCorsHeaders(reply);
+        return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
+      }
 
       if (request.method !== 'OPTIONS' && !authorized) {
         // Apply proxy CORS headers BEFORE handleUnauthorized so the 401/403
