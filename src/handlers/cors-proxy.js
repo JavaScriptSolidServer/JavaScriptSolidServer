@@ -131,10 +131,11 @@ const UPSTREAM_AUTH_HEADER = 'x-upstream-authorization';
 // the actual length (or chunked) automatically.
 //
 // WAC-Allow / X-Cost / X-Balance / X-Pay-Currency are stripped because
-// they describe *this* pod's ACL decision; if the upstream sets them
-// they'd override our local values and let the upstream spoof auth or
-// payment state. server.js re-applies our values after the upstream
-// headers are copied in.
+// they describe *this* pod's ACL decision and ledger debit; an upstream
+// must not be able to spoof them. server.js sets these headers *before*
+// calling handleCorsProxy (in the proxy preHandler, after authorize()),
+// and stripping them here ensures copyResponseHeaders can never
+// overwrite the local values when iterating upstream headers.
 const STRIP_RESPONSE_HEADERS = new Set([
   'content-encoding',
   'content-length',
