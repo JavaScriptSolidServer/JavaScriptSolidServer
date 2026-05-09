@@ -529,6 +529,20 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
       assert.strictEqual(await verifyNostrPubkeyAgainstWebId(WEBID, 'not-hex'), false);
       assert.strictEqual(await verifyNostrPubkeyAgainstWebId(WEBID, ''), false);
     });
+
+    it('returns false when VM controller is unrelated to profile controller', async () => {
+      _clearProfileCacheForTests();
+      // VM with right Multikey but its controller points at a different
+      // identity — the profile's outer controller is the WebID, but the
+      // VM claims to be controlled by `https://attacker.example/#me`.
+      // This is the "key bound by an unrelated controller" attack the
+      // controller-consistency check defends against.
+      const profile = buildProfile({ pubkey: pk });
+      profile.verificationMethod[0].controller = 'https://attacker.example/profile/card.jsonld#me';
+      nextProfile = profile;
+      const ok = await verifyNostrPubkeyAgainstWebId(WEBID, pk);
+      assert.strictEqual(ok, false);
+    });
   });
 
   it('still rejects an invalid signature regardless of the profile', async () => {

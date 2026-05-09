@@ -26,7 +26,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 import { fetchCidDocument } from './cid-doc-fetch.js';
-import { normalizeControllers } from './lws-cid.js';
+import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -504,15 +504,6 @@ function firstHeaderValue(v) {
 }
 
 /**
- * Find a verificationMethod whose key material matches the Nostr
- * x-only pubkey hex. Two encodings supported:
- *   - f-form Multikey:  publicKeyMultibase = "f" + "e701" + parity + xonly
- *   - JsonWebKey:       publicKeyJwk.x = base64url(xonly)  (kty:EC, crv:secp256k1)
- *
- * Returns the entry (object form) on match, normalized so .id is the
- * absolute IRI. Returns null on no match.
- */
-/**
  * Confirm that a verified Nostr pubkey is declared as a CID
  * verificationMethod referenced from `authentication` in the given
  * WebID's profile. Used by the Schnorr-login IdP path (#403): once
@@ -520,10 +511,17 @@ function firstHeaderValue(v) {
  * the IdP layer can derive the candidate WebID and ask this whether
  * the verified pubkey actually belongs to that WebID.
  *
- * Returns true on match, false on no-match / fetch failure / VM not
- * in authentication / controller mismatch.
+ * Mirrors the same controller-consistency / subject-identity /
+ * authentication-membership checks as the resource-side path
+ * (tryResolveViaCidVerificationMethod) so the two paths apply the
+ * same key-binding semantics.
  *
- * @param {string} webId - canonical WebID URI (with or without #me)
+ * Returns true on match, false on any failure (fetch, VM not in
+ * authentication, subject mismatch, controller mismatch, bad input).
+ *
+ * @param {string} webId - canonical fragment-bearing WebID URI (e.g.
+ *   `https://alice.example.com/profile/card.jsonld#me`). The profile's
+ *   own `@id` must match this exactly after absolutization.
  * @param {string} pubkeyHex - 32-byte x-only Nostr pubkey hex
  * @returns {Promise<boolean>}
  */
@@ -541,16 +539,41 @@ export async function verifyNostrPubkeyAgainstWebId(webId, pubkeyHex) {
 
   // Confirm the profile actually identifies itself as the WebID we're
   // asking about — otherwise a profile hosted at the WebID's URL could
-  // declare a different fragment as its subject and trick us.
+  // declare a different fragment as its subject and trick us. Both
+  // sides absolutized so a relative @id (e.g. "#me") resolves against
+  // docUrl and a webId without fragment (which the docstring no longer
+  // permits, but be defensive) doesn't accidentally match a fragment
+  // form.
   const subject = absolutize(profile['@id'] || profile.id, docUrl);
-  if (!subject || subject !== webId) return false;
+  const expectedSubject = absolutize(webId, docUrl);
+  if (!subject || subject !== expectedSubject) return false;
 
   const vm = findNostrVmInProfile(profile, pubkeyHex.toLowerCase(), docUrl);
   if (!vm) return false;
   if (!isInProofPurpose(profile, 'authentication', vm.id, docUrl)) return false;
+
+  // Controller consistency: the VM's `controller` MUST be in the
+  // profile's expected controller set (declared `controller`, with
+  // @id fallback). Without this, a profile with a Nostr-keyed VM
+  // controlled by some unrelated identity would pass — a binding the
+  // actual subject never asserted. Mirrors the resource-path check.
+  const expectedCtrls = normalizeControllers(profile.controller ?? profile['@id'] ?? profile.id, docUrl);
+  if (expectedCtrls.length === 0) return false;
+  const vmCtrls = normalizeControllers(vm.controller, docUrl);
+  if (!vmCtrls.some((c) => expectedCtrls.includes(c))) return false;
+
   return true;
 }
 
+/**
+ * Find a verificationMethod whose key material matches the Nostr
+ * x-only pubkey hex. Two encodings supported:
+ *   - f-form Multikey:  publicKeyMultibase = "f" + "e701" + parity + xonly
+ *   - JsonWebKey:       publicKeyJwk.x = base64url(xonly)  (kty:EC, crv:secp256k1)
+ *
+ * Returns the entry (object form) on match, normalized so .id is the
+ * absolute IRI. Returns null on no match.
+ */
 function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
   const target = pubkeyHex.toLowerCase();
   const targetB64u = hexToBase64url(target);

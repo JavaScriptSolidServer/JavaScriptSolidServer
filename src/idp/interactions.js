@@ -665,11 +665,19 @@ export async function handlePasskeySkip(request, reply, provider) {
  * (src/server.js), so request.body for application/x-www-form-urlencoded
  * arrives as a Buffer that needs string-decode + URLSearchParams. JSON
  * and already-parsed object bodies are also accepted for flexibility.
+ *
+ * Returns either:
+ *   - { tooLarge: true } if the body exceeds MAX_BODY_SIZE (matching
+ *     handleLogin / handleRegisterPost — caller emits 413).
+ *   - { username: string } otherwise, possibly empty.
  */
 function parseUsernameField(request) {
   const body = request.body;
-  if (!body) return '';
+  if (!body) return { username: '' };
   const ct = (request.headers?.['content-type'] || '').toLowerCase();
+  if (Buffer.isBuffer(body) && body.length > MAX_BODY_SIZE) return { tooLarge: true };
+  if (typeof body === 'string' && body.length > MAX_BODY_SIZE) return { tooLarge: true };
+
   let bag = {};
   if (Buffer.isBuffer(body) || typeof body === 'string') {
     const s = Buffer.isBuffer(body) ? body.toString() : body;
@@ -682,7 +690,7 @@ function parseUsernameField(request) {
   } else if (typeof body === 'object') {
     bag = body;
   }
-  return (bag.username || '').toString().trim();
+  return { username: (bag.username || '').toString().trim() };
 }
 
 /**
@@ -728,7 +736,14 @@ export async function handleSchnorrLogin(request, reply, provider) {
       // user's WebID profile (#400's IdP-side parallel — #403). The
       // signature has already been verified above, so this is just
       // "does this verified pubkey belong to the typed user".
-      const typedUsername = parseUsernameField(request);
+      const parsed = parseUsernameField(request);
+      if (parsed.tooLarge) {
+        return reply.code(413).type('application/json').send({
+          success: false,
+          error: 'Request body exceeds maximum size.',
+        });
+      }
+      const typedUsername = parsed.username;
       if (typedUsername) {
         const candidate = await findByUsername(typedUsername);
         if (candidate?.webId) {
