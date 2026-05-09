@@ -14,12 +14,18 @@
 import { verifyEvent, getEventHash } from '../nostr/event.js';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
+import { validateExternalUrl } from '../utils/ssrf.js';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
 
 // Timestamp tolerance in seconds
 const TIMESTAMP_TOLERANCE = 60;
+
+// Multicodec varint for secp256k1-pub: 0xe7 0x01 → "e701" hex.
+// Used to decode f-form Multikey verificationMethod values back into
+// the 32-byte x-only Nostr pubkey.
+const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
 /**
  * Check if request has Nostr authentication
@@ -229,9 +235,19 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Invalid Schnorr signature' };
   }
 
-  // Try to resolve did:nostr to a linked WebID
-  // This checks if the pubkey has an alsoKnownAs pointing to a WebID
-  // and verifies the WebID links back to did:nostr (bidirectional)
+  // First lookup: the resource's owner WebID profile. If the pod owner
+  // declared this pubkey as a verificationMethod (CID v1 / LWS-CID
+  // shape — produced by the doctor's B.2 path), authenticate as the
+  // WebID. This is profile-only (no DID-doc fetch) and works for any
+  // user who's added a Nostr VM to their profile — see #386 / #399.
+  const vmWebId = await tryResolveViaCidVerificationMethod(request, event.pubkey);
+  if (vmWebId) {
+    return { webId: vmWebId, error: null };
+  }
+
+  // Second lookup: existing did:nostr DID-document resolver. Fetches
+  // an external DID doc (e.g. nostr.social/.well-known/...) and checks
+  // bidirectional alsoKnownAs ↔ WebID linking.
   const resolvedWebId = await resolveDidNostrToWebId(event.pubkey);
   if (resolvedWebId) {
     return { webId: resolvedWebId, error: null };
@@ -241,6 +257,188 @@ export async function verifyNostrAuth(request) {
   const didNostr = pubkeyToDidNostr(event.pubkey);
 
   return { webId: didNostr, error: null };
+}
+
+/**
+ * Attempt to upgrade a verified Nostr pubkey to a WebID by looking it
+ * up in the resource owner's CID document (= WebID profile).
+ *
+ * Returns the WebID if:
+ *   - the pod-owner WebID can be derived from the request
+ *   - the profile fetches cleanly (passes SSRF guard, JSON-LD)
+ *   - one of its `verificationMethod` entries carries this pubkey
+ *     (either as f-form Multikey or as a secp256k1 JsonWebKey)
+ *   - that VM is referenced from `authentication`
+ *
+ * Returns null in any other case — the caller falls back to the
+ * existing DID-doc / did:nostr-identity paths.
+ */
+async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
+  const ownerWebId = getPodOwnerWebId(request);
+  if (!ownerWebId) return null;
+  const docUrl = stripHash(ownerWebId);
+
+  // SSRF guard. The owner WebID is derived from server-side request
+  // data, so it shouldn't be attacker-controllable, but route through
+  // the same guard as the LWS-CID verifier as defense-in-depth.
+  const validation = await validateExternalUrl(docUrl, {
+    requireHttps: process.env.NODE_ENV === 'production',
+    blockPrivateIPs: true,
+    resolveDNS: true,
+  });
+  if (!validation.valid) return null;
+
+  let profile;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(docUrl, {
+      headers: { Accept: 'application/ld+json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('json')) return null;
+    profile = await res.json();
+  } catch {
+    return null;
+  }
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
+
+  const vm = findNostrVmInProfile(profile, pubkeyHex, docUrl);
+  if (!vm) return null;
+  if (!isInProofPurpose(profile, 'authentication', vm.id, docUrl)) return null;
+
+  // Use the profile's declared subject as the authenticated identity
+  // (with @id fallback). Absolutize so a relative @id resolves.
+  const subject = profile['@id'] || profile.id;
+  if (!subject) return null;
+  return absolutize(subject, docUrl);
+}
+
+/**
+ * Derive the pod-owner WebID URL from a Fastify request.
+ *
+ * Subdomain mode: the pod's domain IS the request's hostname.
+ * Path mode: the pod's name is the first path segment.
+ * Single-user / unknown: returns null (the caller falls back).
+ */
+function getPodOwnerWebId(request) {
+  const proto = (request.headers?.['x-forwarded-proto'] || '').split(',')[0].trim()
+              || request.protocol
+              || 'https';
+  const host  = (request.headers?.['x-forwarded-host'] || '').split(',')[0].trim()
+              || request.headers?.host
+              || request.hostname;
+  if (!host) return null;
+
+  // Subdomain mode: hostname carries the pod name.
+  if (request.subdomainsEnabled && request.podName) {
+    return `${proto}://${request.podName}.${request.baseDomain}/profile/card.jsonld#me`;
+  }
+
+  // Path mode on the base domain: first path segment is the pod name.
+  if (request.subdomainsEnabled && request.baseDomain && host === request.baseDomain) {
+    const m = (request.url || '').match(/^\/([^/?#]+)/);
+    if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
+      return `${proto}://${m[1]}.${request.baseDomain}/profile/card.jsonld#me`;
+    }
+  }
+
+  // Default: assume the host itself is a single-pod deployment.
+  return `${proto}://${host}/profile/card.jsonld#me`;
+}
+
+/**
+ * Find a verificationMethod whose key material matches the Nostr
+ * x-only pubkey hex. Two encodings supported:
+ *   - f-form Multikey:  publicKeyMultibase = "f" + "e701" + parity + xonly
+ *   - JsonWebKey:       publicKeyJwk.x = base64url(xonly)  (kty:EC, crv:secp256k1)
+ *
+ * Returns the entry (object form) on match, normalized so .id is the
+ * absolute IRI. Returns null on no match.
+ */
+function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
+  const target = pubkeyHex.toLowerCase();
+  const targetB64u = hexToBase64url(target);
+  const vms = asArray(profile.verificationMethod);
+  for (const vm of vms) {
+    if (!vm || typeof vm !== 'object') continue;
+    const vmId = vm.id || vm['@id'];
+    if (typeof vmId !== 'string') continue;
+
+    if (typeof vm.publicKeyMultibase === 'string') {
+      const xonly = decodeFFormSecp256k1(vm.publicKeyMultibase);
+      if (xonly === target) return { ...vm, id: absolutize(vmId, baseUrl) };
+    }
+    if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
+      const jwk = vm.publicKeyJwk;
+      if (jwk.kty === 'EC' && (jwk.crv === 'secp256k1' || jwk.crv === 'P-256K')) {
+        if (typeof jwk.x === 'string' && jwk.x === targetB64u) {
+          return { ...vm, id: absolutize(vmId, baseUrl) };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Decode an f-form Multikey for secp256k1-pub back into the 32-byte
+ * x-only pubkey hex. Returns null if the input isn't this shape.
+ */
+function decodeFFormSecp256k1(mb) {
+  if (typeof mb !== 'string' || !mb.startsWith('f')) return null;
+  const hex = mb.slice(1).toLowerCase();
+  if (!/^[0-9a-f]+$/.test(hex)) return null;
+  if (!hex.startsWith(MULTICODEC_SECP256K1_PUB_HEX)) return null;
+  const rest = hex.slice(MULTICODEC_SECP256K1_PUB_HEX.length);
+  // Expect parity byte (02/03) + 32-byte xonly = 66 hex chars.
+  if (rest.length !== 66) return null;
+  const parity = rest.slice(0, 2);
+  if (parity !== '02' && parity !== '03') return null;
+  return rest.slice(2);
+}
+
+function hexToBase64url(hex) {
+  return Buffer.from(hex, 'hex').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function isInProofPurpose(profile, predicate, vmId, baseUrl) {
+  const entries = asArray(profile[predicate]);
+  if (entries.length === 0) return false;
+  for (const ent of entries) {
+    if (typeof ent === 'string') {
+      if (absolutize(ent, baseUrl) === vmId) return true;
+    } else if (ent && typeof ent === 'object') {
+      const id = ent['@id'] ?? ent.id;
+      if (id && absolutize(id, baseUrl) === vmId) return true;
+    }
+  }
+  return false;
+}
+
+function asArray(v) {
+  if (v === undefined || v === null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+function absolutize(u, base) {
+  if (!u) return u;
+  try { return new URL(u, base).toString(); } catch { return u; }
+}
+
+function stripHash(u) {
+  if (typeof u !== 'string') return u;
+  try {
+    const url = new URL(u);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return u.split('#')[0];
+  }
 }
 
 /**
