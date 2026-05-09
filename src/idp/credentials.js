@@ -361,10 +361,17 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   await deleteAccount(account.id);
 
   // 6. Optionally purge the pod's filesystem data. Mirrors the CLI
-  // `--purge` semantics. The path is <dataRoot>/<username>/, with
-  // username already validated at registration (#321 alphanum/dash/dot
-  // rules) so no traversal risk in practice; defensive normalize
-  // anyway.
+  // `--purge` semantics. The path is <dataRoot>/<podName>/.
+  //
+  // Use account.podName, NOT account.username: createAccount normalizes
+  // username to lowercase (`username.toLowerCase().trim()`) but the pod
+  // directory on disk is created with the original case (per the input
+  // to handleCreatePod). On case-sensitive filesystems, deriving the
+  // purge path from username would either no-op (path doesn't exist)
+  // or hit a different directory if one exists at the lowercased name.
+  // Pod-name validation regex is /^[a-zA-Z0-9_-]+$/ (alphanum + dash +
+  // underscore; no dots, no traversal sequences) so podName is safe to
+  // join — defensive normalize stays as belt-and-suspenders.
   //
   // Best-effort: if fs.remove throws (permissions, transient FS error,
   // race with another consumer), the account is already deleted and we
@@ -375,11 +382,11 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   let purged = false;
   if (purgeData) {
     const dataRoot = process.env.DATA_ROOT || './data';
-    const candidate = path.resolve(dataRoot, account.username);
+    const candidate = path.resolve(dataRoot, account.podName || account.username);
     const root = path.resolve(dataRoot);
     // Belt-and-suspenders: refuse to remove anything that isn't a
     // proper child of the data root. Won't trigger on registered
-    // usernames; protects against config drift / future bugs.
+    // pod names; protects against config drift / future bugs.
     if (candidate.startsWith(root + path.sep) && candidate !== root) {
       try {
         await fs.remove(candidate);

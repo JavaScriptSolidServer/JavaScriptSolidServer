@@ -773,11 +773,15 @@ accountCmd
 
       if (options.purge) {
         const dataRoot = process.env.DATA_ROOT || './data';
-        const podPath = path.join(dataRoot, account.username);
+        // Use podName, not username — createAccount lowercases the
+        // username but pod directories on disk preserve the original
+        // case. On case-sensitive filesystems they can differ.
+        const podPath = path.join(dataRoot, account.podName || account.username);
         await fs.remove(podPath);
         console.log(`\nDeleted account ${account.username}. Pod data removed from ${podPath}.\n`);
       } else {
-        console.log(`\nDeleted account ${account.username}. Pod data preserved at <dataRoot>/${account.username}/ (use --purge to remove).\n`);
+        const podDir = account.podName || account.username;
+        console.log(`\nDeleted account ${account.username}. Pod data preserved at <dataRoot>/${podDir}/ (use --purge to remove).\n`);
       }
     } catch (err) {
       console.error(`Error: ${err.message}`);

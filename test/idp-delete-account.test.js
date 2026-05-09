@@ -177,6 +177,36 @@ describe('DELETE /idp/account — self-delete', () => {
       'pod data should be purged');
   });
 
+  it('purgeData: true removes the on-disk pod dir even when it has uppercase letters', async () => {
+    // Regression for the bug where purge derived its path from
+    // account.username (which createAccount lowercases) instead of
+    // account.podName (which preserves the original case). On
+    // case-sensitive filesystems the pod dir at <dataRoot>/Greta…/
+    // wouldn't match the derived <dataRoot>/greta…/ path.
+    const id = `Greta${Date.now()}`;
+    await createPod(baseUrl, id, `${id.toLowerCase()}@example.com`, 'password123');
+    const token = await loginToken(baseUrl, `${id.toLowerCase()}@example.com`, 'password123');
+
+    const podPath = path.join(DATA_DIR, id); // mixed-case as created
+    assert.strictEqual(await fs.pathExists(podPath), true,
+      'pod data should exist at the mixed-case path before deletion');
+
+    const res = await fetch(`${baseUrl}/idp/account`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ currentPassword: 'password123', purgeData: true }),
+    });
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.strictEqual(body.purged, true, 'purge should report success');
+
+    assert.strictEqual(await fs.pathExists(podPath), false,
+      'mixed-case pod dir should be gone (regression: not stranded by username lowercasing)');
+  });
+
   it('purgeData: false (default) preserves the pod filesystem tree', async () => {
     const id = `frank${Date.now()}`;
     await createPod(baseUrl, id, `${id}@example.com`, 'password123');
