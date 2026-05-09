@@ -374,6 +374,29 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, SUB_WEBID);
   });
 
+  it('upgrades did:nostr → WebID in path mode even when host carries a port', async () => {
+    // Reverse proxies forward Host with port (e.g. example.com:8080).
+    // The computed ownerWebId must match what JSS stores at pod
+    // creation, which uses request.hostname (port-stripped). Otherwise
+    // the subject-identity check would reject valid requests.
+    pathProfile = buildProfile({
+      pubkey: pk,
+      vmId: `${PATH_DOC_URL}#nostr-key-1`,
+      webId: PATH_WEBID,
+    });
+    // Sign with the port-included URL so the existing NIP-98 URL-match
+    // check passes — this test is about WebID derivation, not URL matching.
+    const PORT_HOST = `${PATH_HOST}:8080`;
+    const url = `https://${PORT_HOST}/${PATH_PODNAME}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url, host: PORT_HOST, mode: 'path' });
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, PATH_WEBID); // canonical, port-stripped
+  });
+
   it('upgrades did:nostr → WebID in path mode (subdomains disabled, JSS default)', async () => {
     // JSS's default deployment shape: pod is the first URL segment
     // and the WebID lives under that path.

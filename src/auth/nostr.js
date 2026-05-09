@@ -343,14 +343,14 @@ function getPodOwnerWebId(request) {
               || request.protocol
               || 'https';
   // The Host header / x-forwarded-host can carry a port and may be an
-  // IPv6 literal (`[::1]:3000`). For the host-vs-baseDomain comparison
-  // we need a port-stripped hostname that handles IPv6 correctly. For
-  // URL construction we keep the original `hostRaw` (port included) in
-  // the single-user and path-mode branches so non-default ports
-  // round-trip into the WebID. The subdomain-mode and base-domain
-  // branches deliberately drop the port — these mirror the
-  // canonicalization buildResourceUrl performs, where the WebID is
-  // derived from the deployment's baseDomain (no port).
+  // IPv6 literal (`[::1]:3000`). For all WebID construction we use
+  // the port-stripped, IPv6-bracket-stripped form (`hostNoPort`) to
+  // match what JSS itself stores: subdomain mode derives from
+  // `baseDomain` (no port), and src/handlers/container.js builds
+  // path-mode WebIDs from `request.hostname` (port-stripped). Using
+  // a port-bearing host here would compute a WebID that doesn't
+  // match the stored profile @id, so the subject-identity check
+  // would reject otherwise-valid requests on non-default ports.
   const hostRaw = firstHeaderValue(headers['x-forwarded-host'])
                 || firstHeaderValue(headers.host)
                 || request.hostname;
@@ -375,11 +375,16 @@ function getPodOwnerWebId(request) {
 
   // Single-user deployment. The pod is either at the host root or
   // mounted under `/<singleUserName>/`; both shapes are supported.
+  // Use the port-stripped form to match what JSS itself stores in
+  // the profile @id at pod-creation time (src/handlers/container.js
+  // builds with `request.hostname`, port-stripped). Otherwise a
+  // request arriving on a non-default port would compute a WebID
+  // the subject-identity check rejects.
   if (request.singleUser) {
     const name = request.singleUserName;
     return name
-      ? `${proto}://${hostRaw}/${name}/profile/card.jsonld#me`
-      : `${proto}://${hostRaw}/profile/card.jsonld#me`;
+      ? `${proto}://${hostNoPort}/${name}/profile/card.jsonld#me`
+      : `${proto}://${hostNoPort}/profile/card.jsonld#me`;
   }
 
   // Subdomain mode (request already on a pod's subdomain).
@@ -398,10 +403,13 @@ function getPodOwnerWebId(request) {
     return null;
   }
 
-  // Path mode (JSS default): pod is the first URL segment.
+  // Path mode (JSS default): pod is the first URL segment. Match
+  // src/handlers/container.js which builds path-mode WebIDs from
+  // `request.hostname` (port-stripped), so the computed ownerWebId
+  // equals the @id JSS itself wrote at pod-creation time.
   const m = (request.url || '').match(/^\/([^/?#]+)/);
   if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
-    return `${proto}://${hostRaw}/${m[1]}/profile/card.jsonld#me`;
+    return `${proto}://${hostNoPort}/${m[1]}/profile/card.jsonld#me`;
   }
   return null;
 }
