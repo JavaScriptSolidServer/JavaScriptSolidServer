@@ -153,7 +153,7 @@ async function fetchCidDocumentNoCache(docUrl, opts = {}) {
 
     const declared = Number(res.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new Error(`CID document too large (Content-Length=${declared})`);
+      throw new Error(`CID document too large (Content-Length=${declared} > ${maxBytes})`);
     }
     const text = await readBodyWithCap(res, maxBytes);
     return JSON.parse(text);

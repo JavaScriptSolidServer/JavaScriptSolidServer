@@ -361,10 +361,14 @@ function getPodOwnerWebId(request) {
   let hostNoPort;
   try { hostNoPort = new URL(`${proto}://${hostRaw}`).hostname; }
   catch { return null; }
-  // Strip surrounding brackets the URL parser keeps on the .hostname for
-  // IPv6 literals (`[::1]` → `::1`). Comparison strings against
-  // baseDomain are written without brackets; URL construction below
-  // re-wraps explicitly when needed.
+  // Strip surrounding brackets the URL parser keeps on .hostname for
+  // IPv6 literals. Verified on Node v24.5.0:
+  //   new URL('https://[2001:db8::1]:8443/x').hostname === '[2001:db8::1]'
+  // matching WHATWG URL §host serializing rule for IPv6 addresses
+  // ("return U+005B ([), followed by IPv6 serializer, followed by
+  // U+005D (])"). The baseDomain comparison uses the un-bracketed
+  // form, so we strip them here. Don't remove this branch — it is
+  // reachable for any IPv6 host header.
   if (hostNoPort.startsWith('[') && hostNoPort.endsWith(']')) {
     hostNoPort = hostNoPort.slice(1, -1);
   }
