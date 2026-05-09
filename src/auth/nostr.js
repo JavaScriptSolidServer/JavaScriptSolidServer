@@ -190,7 +190,7 @@ export async function verifyNostrAuth(request) {
   const protoLower = protoRaw.toLowerCase();
   const protocol = (protoLower === 'http' || protoLower === 'https') ? protoLower : 'http';
   const host = firstHeaderValue(request.headers['x-forwarded-host'])
-            || request.headers.host
+            || firstHeaderValue(request.headers.host)
             || request.hostname;
   const fullUrl = `${protocol}://${host}${request.url}`;
 
