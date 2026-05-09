@@ -24,10 +24,11 @@ import {
   handleCredentialsInfo,
   handleChangePassword,
   handleDeleteAccount,
+  handleAccountDeleteForm,
 } from './credentials.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
-import { landingPage } from './views.js';
+import { landingPage, accountDeletePage } from './views.js';
 
 /**
  * IdP Fastify Plugin
@@ -293,6 +294,27 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleDeleteAccount(request, reply, { singleUser });
+  });
+
+  // GET account-delete form (#392) - human-friendly UI for #352. Public
+  // unauthenticated page; auth happens at form submission via password.
+  fastify.get('/idp/account/delete', async (request, reply) => {
+    return reply.type('text/html').send(accountDeletePage({ singleUser }));
+  });
+
+  // POST account-delete form (#392) - processes the form submission.
+  // Same rate-limit as the JSON endpoint to keep the destructive-action
+  // surface consistent across both paths.
+  fastify.post('/idp/account/delete', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleAccountDeleteForm(request, reply, { singleUser });
   });
 
   // Interaction routes (our custom login/consent UI)

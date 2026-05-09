@@ -10,6 +10,7 @@ import path from 'path';
 import { authenticate, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
+import { accountDeletePage } from './views.js';
 
 /**
  * Handle POST /idp/credentials
@@ -414,6 +415,121 @@ export async function handleDeleteAccount(request, reply, options = {}) {
     webid: account.webId,
     purged,
   };
+}
+
+/**
+ * Internal: delete an account record + optional pod-data purge.
+ * Shared between the JSON endpoint (handleDeleteAccount) and the
+ * form-driven endpoint (handleAccountDeletePost in #392).
+ *
+ * Best-effort purge — fs.remove can throw, but the account is already
+ * gone and we want a clean signal rather than a 500. Path is derived
+ * from account.podName (NOT username, which createAccount lowercases —
+ * pod dir on disk is original case, see #391 pass 2). Belt-and-
+ * suspenders path-relative check rejects ../traversal and works at FS
+ * roots (see #391 pass 3).
+ *
+ * @param {object} request - Fastify request, used only for log access
+ * @param {object} account - Account record (with username, podName, webId)
+ * @param {boolean} purgeData - If true, also remove the pod's filesystem tree
+ * @returns {Promise<{purged: boolean}>}
+ */
+async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
+  await deleteAccount(account.id);
+
+  let purged = false;
+  if (purgeData) {
+    const dataRoot = process.env.DATA_ROOT || './data';
+    const candidate = path.resolve(dataRoot, account.podName || account.username);
+    const root = path.resolve(dataRoot);
+    const rel = path.relative(root, candidate);
+    const isProperChild = rel && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    if (isProperChild) {
+      try {
+        await fs.remove(candidate);
+        purged = true;
+      } catch (err) {
+        request.log.error({ err, path: candidate, username: account.username },
+          'Pod data purge failed after account deletion');
+      }
+    }
+  }
+  return { purged };
+}
+
+/**
+ * Handle POST /idp/account/delete (#392) — form-driven account deletion.
+ *
+ * Public unauthenticated endpoint that takes a form-encoded body with
+ * username + currentPassword + confirmUsername (+ optional purgeData
+ * checkbox). Authenticates the user via password directly (no Bearer
+ * token round-trip required), validates the destructive-action UX
+ * guard, then calls into the same deleteAccount logic as the JSON
+ * endpoint. Returns HTML — success page on completion, redirect back
+ * to the GET form with an error message on failure.
+ *
+ * Single-user mode: redirects to GET which renders the disabled
+ * message instead of the form. Same policy as the JSON endpoint.
+ *
+ * @param {object} request - Fastify request
+ * @param {object} reply - Fastify reply
+ * @param {object} options
+ * @param {boolean} [options.singleUser] - Single-user mode flag
+ */
+export async function handleAccountDeleteForm(request, reply, options = {}) {
+  if (options.singleUser) {
+    return reply.type('text/html').send(accountDeletePage({ singleUser: true }));
+  }
+
+  // Parse form-encoded body. Fastify with @fastify/formbody (registered
+  // for /idp/register etc.) puts fields directly on request.body.
+  let body = request.body;
+  if (Buffer.isBuffer(body)) body = body.toString('utf-8');
+  if (typeof body === 'string') {
+    // Manual urlencoded parse fallback if formbody isn't registered for
+    // this content-type on this route.
+    try {
+      const params = new URLSearchParams(body);
+      body = Object.fromEntries(params);
+    } catch { body = {}; }
+  }
+
+  const username = (body?.username || '').trim();
+  const currentPassword = body?.currentPassword || '';
+  const confirmUsername = (body?.confirmUsername || '').trim();
+  const purgeData = body?.purgeData === 'on' || body?.purgeData === true;
+
+  if (!username || !currentPassword || !confirmUsername) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'All fields are required.',
+      username,
+    }));
+  }
+
+  // Destructive-action UX guard: typed username must match. Compare
+  // case-sensitively against the *typed* form value, not the resolved
+  // account — the user shouldn't be able to typo their way to a delete
+  // that hits a different (lowercased) record.
+  if (username !== confirmUsername) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'Confirmation does not match the username you entered.',
+      username,
+    }));
+  }
+
+  // Authenticate. authenticate() looks up by username then by email,
+  // verifies bcrypt, and returns the account (sans password hash) or null.
+  const account = await authenticate(username, currentPassword);
+  if (!account) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'Username or password is incorrect.',
+      username,
+    }));
+  }
+
+  await deleteAccountAndOptionallyPurge(request, account, purgeData);
+
+  return reply.type('text/html').send(accountDeletePage({ success: true }));
 }
 
 /**
