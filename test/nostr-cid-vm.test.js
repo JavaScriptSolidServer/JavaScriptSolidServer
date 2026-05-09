@@ -183,6 +183,27 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, WEBID);
   });
 
+  it("rejects when CID document's subject differs from computed owner WebID", async () => {
+    // Profile sits at the expected docUrl but declares a DIFFERENT
+    // @id. Without the subject check, this would let an attacker
+    // host a card.jsonld whose @id is "...#bob" + a Nostr VM under
+    // bob's name, and trick us into authenticating as bob when the
+    // request URL says alice.
+    nextProfile = {
+      ...buildProfile({ pubkey: pk }),
+      '@id': `${DOC_URL}#bob`,
+      controller: `${DOC_URL}#bob`,
+    };
+    const url = `https://${POD_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url });
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    // Falls back to did:nostr — VM lookup refused due to subject mismatch.
+    assert.strictEqual(r.webId, `did:nostr:${pk}`);
+  });
+
   it('rejects a JWK with the right x but wrong y (curve-point integrity)', async () => {
     const goodJwk = evenYJwk(pk);
     // Flip the y to invalid — same x, different y → not on canonical

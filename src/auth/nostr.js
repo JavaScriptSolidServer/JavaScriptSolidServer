@@ -297,15 +297,21 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
   }
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return null;
 
+  // Subject-identity check (mirrors lws-cid.js). The CID document we
+  // just fetched MUST identify itself as the WebID we computed from
+  // the request — otherwise a profile hosted at the expected URL
+  // could declare a different `@id` and trick us into authenticating
+  // as that other identity using a sibling VM. We always return the
+  // computed ownerWebId (never the profile's declared subject) so a
+  // relative-IRI or mismatched `@id` can't substitute identity.
+  const subject = absolutize(profile['@id'] || profile.id, docUrl);
+  if (!subject || subject !== ownerWebId) return null;
+
   const vm = findNostrVmInProfile(profile, pubkeyHex, docUrl);
   if (!vm) return null;
   if (!isInProofPurpose(profile, 'authentication', vm.id, docUrl)) return null;
 
-  // Use the profile's declared subject as the authenticated identity
-  // (with @id fallback). Absolutize so a relative @id resolves.
-  const subject = profile['@id'] || profile.id;
-  if (!subject) return null;
-  return absolutize(subject, docUrl);
+  return ownerWebId;
 }
 
 /**
