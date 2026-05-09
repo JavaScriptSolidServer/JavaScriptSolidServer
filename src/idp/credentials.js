@@ -280,7 +280,8 @@ export async function handleChangePassword(request, reply) {
  * Owner-initiated account deletion. Authenticated caller proves
  * possession via re-entering currentPassword (matches the
  * password-rotation pattern in #351). Optional `purgeData: true` also
- * removes the pod's filesystem tree at <dataRoot>/<username>/.
+ * removes the pod's filesystem tree at `<dataRoot>/<podName>/` (falling
+ * back to `<username>` only if podName is absent on the account record).
  *
  * Failure modes:
  *   401 — unauthenticated, or wrong currentPassword
