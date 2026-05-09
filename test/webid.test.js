@@ -47,6 +47,53 @@ describe('WebID Profile', () => {
       assert.ok(jsonLd['@id'], 'Should have @id');
     });
 
+    // LWS-CID document conformance, Phase A of #386. The profile must be
+    // structurally a W3C Controlled Identifier document so a future
+    // PATCH-in-keys app (or server migration) can drop verificationMethod
+    // entries in without further plumbing. CID v1 vocabulary is declared
+    // inline rather than via context URL so JSS's conneg layer can
+    // expand every term without fetching external contexts — the IRIs
+    // are the same either way.
+    it('declares all six CID v1 terms in @context (#386 Phase A)', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      const ctx = jsonLd['@context'];
+      assert.ok(ctx, '@context required');
+
+      // All six CID terms must be declared and expand to the CID v1
+      // namespace. Accept either prefixed (cid:term) or full-URI
+      // (https://www.w3.org/ns/cid/v1#term) form.
+      const cidTerms = ['controller', 'verificationMethod', 'authentication', 'assertionMethod', 'publicKeyJwk', 'publicKeyMultibase'];
+      for (const term of cidTerms) {
+        const mapping = ctx[term];
+        assert.ok(mapping, `@context must define \`${term}\``);
+        const id = typeof mapping === 'string' ? mapping : mapping['@id'];
+        assert.match(id, new RegExp(`^(cid:${term}|https://www\\.w3\\.org/ns/cid/v1#${term})$`),
+          `${term} must map to the CID v1 namespace`);
+      }
+
+      // Container/type flags Phase B relies on:
+      // verificationMethod values are inline objects, NOT IRIs — must
+      //   NOT have @type:@id (would force string-only) and SHOULD have
+      //   @container:@set so a single entry is still an array.
+      assert.notStrictEqual(ctx.verificationMethod['@type'], '@id',
+        'verificationMethod values are objects, not IRIs');
+      assert.strictEqual(ctx.verificationMethod['@container'], '@set');
+      // authentication / assertionMethod reference verificationMethod
+      // entries by IRI, so @type:@id is correct.
+      assert.strictEqual(ctx.authentication['@type'], '@id');
+      assert.strictEqual(ctx.assertionMethod['@type'], '@id');
+      // JWK is a literal JSON value (rdf:JSON datatype) per JSON-LD 1.1.
+      assert.strictEqual(ctx.publicKeyJwk['@type'], '@json');
+    });
+
+    it('declares self-control via controller === @id (#386 Phase A)', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      assert.strictEqual(jsonLd.controller, jsonLd['@id'],
+        'profile must declare itself as its own controller per CID v1');
+    });
+
     it('should have correct WebID URI', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();

@@ -31,6 +31,12 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
   const docUrl = webId.split('#')[0];
 
   return {
+    // CID v1 vocabulary is declared inline (rather than via an imported
+    // context URL) so JSS's JSON-LD → Turtle conneg layer can expand
+    // every term without fetching external contexts. Semantically
+    // equivalent to importing https://www.w3.org/ns/cid/v1: the IRIs
+    // each term expands to are the same. This keeps the profile a valid
+    // W3C Controlled Identifier document per LWS 1.0 (#386 Phase A).
     '@context': {
       'foaf': FOAF,
       'solid': SOLID,
@@ -48,13 +54,39 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'isPrimaryTopicOf': { '@id': 'foaf:isPrimaryTopicOf', '@type': '@id' },
       'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' },
       'service': { '@id': 'cid:service', '@container': '@set' },
-      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' }
+      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' },
+      // CID v1 terms used by Phase A and prepped for Phase B (the
+      // standalone "add my keys" app). Declaring these now means the
+      // app can PATCH in verificationMethod entries without having to
+      // also rewrite the @context.
+      //
+      // verificationMethod: NO @type:@id — values are inline verification
+      //   method *objects* (id/type/controller/publicKey…), not just IRI
+      //   references. @container:@set so a single entry stays an array.
+      // authentication / assertionMethod: @type:@id — values reference a
+      //   verificationMethod entry by its IRI. @container:@set for arrays.
+      // publicKeyJwk: @type:@json so the JWK object round-trips as a
+      //   literal JSON value (rdf:JSON datatype). Note: JSS's Turtle
+      //   conneg layer doesn't yet emit @type:@json literals (tracked as
+      //   a Phase B blocker in the PR description); declaring here is
+      //   forward-looking and spec-correct.
+      'controller':         { '@id': 'cid:controller', '@type': '@id' },
+      'verificationMethod': { '@id': 'cid:verificationMethod', '@container': '@set' },
+      'authentication':     { '@id': 'cid:authentication', '@type': '@id', '@container': '@set' },
+      'assertionMethod':    { '@id': 'cid:assertionMethod', '@type': '@id', '@container': '@set' },
+      'publicKeyJwk':       { '@id': 'cid:publicKeyJwk', '@type': '@json' },
+      'publicKeyMultibase': { '@id': 'cid:publicKeyMultibase' }
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
     'foaf:name': name,
     'isPrimaryTopicOf': '',
     'mainEntityOfPage': '',
+    // CID v1 self-control: the WebID is its own controller. Phase A of
+    // #386 ships this triple even with no verificationMethods yet, so a
+    // future Phase B "add-keys" app PATCHing in verificationMethod
+    // entries doesn't have to also wire up controllership separately.
+    'controller': webId,
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,
