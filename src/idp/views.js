@@ -381,12 +381,21 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true, sc
         // Sign with NIP-07 extension
         const signedEvent = await window.nostr.signEvent(event);
 
+        // Read the typed username so the server can resolve which
+        // account this Nostr key belongs to, in case the existing
+        // did:nostr DID-doc resolver doesn't have a binding yet.
+        // The signature is verified BEFORE the username is consulted —
+        // typing someone else's username doesn't grant access.
+        const typedUsername = (document.getElementById('username')?.value || '').trim();
+
         // Send to server
         const response = await fetch(authUrl, {
           method: 'POST',
           headers: {
-            'Authorization': 'Nostr ' + btoa(JSON.stringify(signedEvent))
-          }
+            'Authorization': 'Nostr ' + btoa(JSON.stringify(signedEvent)),
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: typedUsername ? 'username=' + encodeURIComponent(typedUsername) : ''
         });
 
         const result = await response.json();
