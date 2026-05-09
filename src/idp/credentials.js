@@ -5,7 +5,9 @@
 
 import * as jose from 'jose';
 import crypto from 'crypto';
-import { authenticate, findByWebId, updatePassword, verifyPassword } from './accounts.js';
+import fs from 'fs-extra';
+import path from 'path';
+import { authenticate, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 
@@ -269,6 +271,119 @@ export async function handleChangePassword(request, reply) {
     ok: true,
     webid: account.webId,
     passwordChangedAt: updated?.passwordChangedAt,
+  };
+}
+
+/**
+ * Handle DELETE /idp/account (#352)
+ *
+ * Owner-initiated account deletion. Authenticated caller proves
+ * possession via re-entering currentPassword (matches the
+ * password-rotation pattern in #351). Optional `purgeData: true` also
+ * removes the pod's filesystem tree at <dataRoot>/<username>/.
+ *
+ * Failure modes:
+ *   401 — unauthenticated, or wrong currentPassword
+ *   400 — invalid request body / missing password
+ *   403 — single-user mode (deletion would brick the server until
+ *         re-seed; operator should use the CLI), or no account for the
+ *         caller's WebID
+ *   404 — no account at all (already deleted)
+ *
+ * Out of scope: invalidating in-flight access tokens. Tokens reference
+ * the WebID; once the account record is gone, follow-up auth attempts
+ * fail at findByWebId(). Existing bearer tokens that don't round-trip
+ * through findByWebId() will appear valid until they expire — same
+ * shape as the password-change endpoint.
+ *
+ * @param {object} request - Fastify request
+ * @param {object} reply - Fastify reply
+ * @param {object} options
+ * @param {boolean} [options.singleUser] - When true, the endpoint
+ *   refuses (deletion would leave the server with no IDP account).
+ */
+export async function handleDeleteAccount(request, reply, options = {}) {
+  // Single-user mode: deletion via HTTP is blocked. The single-user
+  // pod has exactly one account; deleting it bricks the server until
+  // re-seed. The CLI (`jss account delete`) stays available for the
+  // operator who has filesystem access.
+  if (options.singleUser) {
+    return reply.code(403).send({
+      error: 'forbidden',
+      error_description: 'Account deletion via HTTP is disabled in single-user mode. Use the `jss account delete` CLI on the server.',
+    });
+  }
+
+  // 1. Authenticate caller
+  const { webId, error: authError } = await getWebIdFromRequestAsync(request);
+  if (!webId) {
+    return reply.code(401).send({
+      error: 'invalid_token',
+      error_description: authError || 'Authentication required',
+    });
+  }
+
+  // 2. Parse body — same flexible shape as handleChangePassword
+  let body = request.body;
+  if (Buffer.isBuffer(body)) body = body.toString('utf-8');
+  if (typeof body === 'string') {
+    try { body = JSON.parse(body); } catch { body = {}; }
+  }
+  const currentPassword = body?.currentPassword;
+  const purgeData = body?.purgeData === true;
+
+  if (typeof currentPassword !== 'string' || !currentPassword) {
+    return reply.code(400).send({
+      error: 'invalid_request',
+      error_description: 'currentPassword is required (string)',
+    });
+  }
+
+  // 3. Resolve account from caller's WebID
+  const account = await findByWebId(webId);
+  if (!account) {
+    return reply.code(403).send({
+      error: 'forbidden',
+      error_description: 'No account found for authenticated WebID',
+    });
+  }
+
+  // 4. Verify currentPassword (re-auth proof)
+  if (!(await verifyPassword(account, currentPassword))) {
+    return reply.code(401).send({
+      error: 'invalid_grant',
+      error_description: 'Current password is incorrect',
+    });
+  }
+
+  // 5. Delete the account record + indexes
+  await deleteAccount(account.id);
+
+  // 6. Optionally purge the pod's filesystem data. Mirrors the CLI
+  // `--purge` semantics. The path is <dataRoot>/<username>/, with
+  // username already validated at registration (#321 alphanum/dash/dot
+  // rules) so no traversal risk in practice; defensive normalize
+  // anyway.
+  let purgedPath = null;
+  if (purgeData) {
+    const dataRoot = process.env.DATA_ROOT || './data';
+    const candidate = path.resolve(dataRoot, account.username);
+    const root = path.resolve(dataRoot);
+    // Belt-and-suspenders: refuse to remove anything that isn't a
+    // proper child of the data root. Won't trigger on registered
+    // usernames; protects against config drift / future bugs.
+    if (candidate.startsWith(root + path.sep) && candidate !== root) {
+      await fs.remove(candidate);
+      purgedPath = candidate;
+    }
+  }
+
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  return {
+    ok: true,
+    webid: account.webId,
+    purged: purgedPath !== null,
   };
 }
 

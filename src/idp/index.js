@@ -23,6 +23,7 @@ import {
   handleCredentials,
   handleCredentialsInfo,
   handleChangePassword,
+  handleDeleteAccount,
 } from './credentials.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
@@ -277,6 +278,21 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleChangePassword(request, reply);
+  });
+
+  // DELETE account - authenticated owner deletes their own account (#352).
+  // Single-user mode is rejected at the handler (deletion would leave the
+  // server with no IDP account until re-seed; CLI is the operator path).
+  fastify.delete('/idp/account', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleDeleteAccount(request, reply, { singleUser });
   });
 
   // Interaction routes (our custom login/consent UI)
