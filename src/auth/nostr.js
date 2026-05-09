@@ -192,6 +192,15 @@ export async function verifyNostrAuth(request) {
   const host = firstHeaderValue(request.headers['x-forwarded-host'])
             || firstHeaderValue(request.headers.host)
             || request.hostname;
+  // Reject URL-meaningful characters in the host before interpolation
+  // — same defense as in getPodOwnerWebId. Otherwise a Host like
+  // `example.com@attacker.com` would produce a fullUrl that parses
+  // with attacker.com as the hostname, which a sophisticated client
+  // could try to align with a NIP-98 `u` tag for an external
+  // resource.
+  if (host && /[@/\s?#\\]/.test(host)) {
+    return { webId: null, error: 'Host header contains invalid characters' };
+  }
   const fullUrl = `${protocol}://${host}${request.url}`;
 
   // Validate URL tag matches request URL
@@ -396,6 +405,14 @@ function getPodOwnerWebId(request) {
                 || firstHeaderValue(headers.host)
                 || request.hostname;
   if (!hostRaw) return null;
+  // Reject host strings that carry URL-special characters before we
+  // hand them to the URL parser. Without this, a Host like
+  // `example.com@attacker.com` would parse as userinfo + attacker.com
+  // and steer the computed owner WebID at the attacker's domain.
+  // A well-formed Host header carries hostname[:port][[]] only —
+  // reject any other URL-meaningful character (`@`, `/`, `?`, `#`,
+  // whitespace, query/fragment delimiters).
+  if (/[@/\s?#\\]/.test(hostRaw)) return null;
   // `request.hostname` is port-stripped per Fastify but doesn't survive
   // x-forwarded-host parsing. Round-trip through URL semantics so
   // IPv6 brackets and ports are handled by the parser, not split(':').

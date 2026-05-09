@@ -449,6 +449,20 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, `did:nostr:${pk}`);
   });
 
+  it('rejects malformed Host header (URL-injection defense)', async () => {
+    // Host carries `@` which would steer the computed owner WebID at
+    // attacker.com if we naively passed it through new URL().
+    const url = `https://${POD_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url });
+    req.headers.authorization = authHeader;
+    req.headers.host = `${POD_HOST}@attacker.example`;
+
+    const r = await verifyNostrAuth(req);
+    // The URL match runs first and rejects on the malformed host.
+    assert.match(r.error, /invalid characters/);
+  });
+
   it('lowercases x-forwarded-proto so HTTPS still matches profile @id', async () => {
     // Some proxies send `X-Forwarded-Proto: HTTPS` (uppercase). The
     // computed WebID must use the lowercase form so the subject-identity
