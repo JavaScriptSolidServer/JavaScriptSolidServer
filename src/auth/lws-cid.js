@@ -44,8 +44,13 @@ const ACCEPTED_ALGS = new Set(['ES256K', 'ES256', 'ES384', 'EdDSA', 'RS256']);
 
 // Maximum age for the iat (issued-at) claim, in seconds. JWT-as-HTTP-auth
 // tokens are expected to be freshly minted; rejecting stale ones limits
-// replay if an exp claim is sloppy or absent.
+// replay damage.
 const MAX_IAT_AGE = 600; // 10 minutes
+
+// Maximum allowed token lifetime (exp − iat). Auth tokens are short-lived
+// by design; arbitrarily long-lived JWTs widen the replay window if a
+// signed token leaks.
+const MAX_LIFETIME = 3600; // 1 hour
 
 // Clock skew tolerance for exp/nbf checks (seconds).
 const CLOCK_SKEW = 60;
@@ -157,35 +162,42 @@ export async function verifyLwsCidAuth(request) {
 
   // Time-claim validation. The ES256K branch below skips jose.jwtVerify
   // and relies on these checks alone, so each claim's TYPE matters as
-  // much as its value — `exp: "9999999999"` (string) must NOT be silently
-  // accepted as a number. Per FPWD §4, exp and iat are both required;
-  // nbf is optional but enforced when present.
-  if (exp !== undefined && typeof exp !== 'number') {
-    return { webId: null, error: 'JWT exp claim must be a number' };
+  // much as its value — `exp: "9999999999"` (string) must NOT be
+  // silently accepted as a number.
+  //
+  // Per FPWD §4, both iat and exp are MUST; nbf is optional but enforced
+  // when present. We additionally cap the lifetime (exp − iat) to bound
+  // the replay window if a signed token leaks.
+  if (typeof exp !== 'number') {
+    return { webId: null, error: 'JWT exp claim is required and must be a number' };
   }
-  if (iat !== undefined && typeof iat !== 'number') {
-    return { webId: null, error: 'JWT iat claim must be a number' };
+  if (typeof iat !== 'number') {
+    return { webId: null, error: 'JWT iat claim is required and must be a number' };
   }
   if (nbf !== undefined && typeof nbf !== 'number') {
     return { webId: null, error: 'JWT nbf claim must be a number' };
   }
-  if (typeof iat !== 'number' && typeof exp !== 'number') {
-    return { webId: null, error: 'JWT missing both iat and exp' };
-  }
   const now = Math.floor(Date.now() / 1000);
-  if (typeof exp === 'number' && now > exp + CLOCK_SKEW) {
+  if (now > exp + CLOCK_SKEW) {
     return { webId: null, error: 'JWT expired' };
   }
   if (typeof nbf === 'number' && now + CLOCK_SKEW < nbf) {
     return { webId: null, error: 'JWT not yet valid (nbf in the future)' };
   }
-  if (typeof iat === 'number') {
-    if (now - iat > MAX_IAT_AGE + CLOCK_SKEW) {
-      return { webId: null, error: 'JWT iat too old' };
-    }
-    if (iat - now > CLOCK_SKEW) {
-      return { webId: null, error: 'JWT iat is in the future' };
-    }
+  if (now - iat > MAX_IAT_AGE + CLOCK_SKEW) {
+    return { webId: null, error: 'JWT iat too old' };
+  }
+  if (iat - now > CLOCK_SKEW) {
+    return { webId: null, error: 'JWT iat is in the future' };
+  }
+  if (exp - iat > MAX_LIFETIME) {
+    return {
+      webId: null,
+      error: `JWT lifetime exceeds maximum (${exp - iat}s > ${MAX_LIFETIME}s)`,
+    };
+  }
+  if (exp <= iat) {
+    return { webId: null, error: 'JWT exp must be after iat' };
   }
 
   // Audience check — `aud` is required (FPWD §4: "the aud claim MUST
@@ -227,7 +239,7 @@ export async function verifyLwsCidAuth(request) {
 
   // VM must be referenced by `authentication` to be usable as an auth
   // credential. (CID 1.0 §3.3)
-  if (!isInProofPurpose(profile, 'authentication', vm, header.kid, webIdDoc)) {
+  if (!isInProofPurpose(profile, 'authentication', header.kid, webIdDoc)) {
     return {
       webId: null,
       error: `verificationMethod ${header.kid} is not listed in authentication`,
@@ -359,7 +371,10 @@ async function fetchProfile(docUrl) {
  */
 async function fetchProfileNoCache(docUrl) {
   let currentUrl = docUrl;
+  // Hop 0 is the original request; up to MAX_REDIRECTS subsequent
+  // redirects are followed, after which we throw.
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const isLastAllowedHop = hop === MAX_REDIRECTS;
     const validation = await validateExternalUrl(currentUrl, {
       // Allow http on dev only — production deploys should always be https.
       requireHttps: process.env.NODE_ENV === 'production',
@@ -385,6 +400,9 @@ async function fetchProfileNoCache(docUrl) {
 
     // Manual redirect handling — re-validate every Location.
     if (res.status >= 300 && res.status < 400) {
+      if (isLastAllowedHop) {
+        throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+      }
       const loc = res.headers.get('location');
       if (!loc) throw new Error(`redirect ${res.status} without Location`);
       currentUrl = new URL(loc, currentUrl).toString();
@@ -397,7 +415,8 @@ async function fetchProfileNoCache(docUrl) {
     const text = await res.text();
     return JSON.parse(text);
   }
-  throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+  // Loop exited without returning or redirecting — defensive fallback.
+  throw new Error('profile fetch loop exited unexpectedly');
 }
 
 function findVerificationMethod(profile, kid, baseUrl) {
@@ -411,7 +430,7 @@ function findVerificationMethod(profile, kid, baseUrl) {
   return null;
 }
 
-function isInProofPurpose(profile, predicate, vm, kid, baseUrl) {
+function isInProofPurpose(profile, predicate, kid, baseUrl) {
   const entries = asArray(profile[predicate]);
   if (entries.length === 0) return false;
   for (const ent of entries) {

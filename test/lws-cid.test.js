@@ -258,7 +258,7 @@ describe('verifyLwsCidAuth', () => {
       payload: claims(now, { exp: '9999999999' }),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
-    assert.match(r.error, /exp claim must be a number/);
+    assert.match(r.error, /exp claim/);
   });
 
   it('rejects non-numeric iat', async () => {
@@ -269,7 +269,51 @@ describe('verifyLwsCidAuth', () => {
       payload: claims(now, { iat: 'right-now' }),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
-    assert.match(r.error, /iat claim must be a number/);
+    assert.match(r.error, /iat claim/);
+  });
+
+  it('rejects missing exp', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { exp: undefined }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /exp claim is required/);
+  });
+
+  it('rejects missing iat', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: undefined }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /iat claim is required/);
+  });
+
+  it('rejects lifetime > 1 hour (replay window cap)', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: now, exp: now + 7200 }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /lifetime exceeds maximum/);
+  });
+
+  it('rejects exp <= iat', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: now, exp: now }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /exp must be after iat/);
   });
 
   it('rejects missing aud', async () => {
