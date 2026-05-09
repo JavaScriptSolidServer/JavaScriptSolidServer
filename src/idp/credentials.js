@@ -376,7 +376,7 @@ export async function handleDeleteAccount(request, reply, options = {}) {
 /**
  * Internal: delete an account record + optional pod-data purge.
  * Shared between the JSON endpoint (handleDeleteAccount) and the
- * form-driven endpoint (handleAccountDeletePost in #392).
+ * form-driven endpoint (handleAccountDeleteForm in #392).
  *
  * Best-effort purge — fs.remove can throw, but the account is already
  * gone and we want a clean signal rather than a 500. Path is derived

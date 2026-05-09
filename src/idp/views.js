@@ -538,17 +538,25 @@ export function consentPage(uid, client, params, account) {
  *
  * Public unauthenticated page (matches the existing /idp landing and
  * /idp/register pattern). Auth happens at submission time: the user
- * supplies username + password, which the server validates and uses as
- * proof-of-possession for the delete. The "type your username to
- * confirm" field is the destructive-action UX guard.
+ * supplies an identifier (username or email) + password, which the
+ * server validates and uses as proof-of-possession for the delete.
+ * The "type your identifier to confirm" field is the destructive-action
+ * UX guard.
+ *
+ * On any failure (wrong password, mismatched confirmation, etc.) the
+ * handler re-renders this same form in place at status 200 with an
+ * error message and the identifier field pre-filled — no redirect.
  *
  * @param {object} opts
  * @param {string|null} opts.error - Error message (e.g. wrong password) to display
- * @param {string|null} opts.username - Pre-fill on redirect-back-with-error
+ * @param {string} opts.username - Pre-fill the identifier field on re-render after error
  * @param {boolean} opts.singleUser - When true, render a disabled message
  *   instead of the form. Deletion via HTTP is blocked in single-user mode
  *   (would brick the IdP until re-seed); operator path stays the CLI.
  * @param {boolean} opts.success - When true, render the post-delete confirmation
+ * @param {boolean} opts.purgeFailed - When true (only on success), include a
+ *   notice that the user requested a pod-data purge but it didn't complete.
+ *   Account deletion still succeeded.
  */
 export function accountDeletePage({ error = null, username = '', singleUser = false, success = false, purgeFailed = false } = {}) {
   if (singleUser) {
@@ -676,10 +684,10 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
     <form method="POST" action="/idp/account/delete">
-      <label for="username">Username or email</label>
+      <label for="username">Username</label>
       <input type="text" id="username" name="username" required autofocus
              value="${escapeHtml(username || '')}"
-             placeholder="alice or alice@example.com">
+             placeholder="alice">
 
       <label for="currentPassword">Current password</label>
       <input type="password" id="currentPassword" name="currentPassword" required
