@@ -10,7 +10,8 @@ import { describe, it, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
-import { hasLwsCidAuth, verifyLwsCidAuth } from '../src/auth/lws-cid.js';
+import * as jose from 'jose';
+import { hasLwsCidAuth, verifyLwsCidAuth, _clearProfileCacheForTests } from '../src/auth/lws-cid.js';
 
 // --- helpers ---------------------------------------------------------
 
@@ -40,7 +41,7 @@ function makeJwt({ privKey, header, payload }) {
   return `${h64}.${p64}.${b64u(sig.toCompactRawBytes())}`;
 }
 
-function makeRequest(token, { host = 'pod.example', proto = 'https' } = {}) {
+function makeRequest(token, { host = 'example.com', proto = 'https' } = {}) {
   return {
     headers: {
       authorization: `Bearer ${token}`,
@@ -50,10 +51,10 @@ function makeRequest(token, { host = 'pod.example', proto = 'https' } = {}) {
   };
 }
 
-const WEBID = 'https://pod.example/profile/card.jsonld#me';
-const DOC_URL = 'https://pod.example/profile/card.jsonld';
+const WEBID = 'https://example.com/profile/card.jsonld#me';
+const DOC_URL = 'https://example.com/profile/card.jsonld';
 const VM_ID = `${DOC_URL}#nostr-key-1`;
-const POD_ORIGIN = 'https://pod.example';
+const POD_ORIGIN = 'https://example.com';
 
 // Minimal CID-shaped profile.
 function buildProfile(jwk, { withAuthRef = true, controller = WEBID } = {}) {
@@ -139,6 +140,10 @@ describe('hasLwsCidAuth', () => {
 describe('verifyLwsCidAuth', () => {
   let priv;
   let jwk;
+  // Default valid claims — tests can override per-case.
+  function claims(now = Math.floor(Date.now() / 1000), extra = {}) {
+    return { sub: WEBID, iss: WEBID, client_id: WEBID, aud: [POD_ORIGIN], iat: now, exp: now + 60, ...extra };
+  }
 
   before(() => {
     installFetchStub();
@@ -153,17 +158,16 @@ describe('verifyLwsCidAuth', () => {
     jwk = jwkFromSecp256k1(priv);
     nextStatus = 200;
     nextProfile = buildProfile(jwk);
+    // Cache must not survive between tests; otherwise nextProfile
+    // changes are masked by a stale hit on DOC_URL.
+    _clearProfileCacheForTests();
   });
 
   it('verifies a valid ES256K JWT against a CID-shaped profile', async () => {
-    const now = Math.floor(Date.now() / 1000);
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID, typ: 'JWT' },
-      payload: {
-        sub: WEBID, iss: WEBID, client_id: WEBID,
-        aud: [POD_ORIGIN], iat: now, exp: now + 60,
-      },
+      payload: claims(),
     });
     const result = await verifyLwsCidAuth(makeRequest(token));
     assert.strictEqual(result.error, null);
@@ -174,7 +178,7 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'none', kid: VM_ID, typ: 'JWT' },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, iat: Math.floor(Date.now()/1000) },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.strictEqual(r.webId, null);
@@ -185,10 +189,7 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: {
-        sub: WEBID, iss: 'https://other/#me', client_id: WEBID,
-        iat: Math.floor(Date.now()/1000),
-      },
+      payload: claims(undefined, { iss: 'https://other.example/profile#me' }),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /sub.*iss.*client_id/);
@@ -199,7 +200,7 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: otherKid },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, iat: Math.floor(Date.now()/1000) },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /not in the subject/);
@@ -210,13 +211,76 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: {
-        sub: WEBID, iss: WEBID, client_id: WEBID,
-        aud: [POD_ORIGIN], iat: past - 60, exp: past,
-      },
+      payload: claims(past, { iat: past - 60, exp: past }),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /expired/);
+  });
+
+  it('rejects nbf in the future', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { nbf: now + 600 }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /not yet valid/);
+  });
+
+  it('rejects iat too far in the future', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: now + 600, exp: now + 1200 }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /iat is in the future/);
+  });
+
+  it('rejects iat too old', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: now - 7200, exp: now + 60 }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /iat too old/);
+  });
+
+  it('rejects non-numeric exp', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { exp: '9999999999' }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /exp claim must be a number/);
+  });
+
+  it('rejects non-numeric iat', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { iat: 'right-now' }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /iat claim must be a number/);
+  });
+
+  it('rejects missing aud', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(now, { aud: undefined }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /aud claim is required/);
   });
 
   it('rejects when kid does not match any VM in the profile', async () => {
@@ -224,7 +288,7 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: ghostKid },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, iat: Math.floor(Date.now()/1000) },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /no verificationMethod/);
@@ -235,7 +299,7 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, iat: Math.floor(Date.now()/1000) },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /not listed in authentication/);
@@ -245,23 +309,38 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: {
-        sub: WEBID, iss: WEBID, client_id: WEBID,
-        aud: ['https://elsewhere/'], iat: Math.floor(Date.now()/1000),
-      },
+      payload: claims(undefined, { aud: ['https://elsewhere.example/'] }),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /aud.*does not include/);
   });
 
+  it('honors x-forwarded-proto/host for aud check (behind reverse proxy)', async () => {
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(undefined, { aud: ['https://public.example'] }),
+    });
+    const req = {
+      headers: {
+        authorization: `Bearer ${token}`,
+        host: 'internal:8080',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-host': 'public.example',
+      },
+      protocol: 'http',
+    };
+    const r = await verifyLwsCidAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID);
+  });
+
   it('rejects tampered signature', async () => {
-    const now = Math.floor(Date.now() / 1000);
     const valid = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, aud: [POD_ORIGIN], iat: now, exp: now+60 },
+      payload: claims(),
     });
-    // Flip a bit in the signature.
     const parts = valid.split('.');
     const sigBuf = Buffer.from(parts[2].replace(/-/g, '+').replace(/_/g, '/'), 'base64');
     sigBuf[0] ^= 0xff;
@@ -272,14 +351,12 @@ describe('verifyLwsCidAuth', () => {
   });
 
   it('rejects when VM is signed with different key than JWT', async () => {
-    // Profile advertises VM for one key; token signed with another.
     const otherPriv = secp256k1.utils.randomPrivateKey();
     nextProfile = buildProfile(jwkFromSecp256k1(otherPriv));
-    const now = Math.floor(Date.now() / 1000);
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, aud: [POD_ORIGIN], iat: now, exp: now+60 },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /signature/);
@@ -291,9 +368,67 @@ describe('verifyLwsCidAuth', () => {
     const token = makeJwt({
       privKey: priv,
       header: { alg: 'ES256K', kid: VM_ID },
-      payload: { sub: WEBID, iss: WEBID, client_id: WEBID, iat: Math.floor(Date.now()/1000) },
+      payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /could not fetch/);
+  });
+
+  it('SSRF: rejects kid pointing at localhost', async () => {
+    const localKid = 'https://localhost/profile/card.jsonld#me';
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: localKid },
+      payload: claims(undefined, {
+        sub: localKid, iss: localKid, client_id: localKid,
+      }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    // SSRF guard fires inside fetchProfile and surfaces as "could not
+    // fetch CID document: SSRF protection: ...".
+    assert.match(r.error, /SSRF protection/);
+  });
+
+  // --- non-ES256K alg coverage (the jose-driven branch) -------------
+
+  describe('non-ES256K algorithms via jose', () => {
+    async function runHappyPath(alg) {
+      const kp = await jose.generateKeyPair(alg, { extractable: true });
+      const publicJwk = await jose.exportJWK(kp.publicKey);
+      publicJwk.alg = alg;
+      nextProfile = buildProfile(publicJwk);
+
+      const now = Math.floor(Date.now() / 1000);
+      const token = await new jose.SignJWT(claims(now))
+        .setProtectedHeader({ alg, kid: VM_ID, typ: 'JWT' })
+        .sign(kp.privateKey);
+      const r = await verifyLwsCidAuth(makeRequest(token));
+      assert.strictEqual(r.error, null, `unexpected error: ${r.error}`);
+      assert.strictEqual(r.webId, WEBID);
+    }
+
+    it('verifies ES256 (P-256)', async () => { await runHappyPath('ES256'); });
+    it('verifies EdDSA (Ed25519)', async () => { await runHappyPath('EdDSA'); });
+    it('verifies RS256 (RSA-2048)', async () => { await runHappyPath('RS256'); });
+
+    it('rejects RS256 with tampered payload', async () => {
+      const kp = await jose.generateKeyPair('RS256', { extractable: true, modulusLength: 2048 });
+      const publicJwk = await jose.exportJWK(kp.publicKey);
+      publicJwk.alg = 'RS256';
+      nextProfile = buildProfile(publicJwk);
+
+      const now = Math.floor(Date.now() / 1000);
+      const token = await new jose.SignJWT(claims(now))
+        .setProtectedHeader({ alg: 'RS256', kid: VM_ID })
+        .sign(kp.privateKey);
+      // Tamper with payload portion (middle section).
+      const parts = token.split('.');
+      const decoded = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString());
+      decoded.sub = 'https://attacker.example/#me';
+      parts[1] = b64u(Buffer.from(JSON.stringify(decoded)));
+      const tampered = parts.join('.');
+      const r = await verifyLwsCidAuth(makeRequest(tampered));
+      assert.notStrictEqual(r.error, null);
+    });
   });
 });

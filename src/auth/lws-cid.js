@@ -35,6 +35,7 @@
 import * as jose from 'jose';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
+import { validateExternalUrl } from '../utils/ssrf.js';
 
 // JWS algorithms we accept. ES256K (RFC8812) is the primary target —
 // secp256k1, the same curve as Nostr — but we support the common JWS
@@ -48,6 +49,21 @@ const MAX_IAT_AGE = 600; // 10 minutes
 
 // Clock skew tolerance for exp/nbf checks (seconds).
 const CLOCK_SKEW = 60;
+
+// Profile fetch cache. Auth is on the hot path; refetching the CID
+// document on every request is unacceptable for both latency and
+// reliability. Mirrors the pattern in did-nostr.js.
+const profileCache = new Map(); // url -> { profile, timestamp, failureTtl?: true }
+const PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes for hits
+const PROFILE_FAILURE_TTL = 60 * 1000;   // 1 minute for misses
+
+// Manual-redirect cap so a chain can't loop or grind.
+const MAX_REDIRECTS = 5;
+
+/** @internal — exposed for tests */
+export function _clearProfileCacheForTests() {
+  profileCache.clear();
+}
 
 /**
  * Cheap detector — does this request carry an LWS-CID JWT?
@@ -119,7 +135,7 @@ export async function verifyLwsCidAuth(request) {
   }
 
   // FPWD §4: sub === iss === client_id, all the same WebID URI.
-  const { sub, iss, client_id, aud, exp, iat } = payload;
+  const { sub, iss, client_id, aud, exp, iat, nbf } = payload;
   if (!sub || !iss || !client_id) {
     return { webId: null, error: 'JWT missing sub/iss/client_id' };
   }
@@ -139,24 +155,50 @@ export async function verifyLwsCidAuth(request) {
     };
   }
 
-  // Time checks.
-  const now = Math.floor(Date.now() / 1000);
-  if (typeof exp === 'number' && now > exp + CLOCK_SKEW) {
-    return { webId: null, error: 'JWT expired' };
+  // Time-claim validation. The ES256K branch below skips jose.jwtVerify
+  // and relies on these checks alone, so each claim's TYPE matters as
+  // much as its value — `exp: "9999999999"` (string) must NOT be silently
+  // accepted as a number. Per FPWD §4, exp and iat are both required;
+  // nbf is optional but enforced when present.
+  if (exp !== undefined && typeof exp !== 'number') {
+    return { webId: null, error: 'JWT exp claim must be a number' };
   }
-  if (typeof iat === 'number' && now - iat > MAX_IAT_AGE + CLOCK_SKEW) {
-    return { webId: null, error: 'JWT iat too old' };
+  if (iat !== undefined && typeof iat !== 'number') {
+    return { webId: null, error: 'JWT iat claim must be a number' };
+  }
+  if (nbf !== undefined && typeof nbf !== 'number') {
+    return { webId: null, error: 'JWT nbf claim must be a number' };
   }
   if (typeof iat !== 'number' && typeof exp !== 'number') {
     return { webId: null, error: 'JWT missing both iat and exp' };
   }
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof exp === 'number' && now > exp + CLOCK_SKEW) {
+    return { webId: null, error: 'JWT expired' };
+  }
+  if (typeof nbf === 'number' && now + CLOCK_SKEW < nbf) {
+    return { webId: null, error: 'JWT not yet valid (nbf in the future)' };
+  }
+  if (typeof iat === 'number') {
+    if (now - iat > MAX_IAT_AGE + CLOCK_SKEW) {
+      return { webId: null, error: 'JWT iat too old' };
+    }
+    if (iat - now > CLOCK_SKEW) {
+      return { webId: null, error: 'JWT iat is in the future' };
+    }
+  }
 
-  // Audience check — the request's origin must be in aud.
+  // Audience check — `aud` is required (FPWD §4: "the aud claim MUST
+  // include the target authorization server"), and the request's
+  // origin must appear in it.
   const reqOrigin = getRequestOrigin(request);
+  const audList = aud === undefined ? [] : Array.isArray(aud) ? aud : [aud];
+  if (audList.length === 0) {
+    return { webId: null, error: 'JWT aud claim is required' };
+  }
   if (reqOrigin) {
-    const audList = aud === undefined ? [] : Array.isArray(aud) ? aud : [aud];
     const audMatch = audList.some((a) => normalizeOrigin(a) === reqOrigin);
-    if (audList.length > 0 && !audMatch) {
+    if (!audMatch) {
       return {
         webId: null,
         error: `aud does not include this server's origin (${reqOrigin})`,
@@ -255,9 +297,14 @@ function stripHash(u) {
 }
 
 function getRequestOrigin(request) {
-  const host = request.headers?.host;
+  // Behind a reverse proxy, the front-end forwarded headers are the
+  // authoritative source. Match the convention used in src/ap/* and
+  // similar code: x-forwarded-* take precedence, fall back to fastify's
+  // protocol/hostname.
+  const headers = request.headers || {};
+  const proto = headers['x-forwarded-proto'] || request.protocol || 'https';
+  const host = headers['x-forwarded-host'] || headers.host || request.hostname;
   if (!host) return null;
-  const proto = request.protocol || (request.headers?.['x-forwarded-proto']) || 'https';
   return `${proto}://${host}`;
 }
 
@@ -272,22 +319,85 @@ function normalizeOrigin(s) {
 }
 
 async function fetchProfile(docUrl) {
-  // 5s timeout — profiles are small static documents.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
+  // Cache hit (or recent failure) — return immediately.
+  const cached = profileCache.get(docUrl);
+  if (cached) {
+    const ttl = cached.failureTtl ? PROFILE_FAILURE_TTL : PROFILE_CACHE_TTL;
+    if (Date.now() - cached.timestamp < ttl) {
+      if (cached.failureTtl) throw new Error(cached.error);
+      return cached.profile;
+    }
+    profileCache.delete(docUrl);
+  }
+
   try {
-    const res = await fetch(docUrl, {
-      headers: { Accept: 'application/ld+json' },
-      signal: controller.signal,
+    const profile = await fetchProfileNoCache(docUrl);
+    profileCache.set(docUrl, { profile, timestamp: Date.now() });
+    return profile;
+  } catch (err) {
+    profileCache.set(docUrl, {
+      timestamp: Date.now(),
+      failureTtl: true,
+      error: err.message,
     });
+    throw err;
+  }
+}
+
+/**
+ * Fetch the CID document with SSRF protection.
+ *
+ * docUrl comes from JWT claims (sub, kid) BEFORE the signature is
+ * verified, so it's untrusted. We:
+ *   1. Validate it through the existing SSRF guard (blocks loopback,
+ *      private IPs, http (in production), DNS that resolves to private
+ *      addresses).
+ *   2. Disable automatic redirects and re-validate every Location to
+ *      defeat redirect-based bypasses (mirrors the cors-proxy pattern).
+ *   3. Cap redirects so a chain can't loop.
+ *   4. Always send a fresh Accept and a small read-side timeout.
+ */
+async function fetchProfileNoCache(docUrl) {
+  let currentUrl = docUrl;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const validation = await validateExternalUrl(currentUrl, {
+      // Allow http on dev only — production deploys should always be https.
+      requireHttps: process.env.NODE_ENV === 'production',
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) {
+      throw new Error(`SSRF protection: ${validation.error}`);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let res;
+    try {
+      res = await fetch(currentUrl, {
+        headers: { Accept: 'application/ld+json' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    // Manual redirect handling — re-validate every Location.
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location');
+      if (!loc) throw new Error(`redirect ${res.status} without Location`);
+      currentUrl = new URL(loc, currentUrl).toString();
+      continue;
+    }
+
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
     const text = await res.text();
     return JSON.parse(text);
-  } finally {
-    clearTimeout(timer);
   }
+  throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
 }
 
 function findVerificationMethod(profile, kid, baseUrl) {
