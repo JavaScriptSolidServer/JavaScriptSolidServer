@@ -394,8 +394,9 @@ function getPodOwnerWebId(request) {
   const proto = (protoLower === 'http' || protoLower === 'https') ? protoLower : 'https';
   // The Host header / x-forwarded-host can carry a port and may be an
   // IPv6 literal (`[::1]:3000`). For all WebID construction we use
-  // the port-stripped, IPv6-bracket-stripped form (`hostNoPort`) to
-  // match what JSS itself stores: subdomain mode derives from
+  // `hostNoPort` — the URL parser's port-stripped hostname (still
+  // bracketed for IPv6 here; we bail out on IPv6 below). This
+  // matches what JSS itself stores: subdomain mode derives from
   // `baseDomain` (no port), and src/handlers/container.js builds
   // path-mode WebIDs from `request.hostname` (port-stripped). Using
   // a port-bearing host here would compute a WebID that doesn't
