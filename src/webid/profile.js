@@ -59,11 +59,22 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       // standalone "add my keys" app). Declaring these now means the
       // app can PATCH in verificationMethod entries without having to
       // also rewrite the @context.
+      //
+      // verificationMethod: NO @type:@id — values are inline verification
+      //   method *objects* (id/type/controller/publicKey…), not just IRI
+      //   references. @container:@set so a single entry stays an array.
+      // authentication / assertionMethod: @type:@id — values reference a
+      //   verificationMethod entry by its IRI. @container:@set for arrays.
+      // publicKeyJwk: @type:@json so the JWK object round-trips as a
+      //   literal JSON value (rdf:JSON datatype). Note: JSS's Turtle
+      //   conneg layer doesn't yet emit @type:@json literals (tracked as
+      //   a Phase B blocker in the PR description); declaring here is
+      //   forward-looking and spec-correct.
       'controller':         { '@id': 'cid:controller', '@type': '@id' },
-      'verificationMethod': { '@id': 'cid:verificationMethod', '@type': '@id' },
-      'authentication':     { '@id': 'cid:authentication', '@type': '@id' },
-      'assertionMethod':    { '@id': 'cid:assertionMethod', '@type': '@id' },
-      'publicKeyJwk':       { '@id': 'cid:publicKeyJwk' },
+      'verificationMethod': { '@id': 'cid:verificationMethod', '@container': '@set' },
+      'authentication':     { '@id': 'cid:authentication', '@type': '@id', '@container': '@set' },
+      'assertionMethod':    { '@id': 'cid:assertionMethod', '@type': '@id', '@container': '@set' },
+      'publicKeyJwk':       { '@id': 'cid:publicKeyJwk', '@type': '@json' },
       'publicKeyMultibase': { '@id': 'cid:publicKeyMultibase' }
     },
     '@id': webId,
