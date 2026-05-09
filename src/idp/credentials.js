@@ -359,54 +359,10 @@ export async function handleDeleteAccount(request, reply, options = {}) {
     });
   }
 
-  // 5. Delete the account record + indexes
-  await deleteAccount(account.id);
-
-  // 6. Optionally purge the pod's filesystem data. Mirrors the CLI
-  // `--purge` semantics. The path is `<dataRoot>/<podName>/`.
-  //
-  // Use account.podName, NOT account.username: createAccount normalizes
-  // username to lowercase (`username.toLowerCase().trim()`) but the pod
-  // directory on disk is created with the original case (per the input
-  // to handleCreatePod). On case-sensitive filesystems, deriving the
-  // purge path from username would either no-op (path doesn't exist)
-  // or hit a different directory if one exists at the lowercased name.
-  // Pod-name validation regex is /^[a-zA-Z0-9_-]+$/ (alphanum + dash +
-  // underscore; no dots, no traversal sequences) so podName is safe to
-  // join — defensive normalize stays as belt-and-suspenders.
-  //
-  // Best-effort: if fs.remove throws (permissions, transient FS error,
-  // race with another consumer), the account is already deleted and we
-  // shouldn't 500 over the leftover files. Log server-side and return
-  // purged: false so the caller knows pod data may still exist; an
-  // operator can finish the cleanup with a follow-up `rm -rf` or
-  // CLI `--purge` against the now-orphaned directory.
-  let purged = false;
-  if (purgeData) {
-    const dataRoot = process.env.DATA_ROOT || './data';
-    const candidate = path.resolve(dataRoot, account.podName || account.username);
-    const root = path.resolve(dataRoot);
-    // Belt-and-suspenders: refuse to remove anything that isn't a
-    // proper child of the data root. Won't trigger on registered pod
-    // names; protects against config drift / future bugs. Use
-    // path.relative so the check works when dataRoot is a filesystem
-    // root like `/` (where startsWith(root + path.sep) would compare
-    // against `//`, false-negative all valid children).
-    const rel = path.relative(root, candidate);
-    const isProperChild = rel && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-    if (isProperChild) {
-      try {
-        await fs.remove(candidate);
-        purged = true;
-      } catch (err) {
-        request.log.error({ err, path: candidate, username: account.username },
-          'Pod data purge failed after account deletion');
-        // Don't surface the raw error to the user (file paths,
-        // permission detail leak); response.purged signals the
-        // outcome.
-      }
-    }
-  }
+  // 5. Delete via the shared helper (also handles optional pod-data purge).
+  // See deleteAccountAndOptionallyPurge below for the purge semantics
+  // and rationale (#391 pass 2 / pass 3).
+  const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
 
   reply.header('Cache-Control', 'no-store');
   reply.header('Pragma', 'no-cache');
@@ -458,18 +414,22 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
 }
 
 /**
- * Handle POST /idp/account/delete (#392) — form-driven account deletion.
+ * Handle GET / POST /idp/account/delete (#392) — form-driven account deletion.
  *
  * Public unauthenticated endpoint that takes a form-encoded body with
  * username + currentPassword + confirmUsername (+ optional purgeData
  * checkbox). Authenticates the user via password directly (no Bearer
  * token round-trip required), validates the destructive-action UX
- * guard, then calls into the same deleteAccount logic as the JSON
- * endpoint. Returns HTML — success page on completion, redirect back
- * to the GET form with an error message on failure.
+ * guard, then calls into the same delete logic as the JSON endpoint
+ * via deleteAccountAndOptionallyPurge. Returns HTML directly:
+ *   - success → success page
+ *   - any failure → the form re-rendered with an error message and the
+ *     username field pre-filled (no redirect — single response, status
+ *     200 with the rendered form)
  *
- * Single-user mode: redirects to GET which renders the disabled
- * message instead of the form. Same policy as the JSON endpoint.
+ * Single-user mode: rendered as the disabled-message page instead of
+ * the form, both on GET and POST. Same policy as the JSON endpoint
+ * (which 403s with the equivalent message).
  *
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
@@ -527,9 +487,14 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
     }));
   }
 
-  await deleteAccountAndOptionallyPurge(request, account, purgeData);
+  const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
 
-  return reply.type('text/html').send(accountDeletePage({ success: true }));
+  // If the user asked for a purge but it didn't run (fs.remove threw,
+  // path-relative check rejected, etc.), surface that on the success
+  // page. Account deletion succeeded — don't roll that back — but the
+  // operator may need to finish cleanup. Don't leak server paths.
+  const purgeFailed = purgeData && !purged;
+  return reply.type('text/html').send(accountDeletePage({ success: true, purgeFailed }));
 }
 
 /**

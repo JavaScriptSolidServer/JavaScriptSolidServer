@@ -550,7 +550,7 @@ export function consentPage(uid, client, params, account) {
  *   (would brick the IdP until re-seed); operator path stays the CLI.
  * @param {boolean} opts.success - When true, render the post-delete confirmation
  */
-export function accountDeletePage({ error = null, username = '', singleUser = false, success = false } = {}) {
+export function accountDeletePage({ error = null, username = '', singleUser = false, success = false, purgeFailed = false } = {}) {
   if (singleUser) {
     return `
 <!DOCTYPE html>
@@ -591,8 +591,20 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
   <div class="container">
     <div class="logo">${solidLogo}</div>
     <h1>Account deleted</h1>
-    <p>Your account has been permanently removed. Any active sessions are now invalid.</p>
-    <a href="/idp" class="btn btn-primary" style="text-decoration: none;">Return to sign-in</a>
+    <p>Your account record has been removed from this server. Future sign-ins
+       with this username will fail.</p>
+    <p style="font-size: 13px; color: #64748b; margin-top: 8px;">
+      Note: any access tokens already issued may remain usable until they
+      expire — the server does not currently revoke them on account deletion.
+    </p>
+    ${purgeFailed ? `
+    <div class="error" style="margin-top: 16px;">
+      Your account was deleted, but the pod-data purge did not complete on
+      this server. Some files may still exist. Contact the operator to
+      finish the cleanup if needed.
+    </div>
+    ` : ''}
+    <a href="/idp" class="btn btn-primary" style="text-decoration: none; margin-top: 16px;">Return to sign-in</a>
   </div>
 </body>
 </html>
@@ -650,10 +662,15 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
     <h1>Delete your account</h1>
 
     <div class="danger">
-      <strong>This is permanent.</strong> Your account record, all credentials, and any active
-      sessions will be removed. Anyone holding your WebID URI will see it become a
-      tombstone — federated references (ActivityPub, Nostr, type indexes) cannot be
-      retracted from this server.
+      <strong>This is permanent.</strong> Your account record and credentials will be
+      removed; future sign-ins with this username will fail. Anyone holding your
+      WebID URI will see it become a tombstone — federated references (ActivityPub,
+      Nostr, type indexes) cannot be retracted from this server.
+      <br><br>
+      <span style="font-size: 12px; color: #7f1d1d;">
+        Note: access tokens already issued may remain usable until they
+        expire — the server does not currently revoke them on deletion.
+      </span>
     </div>
 
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
