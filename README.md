@@ -26,6 +26,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Nostr Relay** — Integrated NIP-01 relay (`wss://your.pod/relay`)
 - **Nostr Auth** — NIP-98 signatures, did:nostr → WebID resolution
 - **End-to-End Encryption** — Encrypt pod content client-side via NIP-44 / NIP-04 using `did:nostr` keys ([docs](https://jss.live/docs/features/e2ee/), zero server-side changes)
+- **LWS / CID v1 profile shape** — New pod profiles are structurally W3C [Controlled Identifier](https://www.w3.org/TR/cid-1.0/) documents, ready for [LWS 1.0](https://www.w3.org/TR/2026/WD-lws10-authn-ssi-cid-20260423/) auth ([docs](docs/lws.md))
 - **ActivityPub** — Fediverse federation with Mastodon-compatible API
 - **remoteStorage** — [draft-dejong-remotestorage-22](https://remotestorage.io/spec/) file sync
 - **MongoDB Storage** — Optional `/db/` route for JSON-LD at scale
