@@ -7,9 +7,10 @@ import * as jose from 'jose';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { authenticate, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
+import { authenticate, findByUsername, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
+import { accountDeletePage } from './views.js';
 
 /**
  * Handle POST /idp/credentials
@@ -358,39 +359,65 @@ export async function handleDeleteAccount(request, reply, options = {}) {
     });
   }
 
-  // 5. Delete the account record + indexes
+  // 5. Delete via the shared helper (also handles optional pod-data purge).
+  // See deleteAccountAndOptionallyPurge below for the purge semantics
+  // and rationale (#391 pass 2 / pass 3).
+  const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
+
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  return {
+    ok: true,
+    webid: account.webId,
+    purged,
+  };
+}
+
+/**
+ * Apply anti-clickjacking + no-store cache headers to a response.
+ * Used on every account-deletion HTML response (form, success, error
+ * re-render, disabled-message page) and on the corresponding routes.
+ *
+ *  - Cache-Control: no-store  — destructive form/success page should
+ *    never sit in a shared cache; if a token gets shared via the URL
+ *    the browser shouldn't replay the action from cache either.
+ *  - X-Frame-Options + frame-ancestors — block clickjacking.
+ *    Embedding this form in a hostile iframe and tricking a user into
+ *    submitting a captured action is exactly the threat shape these
+ *    headers exist to mitigate.
+ */
+export function setNoCacheClickjackHeaders(reply) {
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Content-Security-Policy', "frame-ancestors 'none'");
+}
+
+/**
+ * Internal: delete an account record + optional pod-data purge.
+ * Shared between the JSON endpoint (handleDeleteAccount) and the
+ * form-driven endpoint (handleAccountDeleteForm in #392).
+ *
+ * Best-effort purge — fs.remove can throw, but the account is already
+ * gone and we want a clean signal rather than a 500. Path is derived
+ * from account.podName (NOT username, which createAccount lowercases —
+ * pod dir on disk is original case, see #391 pass 2). Belt-and-
+ * suspenders path-relative check rejects ../traversal and works at FS
+ * roots (see #391 pass 3).
+ *
+ * @param {object} request - Fastify request, used only for log access
+ * @param {object} account - Account record (with username, podName, webId)
+ * @param {boolean} purgeData - If true, also remove the pod's filesystem tree
+ * @returns {Promise<{purged: boolean}>}
+ */
+async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
   await deleteAccount(account.id);
 
-  // 6. Optionally purge the pod's filesystem data. Mirrors the CLI
-  // `--purge` semantics. The path is `<dataRoot>/<podName>/`.
-  //
-  // Use account.podName, NOT account.username: createAccount normalizes
-  // username to lowercase (`username.toLowerCase().trim()`) but the pod
-  // directory on disk is created with the original case (per the input
-  // to handleCreatePod). On case-sensitive filesystems, deriving the
-  // purge path from username would either no-op (path doesn't exist)
-  // or hit a different directory if one exists at the lowercased name.
-  // Pod-name validation regex is /^[a-zA-Z0-9_-]+$/ (alphanum + dash +
-  // underscore; no dots, no traversal sequences) so podName is safe to
-  // join — defensive normalize stays as belt-and-suspenders.
-  //
-  // Best-effort: if fs.remove throws (permissions, transient FS error,
-  // race with another consumer), the account is already deleted and we
-  // shouldn't 500 over the leftover files. Log server-side and return
-  // purged: false so the caller knows pod data may still exist; an
-  // operator can finish the cleanup with a follow-up `rm -rf` or
-  // CLI `--purge` against the now-orphaned directory.
   let purged = false;
   if (purgeData) {
     const dataRoot = process.env.DATA_ROOT || './data';
     const candidate = path.resolve(dataRoot, account.podName || account.username);
     const root = path.resolve(dataRoot);
-    // Belt-and-suspenders: refuse to remove anything that isn't a
-    // proper child of the data root. Won't trigger on registered pod
-    // names; protects against config drift / future bugs. Use
-    // path.relative so the check works when dataRoot is a filesystem
-    // root like `/` (where startsWith(root + path.sep) would compare
-    // against `//`, false-negative all valid children).
     const rel = path.relative(root, candidate);
     const isProperChild = rel && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     if (isProperChild) {
@@ -400,20 +427,132 @@ export async function handleDeleteAccount(request, reply, options = {}) {
       } catch (err) {
         request.log.error({ err, path: candidate, username: account.username },
           'Pod data purge failed after account deletion');
-        // Don't surface the raw error to the user (file paths,
-        // permission detail leak); response.purged signals the
-        // outcome.
       }
+    } else {
+      // Belt-and-suspenders rejection — shouldn't trigger on registered
+      // pod names but logging it surfaces config drift (e.g. someone
+      // changed dataRoot, podName field is malformed, etc.) and makes
+      // the "purge did not complete" UX message diagnosable from the
+      // operator's logs without leaking the path to the client.
+      request.log.warn({ path: candidate, dataRoot: root, podName: account.podName, username: account.username },
+        'Pod data purge skipped: candidate path is not a proper child of dataRoot');
     }
   }
+  return { purged };
+}
 
-  reply.header('Cache-Control', 'no-store');
-  reply.header('Pragma', 'no-cache');
-  return {
-    ok: true,
-    webid: account.webId,
-    purged,
-  };
+/**
+ * Handle POST /idp/account/delete (#392) — form-driven account deletion.
+ *
+ * Public unauthenticated endpoint that takes a form-encoded body with
+ * username + currentPassword + confirmUsername (+ optional keepData
+ * opt-out checkbox; default behavior is purge-on for the leaving-user
+ * UX, opposite the JSON endpoint's purge-off default). Authenticates
+ * the user via password directly (no Bearer token round-trip), validates
+ * the destructive-action UX guard, then calls into the same delete
+ * logic as the JSON endpoint via deleteAccountAndOptionallyPurge.
+ * Returns HTML directly:
+ *   - success → success page
+ *   - any failure → the form re-rendered with an error message and the
+ *     username field pre-filled (no redirect — single response, status
+ *     200 with the rendered form)
+ *
+ * GET /idp/account/delete is a separate route that just renders the
+ * form via accountDeletePage(); see src/idp/index.js. This handler is
+ * POST-only.
+ *
+ * Single-user mode: this handler short-circuits to the disabled-message
+ * page (matches the GET route's behavior). Same policy as the JSON
+ * endpoint, which 403s with the equivalent message.
+ *
+ * @param {object} request - Fastify request
+ * @param {object} reply - Fastify reply
+ * @param {object} options
+ * @param {boolean} [options.singleUser] - Single-user mode flag
+ */
+export async function handleAccountDeleteForm(request, reply, options = {}) {
+  // Every response from this handler is a destructive-action surface
+  // that re-takes the user's password — never cache, never embed.
+  setNoCacheClickjackHeaders(reply);
+
+  if (options.singleUser) {
+    // 403 matches the GET route, /idp/register's disabled-route policy,
+    // and the JSON DELETE endpoint's 403 — consistent status across
+    // every disabled-in-single-user surface.
+    return reply.code(403).type('text/html').send(accountDeletePage({ singleUser: true }));
+  }
+
+  // Parse form-encoded body. JSS registers a wildcard parseAs:'buffer'
+  // content parser (server.js:190), so request.body arrives here as a
+  // Buffer. We coerce to a string and parse the application/x-www-form-
+  // urlencoded shape via URLSearchParams. (No @fastify/formbody is
+  // installed; doing it inline keeps this self-contained and matches
+  // what handleChangePassword does for JSON.)
+  let body = request.body;
+  if (Buffer.isBuffer(body)) body = body.toString('utf-8');
+  if (typeof body === 'string') {
+    try {
+      const params = new URLSearchParams(body);
+      body = Object.fromEntries(params);
+    } catch { body = {}; }
+  }
+
+  const username = (body?.username || '').trim();
+  const currentPassword = body?.currentPassword || '';
+  const confirmUsername = (body?.confirmUsername || '').trim();
+  // Form field is `keepData` (inverse of the JSON endpoint's `purgeData`)
+  // so the form's default is purge-on: a user who is leaving the server
+  // probably wants their files gone too. Checking "Keep my pod data" is
+  // the opt-out. JSON endpoint (DELETE /idp/account) keeps the
+  // explicit `purgeData` shape that matches the CLI's default-off
+  // semantics for operator scripts; the form intentionally diverges.
+  const keepData = body?.keepData === 'on' || body?.keepData === true;
+  const purgeData = !keepData;
+
+  if (!username || !currentPassword || !confirmUsername) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'All fields are required.',
+      username,
+    }));
+  }
+
+  // Destructive-action UX guard: the user must type the same string
+  // twice. The string-equality check is case-sensitive on the typed
+  // form values; that's purely the typing-it-again confirmation
+  // pattern (catch typos / accidental submits). Note: findByUsername()
+  // lowercases internally, so "Alice" + "Alice" both resolve to the
+  // same account record as "alice" — the case-sensitive comparison
+  // here doesn't gate which record gets deleted, only whether the
+  // user typed the same thing twice.
+  if (username !== confirmUsername) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'Confirmation does not match the username you entered.',
+      username,
+    }));
+  }
+
+  // Look up + verify password without side effects. authenticate() is
+  // tempting (looks up + verifies in one call) but writes lastLogin on
+  // success — wrong shape for a destructive proof-of-possession check
+  // (and would fail the deletion if the account file weren't writable).
+  // Mirrors handleChangePassword / handleDeleteAccount which both use
+  // verifyPassword for the same reason.
+  const account = await findByUsername(username);
+  if (!account || !(await verifyPassword(account, currentPassword))) {
+    return reply.type('text/html').send(accountDeletePage({
+      error: 'Username or password is incorrect.',
+      username,
+    }));
+  }
+
+  const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
+
+  // If the user asked for a purge but it didn't run (fs.remove threw,
+  // path-relative check rejected, etc.), surface that on the success
+  // page. Account deletion succeeded — don't roll that back — but the
+  // operator may need to finish cleanup. Don't leak server paths.
+  const purgeFailed = purgeData && !purged;
+  return reply.type('text/html').send(accountDeletePage({ success: true, purgeFailed }));
 }
 
 /**

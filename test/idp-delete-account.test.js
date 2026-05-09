@@ -269,6 +269,307 @@ describe('DELETE /idp/account — self-delete', () => {
   });
 });
 
+describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
+  let server;
+  let baseUrl;
+  let originalDataRoot;
+  const DATA_DIR = './test-data-delete-form';
+
+  before(async () => {
+    originalDataRoot = process.env.DATA_ROOT;
+    await fs.remove(DATA_DIR);
+    await fs.ensureDir(DATA_DIR);
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+    server = createServer({
+      logger: false,
+      root: DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      forceCloseConnections: true,
+    });
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(DATA_DIR);
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
+  });
+
+  it('GET renders the form HTML', async () => {
+    const res = await fetch(`${baseUrl}/idp/account/delete`);
+    assert.strictEqual(res.status, 200);
+    const ct = res.headers.get('content-type') || '';
+    assert.match(ct, /text\/html/);
+    const html = await res.text();
+    assert.match(html, /<form\s[^>]*action="\/idp\/account\/delete"/);
+    assert.match(html, /name="username"/);
+    assert.match(html, /name="currentPassword"/);
+    assert.match(html, /name="confirmUsername"/);
+    // Form's checkbox is `keepData` (inverse of the JSON endpoint's
+    // purgeData) so the form's default is purge-on for the leaving-user UX.
+    assert.match(html, /name="keepData"/);
+    assert.match(html, /Delete my account permanently/);
+  });
+
+  it('GET sets anti-clickjacking + no-store headers', async () => {
+    // Destructive-action page (form for account deletion) — must not
+    // be cacheable or embeddable in an iframe.
+    const res = await fetch(`${baseUrl}/idp/account/delete`);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
+    assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+  });
+
+  it('POST sets the same security headers on success and error responses', async () => {
+    // Error response: missing fields
+    const errRes = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'x' }),
+    });
+    assert.match(errRes.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(errRes.headers.get('x-frame-options'), 'DENY');
+    assert.match(errRes.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+
+    // Success response: full delete flow
+    const id = `lyle${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+    const okRes = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        username: id,
+        currentPassword: 'password123',
+        confirmUsername: id,
+      }),
+    });
+    assert.strictEqual(okRes.status, 200);
+    assert.match(okRes.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(okRes.headers.get('x-frame-options'), 'DENY');
+    assert.match(okRes.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+  });
+
+  it('POST happy path: deletes account AND wipes pod data by default; login fails after', async () => {
+    // Form's default is purge-on (the user is leaving — wipe everything).
+    // The JSON DELETE endpoint keeps purge-off as default (matches CLI for
+    // programmatic / operator use); the form diverges deliberately for the
+    // leaving-user UX.
+    const id = `harry${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+    const podPath = path.join(DATA_DIR, id);
+    assert.strictEqual(await fs.pathExists(podPath), true,
+      'pod tree should exist before deletion');
+
+    const formBody = new URLSearchParams({
+      username: id,
+      currentPassword: 'password123',
+      confirmUsername: id,
+      // No keepData — defaults to purge-on
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /Account deleted/);
+
+    // Login now fails
+    const reLogin = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
+    });
+    assert.strictEqual(reLogin.status, 401);
+
+    // Pod data also wiped (default behavior on the form)
+    assert.strictEqual(await fs.pathExists(podPath), false,
+      'pod data should be wiped by default on the form path');
+  });
+
+  it('POST with keepData=on opts out of the purge, account still deleted', async () => {
+    const id = `iris${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+    const podPath = path.join(DATA_DIR, id);
+    assert.strictEqual(await fs.pathExists(podPath), true);
+
+    const formBody = new URLSearchParams({
+      username: id,
+      currentPassword: 'password123',
+      confirmUsername: id,
+      keepData: 'on',
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 200);
+
+    // Account gone
+    const reLogin = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
+    });
+    assert.strictEqual(reLogin.status, 401);
+
+    // Pod data preserved (the user opted to keep it)
+    assert.strictEqual(await fs.pathExists(podPath), true,
+      'keepData=on should preserve pod data even though account is deleted');
+  });
+
+  it('POST with mismatched confirmUsername renders form with error, account untouched', async () => {
+    const id = `jack${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+
+    const formBody = new URLSearchParams({
+      username: id,
+      currentPassword: 'password123',
+      confirmUsername: 'totally-different',
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /Confirmation does not match/);
+    // Username pre-filled in the form for retry
+    assert.match(html, new RegExp(`value="${id}"`));
+
+    // Account intact
+    const login = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
+    });
+    assert.strictEqual(login.status, 200);
+  });
+
+  it('POST with wrong password renders form with error, account untouched', async () => {
+    const id = `kelly${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+
+    const formBody = new URLSearchParams({
+      username: id,
+      currentPassword: 'wrong',
+      confirmUsername: id,
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /incorrect/i);
+
+    // Account intact
+    const login = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
+    });
+    assert.strictEqual(login.status, 200);
+  });
+
+  it('POST with missing fields renders form with error', async () => {
+    const formBody = new URLSearchParams({
+      username: 'someone',
+      // currentPassword and confirmUsername omitted
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 200);
+    const html = await res.text();
+    assert.match(html, /required/i);
+  });
+});
+
+describe('GET/POST /idp/account/delete — single-user mode renders disabled message', () => {
+  let server;
+  let baseUrl;
+  let originalDataRoot;
+  let originalPassword;
+  const DATA_DIR = './test-data-delete-form-single';
+
+  before(async () => {
+    originalDataRoot = process.env.DATA_ROOT;
+    originalPassword = process.env.JSS_SINGLE_USER_PASSWORD;
+    process.env.JSS_SINGLE_USER_PASSWORD = 'singletest';
+    await fs.remove(DATA_DIR);
+    await fs.ensureDir(DATA_DIR);
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+    server = createServer({
+      logger: false,
+      root: DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      singleUser: true,
+      singleUserName: 'me',
+      singleUserPassword: 'singletest',
+      forceCloseConnections: true,
+    });
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(DATA_DIR);
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
+    if (originalPassword === undefined) delete process.env.JSS_SINGLE_USER_PASSWORD;
+    else process.env.JSS_SINGLE_USER_PASSWORD = originalPassword;
+  });
+
+  it('GET returns 403 with the disabled-message HTML', async () => {
+    // 403 keeps single-user disabled routes consistent: /idp/register,
+    // the JSON DELETE /idp/account, and this GET all 403 in single-user.
+    const res = await fetch(`${baseUrl}/idp/account/delete`);
+    assert.strictEqual(res.status, 403);
+    const html = await res.text();
+    assert.match(html, /single-user mode/i);
+    assert.match(html, /jss account delete/);
+    // No form
+    assert.doesNotMatch(html, /<form\s[^>]*action="\/idp\/account\/delete"/);
+  });
+
+  it('POST returns 403 with disabled-message HTML — does not delete', async () => {
+    const formBody = new URLSearchParams({
+      username: 'me',
+      currentPassword: 'singletest',
+      confirmUsername: 'me',
+    });
+    const res = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody,
+    });
+    assert.strictEqual(res.status, 403);
+    const html = await res.text();
+    assert.match(html, /single-user mode/i);
+
+    // Account still works
+    const login = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'me', password: 'singletest' }),
+    });
+    assert.strictEqual(login.status, 200);
+  });
+});
+
 describe('DELETE /idp/account — single-user mode', () => {
   let server;
   let baseUrl;

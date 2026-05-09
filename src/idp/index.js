@@ -24,10 +24,12 @@ import {
   handleCredentialsInfo,
   handleChangePassword,
   handleDeleteAccount,
+  handleAccountDeleteForm,
+  setNoCacheClickjackHeaders,
 } from './credentials.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
-import { landingPage } from './views.js';
+import { landingPage, accountDeletePage } from './views.js';
 
 /**
  * IdP Fastify Plugin
@@ -293,6 +295,36 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleDeleteAccount(request, reply, { singleUser });
+  });
+
+  // GET account-delete form (#392) - human-friendly UI for #352. Public
+  // unauthenticated page; auth happens at form submission via password.
+  // Single-user mode returns 403 to stay consistent with /idp/register's
+  // disabled-route policy and the JSON DELETE /idp/account endpoint
+  // (which also 403s in single-user mode). Body is still HTML so a
+  // browser visitor sees the explanation. Every response sets
+  // anti-clickjacking + no-store headers — destructive-action page.
+  fastify.get('/idp/account/delete', async (request, reply) => {
+    setNoCacheClickjackHeaders(reply);
+    if (singleUser) {
+      return reply.code(403).type('text/html').send(accountDeletePage({ singleUser: true }));
+    }
+    return reply.type('text/html').send(accountDeletePage({ singleUser: false }));
+  });
+
+  // POST account-delete form (#392) - processes the form submission.
+  // Same rate-limit as the JSON endpoint to keep the destructive-action
+  // surface consistent across both paths.
+  fastify.post('/idp/account/delete', {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleAccountDeleteForm(request, reply, { singleUser });
   });
 
   // Interaction routes (our custom login/consent UI)
