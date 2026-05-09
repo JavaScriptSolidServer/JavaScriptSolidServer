@@ -217,6 +217,65 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, `did:nostr:${pk}`);
   });
 
+  it('upgrades did:nostr → WebID in single-user mode', async () => {
+    // Single-user: one pod at the host root, WebID at /profile/card.jsonld#me.
+    const SINGLE_HOST = 'pod.example.com';
+    const SINGLE_DOC = `https://${SINGLE_HOST}/profile/card.jsonld`;
+    const SINGLE_WEBID = `${SINGLE_DOC}#me`;
+    urlResponses.set(SINGLE_DOC, {
+      status: 200,
+      headers: { 'content-type': 'application/ld+json' },
+      body: JSON.stringify(buildProfile({
+        pubkey: pk,
+        vmId: `${SINGLE_DOC}#nostr-key-1`,
+        webId: SINGLE_WEBID,
+      })),
+    });
+    const url = `https://${SINGLE_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url, host: SINGLE_HOST, mode: 'path' });
+    req.singleUser = true;
+    req.subdomainsEnabled = false;
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, SINGLE_WEBID);
+  });
+
+  it('handles host:port without breaking baseDomain match', async () => {
+    // Subdomain-enabled deployment, request landed on base domain
+    // with a port. The base-domain comparison must work when the
+    // host carries a port — without port stripping, hostNoPort !==
+    // baseDomain and the path-mode-on-base branch never matches.
+    const PORT_HOST = 'example.com:8080';
+    const SUB_HOST = 'alice.example.com';
+    const SUB_DOC = `https://${SUB_HOST}/profile/card.jsonld`;
+    const SUB_WEBID = `${SUB_DOC}#me`;
+    urlResponses.set(SUB_DOC, {
+      status: 200,
+      headers: { 'content-type': 'application/ld+json' },
+      body: JSON.stringify(buildProfile({
+        pubkey: pk,
+        vmId: `${SUB_DOC}#nostr-key-1`,
+        webId: SUB_WEBID,
+      })),
+    });
+    // Sign with the same host:port the request will carry, so the
+    // existing NIP-98 URL-match check passes — this test is about the
+    // base-domain comparison in WebID derivation, not URL matching.
+    const url = `https://${PORT_HOST}/alice/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url, host: PORT_HOST, mode: 'subdomain' });
+    // Hit the base domain (no podName).
+    req.podName = null;
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, SUB_WEBID);
+  });
+
   it('upgrades did:nostr → WebID in path mode (subdomains disabled, JSS default)', async () => {
     // JSS's default deployment shape: pod is the first URL segment
     // and the WebID lives under that path.
@@ -285,7 +344,7 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
 
   it('still rejects an invalid signature regardless of the profile', async () => {
     const url = `https://${POD_HOST}/private/data.ttl`;
-    const { authHeader, event } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
     // Tamper: re-encode the event with a flipped signature byte.
     const decoded = JSON.parse(Buffer.from(authHeader.slice(6), 'base64').toString());
     decoded.sig = decoded.sig.slice(0, -2) + (decoded.sig.endsWith('00') ? 'ff' : '00');

@@ -310,9 +310,11 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
 /**
  * Derive the pod-owner WebID URL from a Fastify request.
  *
- * JSS supports three pod-addressing modes (see src/idp/interactions.js
+ * JSS supports four pod-addressing modes (see src/idp/interactions.js
  * around the createPod path for the canonical list):
  *
+ *   - **Single-user mode** — `request.singleUser` is true. There's
+ *     one pod at the host root: WebID is `https://host/profile/card.jsonld#me`.
  *   - **Subdomain mode** — `subdomainsEnabled` is true, request hits a
  *     subdomain like `alice.example.com`. WebID is at the subdomain
  *     root: `https://alice.example.com/profile/card.jsonld#me`.
@@ -324,19 +326,28 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
  *     hits the base domain with a path. The internal canonical form
  *     rewrites this to the subdomain shape (per buildResourceUrl).
  *
- * Returns null when no pod name can be derived (single-user
- * deployments will hit this path; the caller falls back to the
- * existing did:nostr DID-doc resolver / did:nostr identity).
+ * Returns null when no pod name can be derived; the caller falls back
+ * to the existing did:nostr DID-doc resolver / did:nostr identity.
  */
 function getPodOwnerWebId(request) {
   const headers = request.headers || {};
   const proto = firstHeaderValue(headers['x-forwarded-proto'])
               || request.protocol
               || 'https';
+  // Use request.hostname (port-stripped) for the host comparison and
+  // for derivation. The Host header / x-forwarded-host can carry a
+  // port (e.g. "example.com:8080") which would prevent the
+  // host === baseDomain check below from matching.
   const host  = firstHeaderValue(headers['x-forwarded-host'])
-              || firstHeaderValue(headers.host)
-              || request.hostname;
+              || request.hostname
+              || firstHeaderValue(headers.host);
   if (!host) return null;
+  const hostNoPort = host.split(':')[0];
+
+  // Single-user deployment: one pod at the host root.
+  if (request.singleUser) {
+    return `${proto}://${hostNoPort}/profile/card.jsonld#me`;
+  }
 
   // Subdomain mode (request already on a pod's subdomain).
   if (request.subdomainsEnabled && request.podName && request.baseDomain) {
@@ -346,7 +357,7 @@ function getPodOwnerWebId(request) {
   // Subdomain-enabled deployment, request landed on the base domain
   // with a path (e.g. https://example.com/alice/...). The canonical
   // form is the subdomain — match the rewriting buildResourceUrl does.
-  if (request.subdomainsEnabled && request.baseDomain && host === request.baseDomain) {
+  if (request.subdomainsEnabled && request.baseDomain && hostNoPort === request.baseDomain) {
     const m = (request.url || '').match(/^\/([^/?#]+)/);
     if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
       return `${proto}://${m[1]}.${request.baseDomain}/profile/card.jsonld#me`;
@@ -357,7 +368,7 @@ function getPodOwnerWebId(request) {
   // Path mode (JSS default): pod is the first URL segment.
   const m = (request.url || '').match(/^\/([^/?#]+)/);
   if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
-    return `${proto}://${host}/${m[1]}/profile/card.jsonld#me`;
+    return `${proto}://${hostNoPort}/${m[1]}/profile/card.jsonld#me`;
   }
   return null;
 }
