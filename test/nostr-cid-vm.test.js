@@ -291,6 +291,34 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, SINGLE_WEBID);
   });
 
+  it('upgrades did:nostr → WebID in single-user mode with a named pod', async () => {
+    // singleUser=true + singleUserName='alice' mounts the pod at
+    // /alice/, with WebID at /alice/profile/card.jsonld#me.
+    const NAMED_HOST = 'pod.example.com';
+    const NAMED_DOC = `https://${NAMED_HOST}/alice/profile/card.jsonld`;
+    const NAMED_WEBID = `${NAMED_DOC}#me`;
+    urlResponses.set(NAMED_DOC, {
+      status: 200,
+      headers: { 'content-type': 'application/ld+json' },
+      body: JSON.stringify(buildProfile({
+        pubkey: pk,
+        vmId: `${NAMED_DOC}#nostr-key-1`,
+        webId: NAMED_WEBID,
+      })),
+    });
+    const url = `https://${NAMED_HOST}/alice/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url, host: NAMED_HOST, mode: 'path' });
+    req.singleUser = true;
+    req.singleUserName = 'alice';
+    req.subdomainsEnabled = false;
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, NAMED_WEBID);
+  });
+
   it('handles IPv6 literal host without crashing the host parser', async () => {
     // host.split(':')[0] would mangle '[::1]:3000' to '['. Make sure
     // the URL-aware parser gives a usable hostname.

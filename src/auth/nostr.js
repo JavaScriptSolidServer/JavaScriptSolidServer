@@ -319,8 +319,10 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
  * JSS supports four pod-addressing modes (see src/idp/interactions.js
  * around the createPod path for the canonical list):
  *
- *   - **Single-user mode** — `request.singleUser` is true. There's
- *     one pod at the host root: WebID is `https://host/profile/card.jsonld#me`.
+ *   - **Single-user mode** — `request.singleUser` is true. The pod
+ *     either lives at the host root (WebID
+ *     `https://host/profile/card.jsonld#me`) or, when
+ *     `request.singleUserName` is set, at `/<name>/profile/card.jsonld#me`.
  *   - **Subdomain mode** — `subdomainsEnabled` is true, request hits a
  *     subdomain like `alice.example.com`. WebID is at the subdomain
  *     root: `https://alice.example.com/profile/card.jsonld#me`.
@@ -367,9 +369,13 @@ function getPodOwnerWebId(request) {
     hostNoPort = hostNoPort.slice(1, -1);
   }
 
-  // Single-user deployment: one pod at the host root.
+  // Single-user deployment. The pod is either at the host root or
+  // mounted under `/<singleUserName>/`; both shapes are supported.
   if (request.singleUser) {
-    return `${proto}://${hostRaw}/profile/card.jsonld#me`;
+    const name = request.singleUserName;
+    return name
+      ? `${proto}://${hostRaw}/${name}/profile/card.jsonld#me`
+      : `${proto}://${hostRaw}/profile/card.jsonld#me`;
   }
 
   // Subdomain mode (request already on a pod's subdomain).
