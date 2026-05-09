@@ -339,9 +339,16 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
  */
 function getPodOwnerWebId(request) {
   const headers = request.headers || {};
-  const proto = firstHeaderValue(headers['x-forwarded-proto'])
-              || request.protocol
-              || 'https';
+  // Lowercase + allowlist the protocol. Some proxies send
+  // `X-Forwarded-Proto: HTTPS` (or other casings); without
+  // normalization the constructed ownerWebId would carry that
+  // casing and the subject-identity check would reject the match
+  // against a profile @id that uses lowercase `https://`.
+  const protoRaw = firstHeaderValue(headers['x-forwarded-proto'])
+                 || request.protocol
+                 || 'https';
+  const protoLower = protoRaw.toLowerCase();
+  const proto = (protoLower === 'http' || protoLower === 'https') ? protoLower : 'https';
   // The Host header / x-forwarded-host can carry a port and may be an
   // IPv6 literal (`[::1]:3000`). For all WebID construction we use
   // the port-stripped, IPv6-bracket-stripped form (`hostNoPort`) to
@@ -369,6 +376,16 @@ function getPodOwnerWebId(request) {
   // U+005D (])"). The baseDomain comparison uses the un-bracketed
   // form, so we strip them here. Don't remove this branch — it is
   // reachable for any IPv6 host header.
+  //
+  // Known limitation (deferred): URL construction below interpolates
+  // `hostNoPort` into the WebID string, which produces an invalid
+  // URL for IPv6 (bracket-less) hosts. Solid deployments on IPv6
+  // literals are effectively non-existent, and JSS itself has the
+  // same shape (see src/handlers/container.js building with
+  // `${proto}://${request.hostname}` for path-mode pods), so fixing
+  // this here would actually create a mismatch with the stored
+  // @id. The right fix is at the JSS pod-creation layer; this
+  // module follows that convention to stay consistent.
   if (hostNoPort.startsWith('[') && hostNoPort.endsWith(']')) {
     hostNoPort = hostNoPort.slice(1, -1);
   }

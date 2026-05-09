@@ -449,6 +449,21 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     assert.strictEqual(r.webId, `did:nostr:${pk}`);
   });
 
+  it('lowercases x-forwarded-proto so HTTPS still matches profile @id', async () => {
+    // Some proxies send `X-Forwarded-Proto: HTTPS` (uppercase). The
+    // computed WebID must use the lowercase form so the subject-identity
+    // check still matches a profile @id that uses lowercase `https://`.
+    const url = `https://${POD_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url });
+    req.headers.authorization = authHeader;
+    req.headers['x-forwarded-proto'] = 'HTTPS';
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID);
+  });
+
   it('handles array-valued forwarded headers without throwing', async () => {
     // Fastify can yield x-forwarded-* as an array when duplicated.
     const url = `https://${POD_HOST}/private/data.ttl`;
