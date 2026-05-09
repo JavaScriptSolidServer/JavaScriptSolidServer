@@ -15,7 +15,7 @@ import { verifyEvent, getEventHash } from '../nostr/event.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
-import { validateExternalUrl } from '../utils/ssrf.js';
+import { fetchCidDocument } from './cid-doc-fetch.js';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -28,10 +28,9 @@ const TIMESTAMP_TOLERANCE = 60;
 // the 32-byte x-only Nostr pubkey.
 const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
-// Profile-fetch limits — matches the LWS-CID verifier's defenses
-// (cross-origin redirect refusal, hop cap, body-size cap).
+// Profile-fetch body-size cap. Matches the LWS-CID verifier; both
+// callers go through the shared fetchCidDocument helper.
 const MAX_PROFILE_BYTES = 256 * 1024;
-const MAX_PROFILE_REDIRECTS = 5;
 
 /**
  * Check if request has Nostr authentication
@@ -343,9 +342,13 @@ function getPodOwnerWebId(request) {
               || 'https';
   // The Host header / x-forwarded-host can carry a port and may be an
   // IPv6 literal (`[::1]:3000`). For the host-vs-baseDomain comparison
-  // we need a port-stripped hostname that handles IPv6 correctly; for
-  // URL construction we keep the original `host` so non-default ports
-  // round-trip into the WebID.
+  // we need a port-stripped hostname that handles IPv6 correctly. For
+  // URL construction we keep the original `hostRaw` (port included) in
+  // the single-user and path-mode branches so non-default ports
+  // round-trip into the WebID. The subdomain-mode and base-domain
+  // branches deliberately drop the port — these mirror the
+  // canonicalization buildResourceUrl performs, where the WebID is
+  // derived from the deployment's baseDomain (no port).
   const hostRaw = firstHeaderValue(headers['x-forwarded-host'])
                 || firstHeaderValue(headers.host)
                 || request.hostname;
@@ -394,107 +397,18 @@ function getPodOwnerWebId(request) {
 }
 
 /**
- * Fetch a CID document (= WebID profile) with the same defenses as the
- * LWS-CID verifier:
- *
- *   - SSRF validation on the URL (and on every redirect Location).
- *   - Manual redirect handling, capped at MAX_PROFILE_REDIRECTS.
- *   - Cross-origin redirects refused so an open redirect on the WebID's
- *     host can't substitute an attacker-controlled CID document.
- *   - Body cap (Content-Length up front, streaming-reader cap during
- *     read) so an untrusted host can't OOM us.
+ * Fetch a CID document (= WebID profile). Delegates to the shared
+ * fetcher in src/auth/cid-doc-fetch.js so SSRF / redirect / body-cap
+ * defenses don't drift between this and the LWS-CID verifier.
  *
  * Throws on any failure; the caller treats throw-as-null.
+ *
+ * KNOWN GAP (#381): the underlying validateExternalUrl currently
+ * fail-opens when DNS returns no A/AAAA records. Fix belongs in the
+ * shared util so every caller benefits at once.
  */
 async function fetchProfileSafely(docUrl) {
-  const originalOrigin = new URL(docUrl).origin;
-  let currentUrl = docUrl;
-
-  for (let hop = 0; hop <= MAX_PROFILE_REDIRECTS; hop++) {
-    const isLastAllowedHop = hop === MAX_PROFILE_REDIRECTS;
-    const validation = await validateExternalUrl(currentUrl, {
-      requireHttps: process.env.NODE_ENV === 'production',
-      blockPrivateIPs: true,
-      resolveDNS: true,
-    });
-    if (!validation.valid) {
-      throw new Error(`SSRF protection: ${validation.error}`);
-    }
-    // KNOWN GAP (#381): validateExternalUrl currently treats "no
-    // A/AAAA records" as valid (its dns.resolve calls .catch(() => [])
-    // and the empty-set loop never fails). So a hostname that
-    // doesn't resolve at validation time but DOES resolve to a
-    // private IP at fetch time would slip through. The fix belongs in
-    // the shared util — once #381 lands, every safeFetch caller
-    // (LWS-CID, here, idp/provider, ap, ...) benefits. Doing it
-    // locally here would be inconsistent and would still leave the
-    // other callers exposed.
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    let res;
-    try {
-      res = await fetch(currentUrl, {
-        headers: { Accept: 'application/ld+json, application/json;q=0.9' },
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-
-    if (res.status >= 300 && res.status < 400) {
-      if (isLastAllowedHop) {
-        throw new Error(`too many redirects (>${MAX_PROFILE_REDIRECTS})`);
-      }
-      const loc = res.headers.get('location');
-      if (!loc) throw new Error(`redirect ${res.status} without Location`);
-      const nextUrl = new URL(loc, currentUrl).toString();
-      const nextOrigin = new URL(nextUrl).origin;
-      if (nextOrigin !== originalOrigin) {
-        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
-      }
-      currentUrl = nextUrl;
-      continue;
-    }
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (!ct.includes('json')) throw new Error(`unexpected content-type: ${ct || '(none)'}`);
-
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > MAX_PROFILE_BYTES) {
-      throw new Error(`CID document too large (Content-Length=${declared})`);
-    }
-    const text = await readBodyWithCap(res, MAX_PROFILE_BYTES);
-    return JSON.parse(text);
-  }
-  throw new Error('profile fetch loop exited unexpectedly');
-}
-
-async function readBodyWithCap(res, maxBytes) {
-  const reader = res.body?.getReader?.();
-  if (!reader) {
-    const text = await res.text();
-    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-      throw new Error(`CID document too large (>${maxBytes} bytes)`);
-    }
-    return text;
-  }
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      try { await reader.cancel(); } catch { /* noop */ }
-      throw new Error(`CID document too large (>${maxBytes} bytes)`);
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+  return fetchCidDocument(docUrl, { maxBytes: MAX_PROFILE_BYTES });
 }
 
 function firstHeaderValue(v) {
