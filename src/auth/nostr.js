@@ -27,6 +27,11 @@ const TIMESTAMP_TOLERANCE = 60;
 // the 32-byte x-only Nostr pubkey.
 const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
+// Profile-fetch limits — matches the LWS-CID verifier's defenses
+// (cross-origin redirect refusal, hop cap, body-size cap).
+const MAX_PROFILE_BYTES = 256 * 1024;
+const MAX_PROFILE_REDIRECTS = 5;
+
 /**
  * Check if request has Nostr authentication
  * Supports both "Nostr <token>" and "Basic <base64(nostr:token)>" formats
@@ -280,27 +285,12 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
 
   // SSRF guard. The owner WebID is derived from server-side request
   // data, so it shouldn't be attacker-controllable, but route through
-  // the same guard as the LWS-CID verifier as defense-in-depth.
-  const validation = await validateExternalUrl(docUrl, {
-    requireHttps: process.env.NODE_ENV === 'production',
-    blockPrivateIPs: true,
-    resolveDNS: true,
-  });
-  if (!validation.valid) return null;
-
+  // the same defense-in-depth as the LWS-CID verifier — including
+  // manual redirect handling with same-origin enforcement, and a
+  // body-size cap to deflect oversized-payload DoS.
   let profile;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    const res = await fetch(docUrl, {
-      headers: { Accept: 'application/ld+json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (!ct.includes('json')) return null;
-    profile = await res.json();
+    profile = await fetchProfileSafely(docUrl);
   } catch {
     return null;
   }
@@ -320,34 +310,160 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
 /**
  * Derive the pod-owner WebID URL from a Fastify request.
  *
- * Subdomain mode: the pod's domain IS the request's hostname.
- * Path mode: the pod's name is the first path segment.
- * Single-user / unknown: returns null (the caller falls back).
+ * JSS supports three pod-addressing modes (see src/idp/interactions.js
+ * around the createPod path for the canonical list):
+ *
+ *   - **Subdomain mode** — `subdomainsEnabled` is true, request hits a
+ *     subdomain like `alice.example.com`. WebID is at the subdomain
+ *     root: `https://alice.example.com/profile/card.jsonld#me`.
+ *   - **Path mode** — the JSS default (`subdomainsEnabled` off). Pod
+ *     is at the first URL path segment:
+ *     `https://example.com/alice/foo` → WebID
+ *     `https://example.com/alice/profile/card.jsonld#me`.
+ *   - **Path-mode-on-base** — subdomains are enabled but the request
+ *     hits the base domain with a path. The internal canonical form
+ *     rewrites this to the subdomain shape (per buildResourceUrl).
+ *
+ * Returns null when no pod name can be derived (single-user
+ * deployments will hit this path; the caller falls back to the
+ * existing did:nostr DID-doc resolver / did:nostr identity).
  */
 function getPodOwnerWebId(request) {
-  const proto = (request.headers?.['x-forwarded-proto'] || '').split(',')[0].trim()
+  const headers = request.headers || {};
+  const proto = firstHeaderValue(headers['x-forwarded-proto'])
               || request.protocol
               || 'https';
-  const host  = (request.headers?.['x-forwarded-host'] || '').split(',')[0].trim()
-              || request.headers?.host
+  const host  = firstHeaderValue(headers['x-forwarded-host'])
+              || firstHeaderValue(headers.host)
               || request.hostname;
   if (!host) return null;
 
-  // Subdomain mode: hostname carries the pod name.
-  if (request.subdomainsEnabled && request.podName) {
+  // Subdomain mode (request already on a pod's subdomain).
+  if (request.subdomainsEnabled && request.podName && request.baseDomain) {
     return `${proto}://${request.podName}.${request.baseDomain}/profile/card.jsonld#me`;
   }
 
-  // Path mode on the base domain: first path segment is the pod name.
+  // Subdomain-enabled deployment, request landed on the base domain
+  // with a path (e.g. https://example.com/alice/...). The canonical
+  // form is the subdomain — match the rewriting buildResourceUrl does.
   if (request.subdomainsEnabled && request.baseDomain && host === request.baseDomain) {
     const m = (request.url || '').match(/^\/([^/?#]+)/);
     if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
       return `${proto}://${m[1]}.${request.baseDomain}/profile/card.jsonld#me`;
     }
+    return null;
   }
 
-  // Default: assume the host itself is a single-pod deployment.
-  return `${proto}://${host}/profile/card.jsonld#me`;
+  // Path mode (JSS default): pod is the first URL segment.
+  const m = (request.url || '').match(/^\/([^/?#]+)/);
+  if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
+    return `${proto}://${host}/${m[1]}/profile/card.jsonld#me`;
+  }
+  return null;
+}
+
+/**
+ * Fetch a CID document (= WebID profile) with the same defenses as the
+ * LWS-CID verifier:
+ *
+ *   - SSRF validation on the URL (and on every redirect Location).
+ *   - Manual redirect handling, capped at MAX_PROFILE_REDIRECTS.
+ *   - Cross-origin redirects refused so an open redirect on the WebID's
+ *     host can't substitute an attacker-controlled CID document.
+ *   - Body cap (Content-Length up front, streaming-reader cap during
+ *     read) so an untrusted host can't OOM us.
+ *
+ * Throws on any failure; the caller treats throw-as-null.
+ */
+async function fetchProfileSafely(docUrl) {
+  const originalOrigin = new URL(docUrl).origin;
+  let currentUrl = docUrl;
+
+  for (let hop = 0; hop <= MAX_PROFILE_REDIRECTS; hop++) {
+    const isLastAllowedHop = hop === MAX_PROFILE_REDIRECTS;
+    const validation = await validateExternalUrl(currentUrl, {
+      requireHttps: process.env.NODE_ENV === 'production',
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) {
+      throw new Error(`SSRF protection: ${validation.error}`);
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    let res;
+    try {
+      res = await fetch(currentUrl, {
+        headers: { Accept: 'application/ld+json, application/json;q=0.9' },
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res.status >= 300 && res.status < 400) {
+      if (isLastAllowedHop) {
+        throw new Error(`too many redirects (>${MAX_PROFILE_REDIRECTS})`);
+      }
+      const loc = res.headers.get('location');
+      if (!loc) throw new Error(`redirect ${res.status} without Location`);
+      const nextUrl = new URL(loc, currentUrl).toString();
+      const nextOrigin = new URL(nextUrl).origin;
+      if (nextOrigin !== originalOrigin) {
+        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (!ct.includes('json')) throw new Error(`unexpected content-type: ${ct || '(none)'}`);
+
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_PROFILE_BYTES) {
+      throw new Error(`CID document too large (Content-Length=${declared})`);
+    }
+    const text = await readBodyWithCap(res, MAX_PROFILE_BYTES);
+    return JSON.parse(text);
+  }
+  throw new Error('profile fetch loop exited unexpectedly');
+}
+
+async function readBodyWithCap(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const text = await res.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error(`CID document too large (>${maxBytes} bytes)`);
+    }
+    return text;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* noop */ }
+      throw new Error(`CID document too large (>${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
+}
+
+function firstHeaderValue(v) {
+  if (!v) return null;
+  // Fastify/Node header values can be string or string[].
+  const s = Array.isArray(v) ? v[0] : v;
+  if (typeof s !== 'string') return null;
+  const first = s.split(',')[0].trim();
+  return first || null;
 }
 
 /**
