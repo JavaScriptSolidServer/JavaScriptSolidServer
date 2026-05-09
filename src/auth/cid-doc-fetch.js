@@ -62,6 +62,13 @@ export function _clearProfileCacheForTests() {
  * profile URLs. Deployments serving WebID profiles should make sure
  * their host returns the correct Content-Type for the CID document.
  *
+ * Cache contract: keyed by `docUrl` only. All callers MUST pass
+ * consistent `opts` (in practice today everyone passes
+ * maxBytes = 256 KB). If a future caller needs a stricter limit, the
+ * cache key needs to incorporate it (or that caller needs its own
+ * cache) — otherwise a permissive entry would be returned to a strict
+ * caller and the cap wouldn't be re-enforced.
+ *
  * @param {string} docUrl - URL to fetch (untrusted — comes from JWT
  *   claims or is derived from a request).
  * @param {object} [opts]

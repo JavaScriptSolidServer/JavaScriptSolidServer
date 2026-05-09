@@ -402,27 +402,23 @@ function getPodOwnerWebId(request) {
   let hostNoPort;
   try { hostNoPort = new URL(`${proto}://${hostRaw}`).hostname; }
   catch { return null; }
-  // Strip surrounding brackets the URL parser keeps on .hostname for
-  // IPv6 literals. Verified on Node v24.5.0:
+  // Detect IPv6 literal hosts and bail early. URL.hostname keeps
+  // brackets for IPv6 (verified Node v24.5.0:
   //   new URL('https://[2001:db8::1]:8443/x').hostname === '[2001:db8::1]'
-  // matching WHATWG URL §host serializing rule for IPv6 addresses
-  // ("return U+005B ([), followed by IPv6 serializer, followed by
-  // U+005D (])"). The baseDomain comparison uses the un-bracketed
-  // form, so we strip them here. Don't remove this branch — it is
-  // reachable for any IPv6 host header.
+  // per WHATWG URL §host serializing rule). Continuing into the
+  // URL-construction branches with a bracket-less form would yield a
+  // malformed string like `https://2001:db8::1/...` — invalid, would
+  // throw at parse time and could pollute the shared CID-profile
+  // cache with a failure entry under that bogus key.
   //
-  // Known limitation (deferred): URL construction below interpolates
-  // `hostNoPort` into the WebID string, which produces an invalid
-  // URL for IPv6 (bracket-less) hosts. Solid deployments on IPv6
-  // literals are effectively non-existent, and JSS itself has the
-  // same shape (see src/handlers/container.js building with
-  // `${proto}://${request.hostname}` for path-mode pods), so fixing
-  // this here would actually create a mismatch with the stored
-  // @id. The right fix is at the JSS pod-creation layer; this
-  // module follows that convention to stay consistent.
-  if (hostNoPort.startsWith('[') && hostNoPort.endsWith(']')) {
-    hostNoPort = hostNoPort.slice(1, -1);
-  }
+  // Solid deployments on raw IPv6 literals are effectively
+  // non-existent; cleanly skipping the VM-lookup upgrade for them
+  // (caller falls back to the existing did:nostr resolver) is the
+  // right behavior. JSS itself has a parallel limitation in
+  // src/handlers/container.js — fixing IPv6 needs to happen at that
+  // pod-creation layer first.
+  const isIpv6 = hostNoPort.startsWith('[') && hostNoPort.endsWith(']');
+  if (isIpv6) return null;
 
   // Single-user deployment. The pod is either at the host root or
   // mounted under `/<singleUserName>/`; both shapes are supported.
