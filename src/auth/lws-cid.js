@@ -157,6 +157,13 @@ export async function verifyLwsCidAuth(request) {
   if (!kidUrl.hash) {
     return { webId: null, error: 'kid must be a fragment URI within a CID document' };
   }
+  // Normalize kid via the URL parser's canonicalization (case-folded
+  // scheme/host, default-port stripped, percent-encoded path) so all
+  // downstream comparisons against absolutized VM ids and proof-purpose
+  // refs operate on canonical strings. Otherwise a semantically
+  // equivalent but non-canonical kid in the JWT header would fail to
+  // match the profile's id values.
+  const kid = kidUrl.toString();
 
   // FPWD §4: sub === iss === client_id, all the same WebID URI.
   const { sub, iss, client_id, aud, exp, iat, nbf } = payload;
@@ -170,12 +177,12 @@ export async function verifyLwsCidAuth(request) {
 
   // The kid's document URL must match the WebID's document URL — the VM
   // lives inside the subject's CID document.
-  const kidDoc = stripHash(header.kid);
+  const kidDoc = stripHash(kid);
   const webIdDoc = stripHash(webId);
   if (kidDoc !== webIdDoc) {
     return {
       webId: null,
-      error: `kid (${header.kid}) is not in the subject's CID document (${webIdDoc})`,
+      error: `kid (${kid}) is not in the subject's CID document (${webIdDoc})`,
     };
   }
 
@@ -275,20 +282,20 @@ export async function verifyLwsCidAuth(request) {
     };
   }
 
-  const vm = findVerificationMethod(profile, header.kid, webIdDoc);
+  const vm = findVerificationMethod(profile, kid, webIdDoc);
   if (!vm) {
     return {
       webId: null,
-      error: `no verificationMethod with id ${header.kid} in CID document`,
+      error: `no verificationMethod with id ${kid} in CID document`,
     };
   }
 
   // VM must be referenced by `authentication` to be usable as an auth
   // credential. (CID 1.0 §3.3)
-  if (!isInProofPurpose(profile, 'authentication', header.kid, webIdDoc)) {
+  if (!isInProofPurpose(profile, 'authentication', kid, webIdDoc)) {
     return {
       webId: null,
-      error: `verificationMethod ${header.kid} is not listed in authentication`,
+      error: `verificationMethod ${kid} is not listed in authentication`,
     };
   }
 

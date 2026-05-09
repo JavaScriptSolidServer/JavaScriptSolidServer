@@ -531,6 +531,21 @@ describe('verifyLwsCidAuth', () => {
     assert.strictEqual(r.webId, WEBID);
   });
 
+  it('canonicalizes kid (case/default-port) before matching VM ids', async () => {
+    // JWT carries a non-canonical kid (uppercase scheme + host,
+    // explicit default port); the profile's VM id is canonical.
+    // After URL-parse normalization both should match.
+    const nonCanonicalKid = 'HTTPS://Example.COM:443/profile/card.jsonld#nostr-key-1';
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: nonCanonicalKid },
+      payload: claims(),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID);
+  });
+
   it('handles comma-separated x-forwarded-host (multi-proxy chain)', async () => {
     const token = makeJwt({
       privKey: priv,
