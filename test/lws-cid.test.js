@@ -143,6 +143,24 @@ describe('hasLwsCidAuth', () => {
   it('rejects malformed JWT', () => {
     assert.strictEqual(hasLwsCidAuth(makeRequest('not.a.jwt')), false);
   });
+
+  it('rejects JWT with kid using non-http(s) scheme', () => {
+    const token = makeJwt({
+      privKey: secp256k1.utils.randomPrivateKey(),
+      header: { alg: 'ES256K', kid: 'urn:foo:bar#k1' },
+      payload: { sub: WEBID },
+    });
+    assert.strictEqual(hasLwsCidAuth(makeRequest(token)), false);
+  });
+
+  it('rejects JWT with unaccepted alg (e.g. HS256)', () => {
+    const token = makeJwt({
+      privKey: secp256k1.utils.randomPrivateKey(),
+      header: { alg: 'HS256', kid: VM_ID },
+      payload: { sub: WEBID },
+    });
+    assert.strictEqual(hasLwsCidAuth(makeRequest(token)), false);
+  });
 });
 
 describe('verifyLwsCidAuth', () => {
@@ -439,9 +457,11 @@ describe('verifyLwsCidAuth', () => {
     assert.match(r.error, /could not fetch/);
   });
 
-  it('rejects when CID document has no controller / @id / id (vacuous bypass)', async () => {
-    // Profile that's structurally complete enough to find a VM, but has
-    // no top-level controller or @id at all.
+  it('rejects when CID document declares no subject (no @id / id)', async () => {
+    // Profile that's structurally complete enough to find a VM, but
+    // declares no top-level subject. This is rejected by the
+    // subject-identity check (which fires before the controller check
+    // — both layers exist as defense-in-depth).
     nextProfile = {
       '@context': { cid: 'https://www.w3.org/ns/cid/v1#' },
       verificationMethod: [{
@@ -458,7 +478,25 @@ describe('verifyLwsCidAuth', () => {
       payload: claims(),
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
-    assert.match(r.error, /no controller or @id/);
+    assert.match(r.error, /declares no subject/);
+  });
+
+  it("rejects when CID document's subject differs from JWT sub", async () => {
+    // Profile DOES declare a subject, but it's a different fragment
+    // than the JWT claims. Without this check, an attacker could
+    // serve a profile whose @id is "#bob" while the JWT claims "#alice"
+    // and reuse a VM controlled by bob.
+    nextProfile = {
+      ...buildProfile(jwk),
+      '@id': 'https://example.com/profile/card.jsonld#bob',
+    };
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(), // sub = "...#me"
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /subject.*does not match JWT sub/);
   });
 
   it('normalizes origin (default port and case) on both sides of aud check', async () => {

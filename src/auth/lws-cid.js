@@ -80,11 +80,17 @@ export function _clearProfileCacheForTests() {
 /**
  * Cheap detector — does this request carry an LWS-CID JWT?
  *
- * True when:
+ * Routes a Bearer JWT to verifyLwsCidAuth only when it shows the
+ * specific LWS-CID shape:
  *   - Authorization: Bearer <token>
  *   - token is a 3-part JWT
- *   - header.kid is a URL with a fragment (which is what an LWS-CID
- *     verificationMethod id always looks like)
+ *   - header.alg is one of our accepted JWS algorithms
+ *   - header.kid is an http(s) URL with a fragment (which is what an
+ *     LWS-CID verificationMethod id always looks like)
+ *
+ * Other JWS algs / non-URL kids fall through to the existing
+ * IdP / simple-token paths in token.js — so this detector is
+ * conservative on purpose.
  *
  * @param {object} request
  * @returns {boolean}
@@ -97,8 +103,11 @@ export function hasLwsCidAuth(request) {
   if (parts.length !== 3) return false;
   try {
     const header = JSON.parse(b64uDecode(parts[0]).toString('utf8'));
-    if (!header || typeof header.kid !== 'string') return false;
+    if (!header) return false;
+    if (typeof header.alg !== 'string' || !ACCEPTED_ALGS.has(header.alg)) return false;
+    if (typeof header.kid !== 'string') return false;
     const u = new URL(header.kid);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
     return Boolean(u.hash); // LWS-CID kid is always a fragment URI
   } catch {
     return false;
@@ -241,6 +250,26 @@ export async function verifyLwsCidAuth(request) {
   }
   if (!profile || typeof profile !== 'object' || Array.isArray(profile)) {
     return { webId: null, error: 'CID document is not a JSON object' };
+  }
+
+  // Subject-identity check. The CID document we just fetched MUST
+  // actually identify itself as the JWT's `sub`. Without this, a doc
+  // hosted at the same URL could declare itself to be a different
+  // WebID fragment, but reuse a verificationMethod controlled by
+  // another node — and we'd authenticate as `sub` based on the wrong
+  // VM's signature.
+  const profileSubject = absolutize(profile['@id'] ?? profile.id, webIdDoc);
+  if (!profileSubject) {
+    return {
+      webId: null,
+      error: 'CID document declares no subject (@id / id)',
+    };
+  }
+  if (profileSubject !== webId) {
+    return {
+      webId: null,
+      error: `CID document subject (${profileSubject}) does not match JWT sub (${webId})`,
+    };
   }
 
   const vm = findVerificationMethod(profile, header.kid, webIdDoc);
