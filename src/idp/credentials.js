@@ -361,7 +361,7 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   await deleteAccount(account.id);
 
   // 6. Optionally purge the pod's filesystem data. Mirrors the CLI
-  // `--purge` semantics. The path is <dataRoot>/<podName>/.
+  // `--purge` semantics. The path is `<dataRoot>/<podName>/`.
   //
   // Use account.podName, NOT account.username: createAccount normalizes
   // username to lowercase (`username.toLowerCase().trim()`) but the pod
@@ -385,9 +385,14 @@ export async function handleDeleteAccount(request, reply, options = {}) {
     const candidate = path.resolve(dataRoot, account.podName || account.username);
     const root = path.resolve(dataRoot);
     // Belt-and-suspenders: refuse to remove anything that isn't a
-    // proper child of the data root. Won't trigger on registered
-    // pod names; protects against config drift / future bugs.
-    if (candidate.startsWith(root + path.sep) && candidate !== root) {
+    // proper child of the data root. Won't trigger on registered pod
+    // names; protects against config drift / future bugs. Use
+    // path.relative so the check works when dataRoot is a filesystem
+    // root like `/` (where startsWith(root + path.sep) would compare
+    // against `//`, false-negative all valid children).
+    const rel = path.relative(root, candidate);
+    const isProperChild = rel && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+    if (isProperChild) {
       try {
         await fs.remove(candidate);
         purged = true;
