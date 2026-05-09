@@ -4,11 +4,14 @@
  * Supports multiple modes:
  * 1. Simple tokens (for local/dev use): base64(JSON({webId, iat, exp})) + HMAC signature
  * 2. Solid-OIDC DPoP tokens (for federation): verified via external IdP JWKS
- * 3. Nostr NIP-98 tokens: Schnorr signatures, returns did:nostr identity
+ * 3. LWS10-CID JWTs (FPWD 2026-04-23): kid points at a verificationMethod
+ *    in the subject's WebID profile; signed with a JWS alg (ES256K, ES256, …)
+ * 4. Nostr NIP-98 tokens: Schnorr signatures, returns did:nostr identity
  */
 
 import crypto from 'crypto';
 import { verifySolidOidc, hasSolidOidcAuth } from './solid-oidc.js';
+import { verifyLwsCidAuth, hasLwsCidAuth } from './lws-cid.js';
 import { verifyNostrAuth, hasNostrAuth } from './nostr.js';
 import { webIdTlsAuth, hasClientCertificate } from './webid-tls.js';
 import { resolveTokenSecret } from './token-secret.js';
@@ -203,6 +206,14 @@ export async function getWebIdFromRequestAsync(request) {
     // Try Solid-OIDC first (DPoP tokens)
     if (hasSolidOidcAuth(request)) {
       return verifySolidOidc(request);
+    }
+
+    // Try LWS10-CID (Bearer JWT whose kid is a fragment URL into a CID
+    // document). Detected by header shape, so it doesn't conflict with
+    // the IDP-issued JWTs handled in the Bearer fallback below — those
+    // use opaque fingerprint kids, not URLs.
+    if (hasLwsCidAuth(request)) {
+      return verifyLwsCidAuth(request);
     }
 
     // Try Nostr NIP-98 (Schnorr signatures)
