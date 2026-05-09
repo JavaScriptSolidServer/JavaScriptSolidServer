@@ -445,13 +445,15 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
     return reply.type('text/html').send(accountDeletePage({ singleUser: true }));
   }
 
-  // Parse form-encoded body. Fastify with @fastify/formbody (registered
-  // for /idp/register etc.) puts fields directly on request.body.
+  // Parse form-encoded body. JSS registers a wildcard parseAs:'buffer'
+  // content parser (server.js:190), so request.body arrives here as a
+  // Buffer. We coerce to a string and parse the application/x-www-form-
+  // urlencoded shape via URLSearchParams. (No @fastify/formbody is
+  // installed; doing it inline keeps this self-contained and matches
+  // what handleChangePassword does for JSON.)
   let body = request.body;
   if (Buffer.isBuffer(body)) body = body.toString('utf-8');
   if (typeof body === 'string') {
-    // Manual urlencoded parse fallback if formbody isn't registered for
-    // this content-type on this route.
     try {
       const params = new URLSearchParams(body);
       body = Object.fromEntries(params);
