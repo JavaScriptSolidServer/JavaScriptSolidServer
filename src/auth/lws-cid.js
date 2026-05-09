@@ -337,11 +337,14 @@ function getRequestOrigin(request) {
   // Multi-proxy chains may produce comma-separated lists (e.g.
   // `x-forwarded-host: a.example, b.internal`); the leftmost value is
   // the original client-facing front-end, which is what we want.
+  //
+  // The result is run through normalizeOrigin so default ports and
+  // case folding match the audList comparison side.
   const headers = request.headers || {};
   const proto = firstHeaderValue(headers['x-forwarded-proto']) || request.protocol || 'https';
   const host  = firstHeaderValue(headers['x-forwarded-host']) || headers.host || request.hostname;
   if (!host) return null;
-  return `${proto}://${host}`;
+  return normalizeOrigin(`${proto}://${host}`);
 }
 
 function firstHeaderValue(v) {

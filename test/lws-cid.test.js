@@ -461,6 +461,25 @@ describe('verifyLwsCidAuth', () => {
     assert.match(r.error, /no controller or @id/);
   });
 
+  it('normalizes origin (default port and case) on both sides of aud check', async () => {
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      // aud uses the explicit default port and uppercase scheme.
+      payload: claims(undefined, { aud: ['HTTPS://Example.COM:443'] }),
+    });
+    const req = {
+      headers: {
+        authorization: `Bearer ${token}`,
+        host: 'example.com', // no port, lowercase
+      },
+      protocol: 'https',
+    };
+    const r = await verifyLwsCidAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID);
+  });
+
   it('handles comma-separated x-forwarded-host (multi-proxy chain)', async () => {
     const token = makeJwt({
       privKey: priv,
