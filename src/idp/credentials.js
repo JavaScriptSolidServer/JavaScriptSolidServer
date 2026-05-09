@@ -287,8 +287,9 @@ export async function handleChangePassword(request, reply) {
  *   400 — invalid request body / missing password
  *   403 — single-user mode (deletion would brick the server until
  *         re-seed; operator should use the CLI), or no account for the
- *         caller's WebID
- *   404 — no account at all (already deleted)
+ *         caller's WebID. The "no account" case lands here rather than
+ *         404 because the caller had a valid token — they're proving
+ *         identity, just not for an account this server holds.
  *
  * Out of scope: invalidating in-flight access tokens. Tokens reference
  * the WebID; once the account record is gone, follow-up auth attempts
@@ -364,7 +365,14 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   // username already validated at registration (#321 alphanum/dash/dot
   // rules) so no traversal risk in practice; defensive normalize
   // anyway.
-  let purgedPath = null;
+  //
+  // Best-effort: if fs.remove throws (permissions, transient FS error,
+  // race with another consumer), the account is already deleted and we
+  // shouldn't 500 over the leftover files. Log server-side and return
+  // purged: false so the caller knows pod data may still exist; an
+  // operator can finish the cleanup with a follow-up `rm -rf` or
+  // CLI `--purge` against the now-orphaned directory.
+  let purged = false;
   if (purgeData) {
     const dataRoot = process.env.DATA_ROOT || './data';
     const candidate = path.resolve(dataRoot, account.username);
@@ -373,8 +381,16 @@ export async function handleDeleteAccount(request, reply, options = {}) {
     // proper child of the data root. Won't trigger on registered
     // usernames; protects against config drift / future bugs.
     if (candidate.startsWith(root + path.sep) && candidate !== root) {
-      await fs.remove(candidate);
-      purgedPath = candidate;
+      try {
+        await fs.remove(candidate);
+        purged = true;
+      } catch (err) {
+        request.log.error({ err, path: candidate, username: account.username },
+          'Pod data purge failed after account deletion');
+        // Don't surface the raw error to the user (file paths,
+        // permission detail leak); response.purged signals the
+        // outcome.
+      }
     }
   }
 
@@ -383,7 +399,7 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   return {
     ok: true,
     webid: account.webId,
-    purged: purgedPath !== null,
+    purged,
   };
 }
 
