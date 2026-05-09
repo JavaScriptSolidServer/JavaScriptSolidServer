@@ -31,6 +31,12 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
   const docUrl = webId.split('#')[0];
 
   return {
+    // CID v1 vocabulary is declared inline (rather than via an imported
+    // context URL) so JSS's JSON-LD → Turtle conneg layer can expand
+    // every term without fetching external contexts. Semantically
+    // equivalent to importing https://www.w3.org/ns/cid/v1: the IRIs
+    // each term expands to are the same. This keeps the profile a valid
+    // W3C Controlled Identifier document per LWS 1.0 (#386 Phase A).
     '@context': {
       'foaf': FOAF,
       'solid': SOLID,
@@ -48,13 +54,28 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'isPrimaryTopicOf': { '@id': 'foaf:isPrimaryTopicOf', '@type': '@id' },
       'mainEntityOfPage': { '@id': 'schema:mainEntityOfPage', '@type': '@id' },
       'service': { '@id': 'cid:service', '@container': '@set' },
-      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' }
+      'serviceEndpoint': { '@id': 'cid:serviceEndpoint', '@type': '@id' },
+      // CID v1 terms used by Phase A and prepped for Phase B (the
+      // standalone "add my keys" app). Declaring these now means the
+      // app can PATCH in verificationMethod entries without having to
+      // also rewrite the @context.
+      'controller':         { '@id': 'cid:controller', '@type': '@id' },
+      'verificationMethod': { '@id': 'cid:verificationMethod', '@type': '@id' },
+      'authentication':     { '@id': 'cid:authentication', '@type': '@id' },
+      'assertionMethod':    { '@id': 'cid:assertionMethod', '@type': '@id' },
+      'publicKeyJwk':       { '@id': 'cid:publicKeyJwk' },
+      'publicKeyMultibase': { '@id': 'cid:publicKeyMultibase' }
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
     'foaf:name': name,
     'isPrimaryTopicOf': '',
     'mainEntityOfPage': '',
+    // CID v1 self-control: the WebID is its own controller. Phase A of
+    // #386 ships this triple even with no verificationMethods yet, so a
+    // future Phase B "add-keys" app PATCHing in verificationMethod
+    // entries doesn't have to also wire up controllership separately.
+    'controller': webId,
     'inbox': `${pod}inbox/`,
     'storage': pod,
     'oidcIssuer': issuer,

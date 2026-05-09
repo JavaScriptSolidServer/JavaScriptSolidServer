@@ -47,6 +47,37 @@ describe('WebID Profile', () => {
       assert.ok(jsonLd['@id'], 'Should have @id');
     });
 
+    // LWS-CID document conformance, Phase A of #386. The profile must be
+    // structurally a W3C Controlled Identifier document so a future
+    // PATCH-in-keys app (or server migration) can drop verificationMethod
+    // entries in without further plumbing. CID v1 vocabulary is declared
+    // inline rather than via context URL so JSS's conneg layer can
+    // expand every term without fetching external contexts — the IRIs
+    // are the same either way.
+    it('declares CID v1 terms in @context (#386 Phase A)', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      const ctx = jsonLd['@context'];
+      assert.ok(ctx, '@context required');
+      // Both 'controller' and 'verificationMethod' must expand to the
+      // CID v1 namespace. Inline form: '@id': 'cid:controller' or
+      // '@id': 'https://www.w3.org/ns/cid/v1#controller'.
+      const controllerMapping = ctx.controller;
+      assert.ok(controllerMapping, '@context must define `controller`');
+      const id = typeof controllerMapping === 'string' ? controllerMapping : controllerMapping['@id'];
+      assert.match(id, /^(cid:controller|https:\/\/www\.w3\.org\/ns\/cid\/v1#controller)$/,
+        'controller must map to the CID v1 namespace');
+      assert.ok(ctx.verificationMethod, '@context must define `verificationMethod` for Phase B');
+      assert.ok(ctx.authentication, '@context must define `authentication` for Phase B');
+    });
+
+    it('declares self-control via controller === @id (#386 Phase A)', async () => {
+      const res = await request(profilePath);
+      const jsonLd = await res.json();
+      assert.strictEqual(jsonLd.controller, jsonLd['@id'],
+        'profile must declare itself as its own controller per CID v1');
+    });
+
     it('should have correct WebID URI', async () => {
       const res = await request(profilePath);
       const jsonLd = await res.json();
