@@ -53,6 +53,15 @@ export function _clearProfileCacheForTests() {
  * body-size protections — and a bounded TTL cache so auth-path callers
  * don't refetch on every request.
  *
+ * Content-Type expectation: the response must declare a JSON-bearing
+ * Content-Type (matching `/json/`, e.g. `application/ld+json`,
+ * `application/json`, `application/json+ld`). A missing or non-JSON
+ * Content-Type rejects with a clear error rather than silently
+ * attempting JSON.parse — this caught real misconfigurations during
+ * #398 review where Turtle / HTML error pages were being served at
+ * profile URLs. Deployments serving WebID profiles should make sure
+ * their host returns the correct Content-Type for the CID document.
+ *
  * @param {string} docUrl - URL to fetch (untrusted — comes from JWT
  *   claims or is derived from a request).
  * @param {object} [opts]

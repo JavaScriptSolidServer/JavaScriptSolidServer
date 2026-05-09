@@ -7,8 +7,18 @@
  *
  * Authorization header format: "Nostr <base64-encoded-event>"
  *
- * The authenticated identity is returned as a did:nostr URI:
- *   did:nostr:<64-char-hex-pubkey>
+ * Identity resolution chain (after a successful Schnorr verification):
+ *
+ *   1. Look up the Nostr pubkey in the resource owner's WebID profile
+ *      as a CID v1 verificationMethod referenced from `authentication`.
+ *      Match by f-form Multikey or by JsonWebKey x/y coordinates. If
+ *      found, authenticate as the WebID. (#399 — pairs with the
+ *      LWS10-CID verifier.)
+ *   2. Resolve via the existing did:nostr DID-document path
+ *      (nostr.social `.well-known` + bidirectional alsoKnownAs).
+ *      If found, authenticate as the WebID it points to.
+ *   3. Otherwise return `did:nostr:<64-char-hex-pubkey>` as the
+ *      agent identity (the original behavior).
  */
 
 import { verifyEvent, getEventHash } from '../nostr/event.js';
