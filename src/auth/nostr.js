@@ -12,6 +12,7 @@
  */
 
 import { verifyEvent, getEventHash } from '../nostr/event.js';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 import { validateExternalUrl } from '../utils/ssrf.js';
@@ -334,19 +335,32 @@ function getPodOwnerWebId(request) {
   const proto = firstHeaderValue(headers['x-forwarded-proto'])
               || request.protocol
               || 'https';
-  // Use request.hostname (port-stripped) for the host comparison and
-  // for derivation. The Host header / x-forwarded-host can carry a
-  // port (e.g. "example.com:8080") which would prevent the
-  // host === baseDomain check below from matching.
-  const host  = firstHeaderValue(headers['x-forwarded-host'])
-              || request.hostname
-              || firstHeaderValue(headers.host);
-  if (!host) return null;
-  const hostNoPort = host.split(':')[0];
+  // The Host header / x-forwarded-host can carry a port and may be an
+  // IPv6 literal (`[::1]:3000`). For the host-vs-baseDomain comparison
+  // we need a port-stripped hostname that handles IPv6 correctly; for
+  // URL construction we keep the original `host` so non-default ports
+  // round-trip into the WebID.
+  const hostRaw = firstHeaderValue(headers['x-forwarded-host'])
+                || firstHeaderValue(headers.host)
+                || request.hostname;
+  if (!hostRaw) return null;
+  // `request.hostname` is port-stripped per Fastify but doesn't survive
+  // x-forwarded-host parsing. Round-trip through URL semantics so
+  // IPv6 brackets and ports are handled by the parser, not split(':').
+  let hostNoPort;
+  try { hostNoPort = new URL(`${proto}://${hostRaw}`).hostname; }
+  catch { return null; }
+  // Strip surrounding brackets the URL parser keeps on the .hostname for
+  // IPv6 literals (`[::1]` → `::1`). Comparison strings against
+  // baseDomain are written without brackets; URL construction below
+  // re-wraps explicitly when needed.
+  if (hostNoPort.startsWith('[') && hostNoPort.endsWith(']')) {
+    hostNoPort = hostNoPort.slice(1, -1);
+  }
 
   // Single-user deployment: one pod at the host root.
   if (request.singleUser) {
-    return `${proto}://${hostNoPort}/profile/card.jsonld#me`;
+    return `${proto}://${hostRaw}/profile/card.jsonld#me`;
   }
 
   // Subdomain mode (request already on a pod's subdomain).
@@ -368,7 +382,7 @@ function getPodOwnerWebId(request) {
   // Path mode (JSS default): pod is the first URL segment.
   const m = (request.url || '').match(/^\/([^/?#]+)/);
   if (m && !m[1].startsWith('.') && !m[1].includes('.')) {
-    return `${proto}://${hostNoPort}/${m[1]}/profile/card.jsonld#me`;
+    return `${proto}://${hostRaw}/${m[1]}/profile/card.jsonld#me`;
   }
   return null;
 }
@@ -400,6 +414,15 @@ async function fetchProfileSafely(docUrl) {
     if (!validation.valid) {
       throw new Error(`SSRF protection: ${validation.error}`);
     }
+    // KNOWN GAP (#381): validateExternalUrl currently treats "no
+    // A/AAAA records" as valid (its dns.resolve calls .catch(() => [])
+    // and the empty-set loop never fails). So a hostname that
+    // doesn't resolve at validation time but DOES resolve to a
+    // private IP at fetch time would slip through. The fix belongs in
+    // the shared util — once #381 lands, every safeFetch caller
+    // (LWS-CID, here, idp/provider, ap, ...) benefits. Doing it
+    // locally here would be inconsistent and would still leave the
+    // other callers exposed.
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
@@ -502,7 +525,7 @@ function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
     if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
       const jwk = vm.publicKeyJwk;
       if (jwk.kty === 'EC' && (jwk.crv === 'secp256k1' || jwk.crv === 'P-256K')) {
-        if (typeof jwk.x === 'string' && jwk.x === targetB64u) {
+        if (jwkMatchesNostrPubkey(jwk, target, targetB64u)) {
           return { ...vm, id: absolutize(vmId, baseUrl) };
         }
       }
@@ -531,6 +554,44 @@ function decodeFFormSecp256k1(mb) {
 function hexToBase64url(hex) {
   return Buffer.from(hex, 'hex').toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * Does the JWK encode the given Nostr x-only pubkey?
+ *
+ * EC keys are (x, y) pairs — two distinct valid points share the same
+ * x with opposite y parities. Matching on x alone would let an
+ * attacker craft a JWK with the target x and a wrong y, which we'd
+ * then accept as the user's Nostr key. So we also derive the
+ * BIP-340-canonical y (even-parity) for the target x and require the
+ * JWK's y to match.
+ *
+ * Returns false if the JWK's coordinates aren't on-curve, can't be
+ * decoded, or don't match the BIP-340 canonical point for `targetHex`.
+ */
+function jwkMatchesNostrPubkey(jwk, targetHex, targetB64u) {
+  if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string') return false;
+  if (jwk.x !== targetB64u) return false;
+  // Decompress the BIP-340 even-y point for the target x. Then compare
+  // the JWK's declared y against this canonical y.
+  let canonicalY;
+  try {
+    // Compressed SEC1 point, even-y prefix (0x02) || x.
+    const compressed = '02' + targetHex;
+    const point = secp256k1.ProjectivePoint.fromHex(compressed);
+    const affine = point.toAffine();
+    canonicalY = affine.y.toString(16).padStart(64, '0');
+  } catch {
+    return false;
+  }
+  let jwkYHex;
+  try {
+    jwkYHex = Buffer.from(jwk.y.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+      .toString('hex').toLowerCase();
+  } catch {
+    return false;
+  }
+  return jwkYHex === canonicalY;
 }
 
 function isInProofPurpose(profile, predicate, vmId, baseUrl) {

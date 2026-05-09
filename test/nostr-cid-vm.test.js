@@ -14,8 +14,20 @@
 
 import { describe, it, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert';
+import { secp256k1 } from '@noble/curves/secp256k1';
 import { generateSecretKey, getPublicKey, finalizeEvent } from '../src/nostr/event.js';
 import { verifyNostrAuth } from '../src/auth/nostr.js';
+
+/** Compute the BIP-340 even-y JWK coordinates for an x-only Nostr pubkey. */
+function evenYJwk(xOnlyHex) {
+  const point = secp256k1.ProjectivePoint.fromHex('02' + xOnlyHex);
+  const aff = point.toAffine();
+  const xHex = aff.x.toString(16).padStart(64, '0');
+  const yHex = aff.y.toString(16).padStart(64, '0');
+  const b64u = (hex) => Buffer.from(hex, 'hex').toString('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return { kty: 'EC', crv: 'secp256k1', alg: 'ES256K', x: b64u(xHex), y: b64u(yHex) };
+}
 
 // --- helpers ---------------------------------------------------------
 
@@ -158,13 +170,9 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
   });
 
   it('upgrades did:nostr → WebID when the pubkey is in the profile as JsonWebKey VM', async () => {
-    // x-coord is the hex pubkey base64url-encoded.
-    const x = Buffer.from(pk, 'hex').toString('base64')
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    nextProfile = buildProfile({
-      pubkey: pk,
-      jwk: { kty: 'EC', crv: 'secp256k1', alg: 'ES256K', x, y: 'irrelevant-for-this-match' },
-    });
+    // Construct a real even-y JWK so the verifier's full-point match
+    // succeeds (matching by x alone would be unsafe — see #400 pass 3).
+    nextProfile = buildProfile({ pubkey: pk, jwk: evenYJwk(pk) });
     const url = `https://${POD_HOST}/private/data.ttl`;
     const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
     const req = makeRequest({ url });
@@ -173,6 +181,21 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     const r = await verifyNostrAuth(req);
     assert.strictEqual(r.error, null);
     assert.strictEqual(r.webId, WEBID);
+  });
+
+  it('rejects a JWK with the right x but wrong y (curve-point integrity)', async () => {
+    const goodJwk = evenYJwk(pk);
+    // Flip the y to invalid — same x, different y → not on canonical
+    // BIP-340 point, so should NOT match the Nostr key.
+    const badJwk = { ...goodJwk, y: goodJwk.y.slice(0, -1) + (goodJwk.y.endsWith('A') ? 'B' : 'A') };
+    nextProfile = buildProfile({ pubkey: pk, jwk: badJwk });
+    const url = `https://${POD_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url });
+    req.headers.authorization = authHeader;
+
+    const r = await verifyNostrAuth(req);
+    assert.strictEqual(r.webId, `did:nostr:${pk}`); // fell through to did:nostr
   });
 
   it('falls back to did:nostr when the profile has no matching VM', async () => {
@@ -241,6 +264,28 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     const r = await verifyNostrAuth(req);
     assert.strictEqual(r.error, null);
     assert.strictEqual(r.webId, SINGLE_WEBID);
+  });
+
+  it('handles IPv6 literal host without crashing the host parser', async () => {
+    // host.split(':')[0] would mangle '[::1]:3000' to '['. Make sure
+    // the URL-aware parser gives a usable hostname.
+    const url = `https://${POD_HOST}/private/data.ttl`;
+    const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
+    const req = makeRequest({ url });
+    req.headers.authorization = authHeader;
+    // Inject an IPv6 forwarded host with port. This shouldn't match
+    // any of our deployment-shape branches (it's neither baseDomain
+    // nor a pod-shaped URL), so we expect did:nostr fallback — the
+    // important thing is we don't crash on the parse.
+    req.headers['x-forwarded-host'] = '[2001:db8::1]:8443';
+    // Force path-mode so the URL pod-segment branch runs.
+    req.subdomainsEnabled = false;
+
+    const r = await verifyNostrAuth(req);
+    // Either path-segment match (alice's pod) or did:nostr fallback
+    // is acceptable; the goal is "no crash on IPv6 parsing".
+    assert.ok(r.webId === WEBID || r.webId === `did:nostr:${pk}`,
+      `unexpected webId ${r.webId}`);
   });
 
   it('handles host:port without breaking baseDomain match', async () => {
