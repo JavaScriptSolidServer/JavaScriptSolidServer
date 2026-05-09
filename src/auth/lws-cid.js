@@ -57,13 +57,20 @@ const CLOCK_SKEW = 60;
 
 // Profile fetch cache. Auth is on the hot path; refetching the CID
 // document on every request is unacceptable for both latency and
-// reliability. Mirrors the pattern in did-nostr.js.
-const profileCache = new Map(); // url -> { profile, timestamp, failureTtl?: true }
+// reliability. Mirrors the pattern in did-nostr.js, but bounded — an
+// attacker can otherwise grow the cache without limit by sending tokens
+// with many distinct `sub` URLs.
+const profileCache = new Map(); // url -> { profile, timestamp, failureTtl?, error? }
 const PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes for hits
 const PROFILE_FAILURE_TTL = 60 * 1000;   // 1 minute for misses
+const PROFILE_CACHE_MAX = 1000;          // simple LRU bound
 
 // Manual-redirect cap so a chain can't loop or grind.
 const MAX_REDIRECTS = 5;
+
+// Max profile body size — guards against DoS via giant JSON bodies on
+// untrusted URLs. CID documents are tiny in practice (~1-5 KB).
+const MAX_PROFILE_BYTES = 256 * 1024; // 256 KB
 
 /** @internal — exposed for tests */
 export function _clearProfileCacheForTests() {
@@ -253,18 +260,24 @@ export async function verifyLwsCidAuth(request) {
     };
   }
 
-  // Confirm the VM's controller agrees with the profile's controller (or
-  // with @id on fallback). Self-controlled is the common case.
+  // Confirm the VM's controller agrees with the profile's controller
+  // (or with @id on fallback). Self-controlled is the common case. A
+  // profile with no controller / @id / id at all is malformed — fail
+  // closed rather than letting the VM controller check pass vacuously.
   const expectedCtrls = normalizeControllers(profile.controller ?? profile['@id'] ?? profile.id, webIdDoc);
+  if (expectedCtrls.length === 0) {
+    return {
+      webId: null,
+      error: 'CID document has no controller or @id — controller check cannot proceed',
+    };
+  }
   const vmCtrls = normalizeControllers(vm.controller, webIdDoc);
-  if (expectedCtrls.length > 0) {
-    const matched = vmCtrls.some((c) => expectedCtrls.includes(c));
-    if (!matched) {
-      return {
-        webId: null,
-        error: `verificationMethod controller does not match profile controller`,
-      };
-    }
+  const matched = vmCtrls.some((c) => expectedCtrls.includes(c));
+  if (!matched) {
+    return {
+      webId: null,
+      error: 'verificationMethod controller does not match profile controller',
+    };
   }
 
   // Decode the JWK and verify the signature.
@@ -320,11 +333,24 @@ function getRequestOrigin(request) {
   // authoritative source. Match the convention used in src/ap/* and
   // similar code: x-forwarded-* take precedence, fall back to fastify's
   // protocol/hostname.
+  //
+  // Multi-proxy chains may produce comma-separated lists (e.g.
+  // `x-forwarded-host: a.example, b.internal`); the leftmost value is
+  // the original client-facing front-end, which is what we want.
   const headers = request.headers || {};
-  const proto = headers['x-forwarded-proto'] || request.protocol || 'https';
-  const host = headers['x-forwarded-host'] || headers.host || request.hostname;
+  const proto = firstHeaderValue(headers['x-forwarded-proto']) || request.protocol || 'https';
+  const host  = firstHeaderValue(headers['x-forwarded-host']) || headers.host || request.hostname;
   if (!host) return null;
   return `${proto}://${host}`;
+}
+
+function firstHeaderValue(v) {
+  if (!v) return null;
+  // Fastify can yield a string, an array, or undefined.
+  const s = Array.isArray(v) ? v[0] : v;
+  if (typeof s !== 'string') return null;
+  const first = s.split(',')[0].trim();
+  return first || null;
 }
 
 function normalizeOrigin(s) {
@@ -338,11 +364,15 @@ function normalizeOrigin(s) {
 }
 
 async function fetchProfile(docUrl) {
-  // Cache hit (or recent failure) — return immediately.
+  // Cache hit (or recent failure) — return immediately. On hit we
+  // delete-then-reset so this entry moves to the tail of the Map's
+  // insertion order, giving us LRU eviction without an extra structure.
   const cached = profileCache.get(docUrl);
   if (cached) {
     const ttl = cached.failureTtl ? PROFILE_FAILURE_TTL : PROFILE_CACHE_TTL;
     if (Date.now() - cached.timestamp < ttl) {
+      profileCache.delete(docUrl);
+      profileCache.set(docUrl, cached);
       if (cached.failureTtl) throw new Error(cached.error);
       return cached.profile;
     }
@@ -351,15 +381,26 @@ async function fetchProfile(docUrl) {
 
   try {
     const profile = await fetchProfileNoCache(docUrl);
-    profileCache.set(docUrl, { profile, timestamp: Date.now() });
+    setCached(docUrl, { profile, timestamp: Date.now() });
     return profile;
   } catch (err) {
-    profileCache.set(docUrl, {
+    setCached(docUrl, {
       timestamp: Date.now(),
       failureTtl: true,
       error: err.message,
     });
     throw err;
+  }
+}
+
+/** Insert into the bounded LRU; evict the oldest entry past the cap. */
+function setCached(url, entry) {
+  profileCache.set(url, entry);
+  while (profileCache.size > PROFILE_CACHE_MAX) {
+    // Map iterates in insertion order; first key is the oldest.
+    const oldest = profileCache.keys().next().value;
+    if (oldest === undefined) break;
+    profileCache.delete(oldest);
   }
 }
 
@@ -373,11 +414,17 @@ async function fetchProfile(docUrl) {
  *      addresses).
  *   2. Disable automatic redirects and re-validate every Location to
  *      defeat redirect-based bypasses (mirrors the cors-proxy pattern).
+ *      Cross-origin redirects are refused — otherwise a target
+ *      attacker-controlled host could serve a substitute CID document
+ *      for the WebID's origin.
  *   3. Cap redirects so a chain can't loop.
- *   4. Always send a fresh Accept and a small read-side timeout.
+ *   4. Cap response body size so a giant payload can't OOM us.
+ *   5. Always send a fresh Accept and a small read-side timeout.
  */
 async function fetchProfileNoCache(docUrl) {
+  const originalOrigin = new URL(docUrl).origin;
   let currentUrl = docUrl;
+
   // Hop 0 is the original request; up to MAX_REDIRECTS subsequent
   // redirects are followed, after which we throw.
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -408,25 +455,73 @@ async function fetchProfileNoCache(docUrl) {
       clearTimeout(timer);
     }
 
-    // Manual redirect handling — re-validate every Location.
+    // Manual redirect handling — re-validate every Location and require
+    // same-origin so a redirect can't substitute an attacker-controlled
+    // CID document for the WebID's origin.
     if (res.status >= 300 && res.status < 400) {
       if (isLastAllowedHop) {
         throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
       }
       const loc = res.headers.get('location');
       if (!loc) throw new Error(`redirect ${res.status} without Location`);
-      currentUrl = new URL(loc, currentUrl).toString();
+      const nextUrl = new URL(loc, currentUrl).toString();
+      const nextOrigin = new URL(nextUrl).origin;
+      if (nextOrigin !== originalOrigin) {
+        throw new Error(
+          `cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`,
+        );
+      }
+      currentUrl = nextUrl;
       continue;
     }
 
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
-    const text = await res.text();
+
+    // Size guard. Two layers: trust Content-Length when present, then
+    // also enforce as we read so a streaming response can't lie.
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > MAX_PROFILE_BYTES) {
+      throw new Error(
+        `CID document too large (Content-Length=${declared} > ${MAX_PROFILE_BYTES})`,
+      );
+    }
+    const text = await readBodyWithCap(res, MAX_PROFILE_BYTES);
     return JSON.parse(text);
   }
   // Loop exited without returning or redirecting — defensive fallback.
   throw new Error('profile fetch loop exited unexpectedly');
+}
+
+/**
+ * Read response body with a hard byte cap. Aborts the stream as soon as
+ * the cap is exceeded so we don't buffer the entire untrusted payload.
+ */
+async function readBodyWithCap(res, maxBytes) {
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    // No streaming reader (older runtimes / mocked responses) — fall
+    // back to .text() but enforce the cap after the fact.
+    const text = await res.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error(`CID document too large (>${maxBytes} bytes)`);
+    }
+    return text;
+  }
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      try { await reader.cancel(); } catch { /* noop */ }
+      throw new Error(`CID document too large (>${maxBytes} bytes)`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
 }
 
 function findVerificationMethod(profile, kid, baseUrl) {

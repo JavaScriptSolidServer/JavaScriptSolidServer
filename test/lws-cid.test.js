@@ -85,10 +85,18 @@ function buildProfile(jwk, { withAuthRef = true, controller = WEBID } = {}) {
 const realFetch = global.fetch;
 let nextProfile = null;
 let nextStatus = 200;
+// Per-URL response overrides — set { status, headers, body } per URL to
+// inject redirects, oversized bodies, or non-default content-types.
+let urlResponses = new Map();
 
 function installFetchStub() {
   global.fetch = async (url) => {
-    if (String(url) === DOC_URL) {
+    const u = String(url);
+    if (urlResponses.has(u)) {
+      const { status = 200, headers = {}, body = '' } = urlResponses.get(u);
+      return new Response(body, { status, headers });
+    }
+    if (u === DOC_URL) {
       return new Response(JSON.stringify(nextProfile), {
         status: nextStatus,
         headers: { 'content-type': 'application/ld+json' },
@@ -158,6 +166,7 @@ describe('verifyLwsCidAuth', () => {
     jwk = jwkFromSecp256k1(priv);
     nextStatus = 200;
     nextProfile = buildProfile(jwk);
+    urlResponses = new Map();
     // Cache must not survive between tests; otherwise nextProfile
     // changes are masked by a stale hit on DOC_URL.
     _clearProfileCacheForTests();
@@ -428,6 +437,95 @@ describe('verifyLwsCidAuth', () => {
     });
     const r = await verifyLwsCidAuth(makeRequest(token));
     assert.match(r.error, /could not fetch/);
+  });
+
+  it('rejects when CID document has no controller / @id / id (vacuous bypass)', async () => {
+    // Profile that's structurally complete enough to find a VM, but has
+    // no top-level controller or @id at all.
+    nextProfile = {
+      '@context': { cid: 'https://www.w3.org/ns/cid/v1#' },
+      verificationMethod: [{
+        id: VM_ID,
+        type: 'JsonWebKey',
+        controller: WEBID,
+        publicKeyJwk: jwk,
+      }],
+      authentication: [VM_ID],
+    };
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /no controller or @id/);
+  });
+
+  it('handles comma-separated x-forwarded-host (multi-proxy chain)', async () => {
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(undefined, { aud: ['https://public.example'] }),
+    });
+    const req = {
+      headers: {
+        authorization: `Bearer ${token}`,
+        'x-forwarded-proto': 'https, http',
+        'x-forwarded-host': 'public.example, internal.lan',
+      },
+    };
+    const r = await verifyLwsCidAuth(req);
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID);
+  });
+
+  it('refuses cross-origin redirect during profile fetch', async () => {
+    urlResponses.set(DOC_URL, {
+      status: 302,
+      headers: { location: 'https://attacker.example/profile/card.jsonld' },
+    });
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /cross-origin redirect refused/);
+  });
+
+  it('rejects profile larger than the byte cap', async () => {
+    // 300 KB of JSON — over the 256 KB cap.
+    const huge = 'x'.repeat(300 * 1024);
+    urlResponses.set(DOC_URL, {
+      status: 200,
+      headers: { 'content-type': 'application/ld+json' },
+      body: JSON.stringify({ junk: huge }),
+    });
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /CID document too large/);
+  });
+
+  it('rejects when Content-Length header announces oversize body', async () => {
+    urlResponses.set(DOC_URL, {
+      status: 200,
+      headers: {
+        'content-type': 'application/ld+json',
+        'content-length': String(10 * 1024 * 1024), // 10 MB declared
+      },
+      body: JSON.stringify({}), // body is small but header lies
+    });
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /too large/);
   });
 
   it('SSRF: rejects kid pointing at localhost', async () => {
