@@ -7,7 +7,7 @@ import * as jose from 'jose';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
-import { authenticate, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
+import { authenticate, findByUsername, findByWebId, updatePassword, verifyPassword, deleteAccount } from './accounts.js';
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 import { accountDeletePage } from './views.js';
@@ -417,11 +417,13 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
  * Handle POST /idp/account/delete (#392) — form-driven account deletion.
  *
  * Public unauthenticated endpoint that takes a form-encoded body with
- * username + currentPassword + confirmUsername (+ optional purgeData
- * checkbox). Authenticates the user via password directly (no Bearer
- * token round-trip required), validates the destructive-action UX
- * guard, then calls into the same delete logic as the JSON endpoint
- * via deleteAccountAndOptionallyPurge. Returns HTML directly:
+ * username + currentPassword + confirmUsername (+ optional keepData
+ * opt-out checkbox; default behavior is purge-on for the leaving-user
+ * UX, opposite the JSON endpoint's purge-off default). Authenticates
+ * the user via password directly (no Bearer token round-trip), validates
+ * the destructive-action UX guard, then calls into the same delete
+ * logic as the JSON endpoint via deleteAccountAndOptionallyPurge.
+ * Returns HTML directly:
  *   - success → success page
  *   - any failure → the form re-rendered with an error message and the
  *     username field pre-filled (no redirect — single response, status
@@ -442,7 +444,10 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
  */
 export async function handleAccountDeleteForm(request, reply, options = {}) {
   if (options.singleUser) {
-    return reply.type('text/html').send(accountDeletePage({ singleUser: true }));
+    // 403 matches the GET route, /idp/register's disabled-route policy,
+    // and the JSON DELETE endpoint's 403 — consistent status across
+    // every disabled-in-single-user surface.
+    return reply.code(403).type('text/html').send(accountDeletePage({ singleUser: true }));
   }
 
   // Parse form-encoded body. JSS registers a wildcard parseAs:'buffer'
@@ -463,7 +468,14 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
   const username = (body?.username || '').trim();
   const currentPassword = body?.currentPassword || '';
   const confirmUsername = (body?.confirmUsername || '').trim();
-  const purgeData = body?.purgeData === 'on' || body?.purgeData === true;
+  // Form field is `keepData` (inverse of the JSON endpoint's `purgeData`)
+  // so the form's default is purge-on: a user who is leaving the server
+  // probably wants their files gone too. Checking "Keep my pod data" is
+  // the opt-out. JSON endpoint (DELETE /idp/account) keeps the
+  // explicit `purgeData` shape that matches the CLI's default-off
+  // semantics for operator scripts; the form intentionally diverges.
+  const keepData = body?.keepData === 'on' || body?.keepData === true;
+  const purgeData = !keepData;
 
   if (!username || !currentPassword || !confirmUsername) {
     return reply.type('text/html').send(accountDeletePage({
@@ -483,10 +495,14 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
     }));
   }
 
-  // Authenticate. authenticate() looks up by username then by email,
-  // verifies bcrypt, and returns the account (sans password hash) or null.
-  const account = await authenticate(username, currentPassword);
-  if (!account) {
+  // Look up + verify password without side effects. authenticate() is
+  // tempting (looks up + verifies in one call) but writes lastLogin on
+  // success — wrong shape for a destructive proof-of-possession check
+  // (and would fail the deletion if the account file weren't writable).
+  // Mirrors handleChangePassword / handleDeleteAccount which both use
+  // verifyPassword for the same reason.
+  const account = await findByUsername(username);
+  if (!account || !(await verifyPassword(account, currentPassword))) {
     return reply.type('text/html').send(accountDeletePage({
       error: 'Username or password is incorrect.',
       username,

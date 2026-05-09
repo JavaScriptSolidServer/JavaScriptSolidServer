@@ -308,18 +308,28 @@ describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
     assert.match(html, /name="username"/);
     assert.match(html, /name="currentPassword"/);
     assert.match(html, /name="confirmUsername"/);
-    assert.match(html, /name="purgeData"/);
+    // Form's checkbox is `keepData` (inverse of the JSON endpoint's
+    // purgeData) so the form's default is purge-on for the leaving-user UX.
+    assert.match(html, /name="keepData"/);
     assert.match(html, /Delete my account permanently/);
   });
 
-  it('POST happy path: deletes account, returns success HTML, login fails after', async () => {
+  it('POST happy path: deletes account AND wipes pod data by default; login fails after', async () => {
+    // Form's default is purge-on (the user is leaving — wipe everything).
+    // The JSON DELETE endpoint keeps purge-off as default (matches CLI for
+    // programmatic / operator use); the form diverges deliberately for the
+    // leaving-user UX.
     const id = `harry${Date.now()}`;
     await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+    const podPath = path.join(DATA_DIR, id);
+    assert.strictEqual(await fs.pathExists(podPath), true,
+      'pod tree should exist before deletion');
 
     const formBody = new URLSearchParams({
       username: id,
       currentPassword: 'password123',
       confirmUsername: id,
+      // No keepData — defaults to purge-on
     });
     const res = await fetch(`${baseUrl}/idp/account/delete`, {
       method: 'POST',
@@ -337,9 +347,13 @@ describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
       body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
     });
     assert.strictEqual(reLogin.status, 401);
+
+    // Pod data also wiped (default behavior on the form)
+    assert.strictEqual(await fs.pathExists(podPath), false,
+      'pod data should be wiped by default on the form path');
   });
 
-  it('POST with purgeData=on also wipes the pod tree', async () => {
+  it('POST with keepData=on opts out of the purge, account still deleted', async () => {
     const id = `iris${Date.now()}`;
     await createPod(baseUrl, id, `${id}@example.com`, 'password123');
     const podPath = path.join(DATA_DIR, id);
@@ -349,7 +363,7 @@ describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
       username: id,
       currentPassword: 'password123',
       confirmUsername: id,
-      purgeData: 'on',
+      keepData: 'on',
     });
     const res = await fetch(`${baseUrl}/idp/account/delete`, {
       method: 'POST',
@@ -357,7 +371,18 @@ describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
       body: formBody,
     });
     assert.strictEqual(res.status, 200);
-    assert.strictEqual(await fs.pathExists(podPath), false);
+
+    // Account gone
+    const reLogin = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${id}@example.com`, password: 'password123' }),
+    });
+    assert.strictEqual(reLogin.status, 401);
+
+    // Pod data preserved (the user opted to keep it)
+    assert.strictEqual(await fs.pathExists(podPath), true,
+      'keepData=on should preserve pod data even though account is deleted');
   });
 
   it('POST with mismatched confirmUsername renders form with error, account untouched', async () => {
@@ -469,9 +494,11 @@ describe('GET/POST /idp/account/delete — single-user mode renders disabled mes
     else process.env.JSS_SINGLE_USER_PASSWORD = originalPassword;
   });
 
-  it('GET renders the disabled message instead of the form', async () => {
+  it('GET returns 403 with the disabled-message HTML', async () => {
+    // 403 keeps single-user disabled routes consistent: /idp/register,
+    // the JSON DELETE /idp/account, and this GET all 403 in single-user.
     const res = await fetch(`${baseUrl}/idp/account/delete`);
-    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.status, 403);
     const html = await res.text();
     assert.match(html, /single-user mode/i);
     assert.match(html, /jss account delete/);
@@ -479,7 +506,7 @@ describe('GET/POST /idp/account/delete — single-user mode renders disabled mes
     assert.doesNotMatch(html, /<form\s[^>]*action="\/idp\/account\/delete"/);
   });
 
-  it('POST also returns the disabled message — does not delete', async () => {
+  it('POST returns 403 with disabled-message HTML — does not delete', async () => {
     const formBody = new URLSearchParams({
       username: 'me',
       currentPassword: 'singletest',
@@ -490,7 +517,7 @@ describe('GET/POST /idp/account/delete — single-user mode renders disabled mes
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: formBody,
     });
-    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.status, 403);
     const html = await res.text();
     assert.match(html, /single-user mode/i);
 

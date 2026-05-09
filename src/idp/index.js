@@ -298,8 +298,15 @@ export async function idpPlugin(fastify, options) {
 
   // GET account-delete form (#392) - human-friendly UI for #352. Public
   // unauthenticated page; auth happens at form submission via password.
+  // Single-user mode returns 403 to stay consistent with /idp/register's
+  // disabled-route policy and the JSON DELETE /idp/account endpoint
+  // (which also 403s in single-user mode). Body is still HTML so a
+  // browser visitor sees the explanation.
   fastify.get('/idp/account/delete', async (request, reply) => {
-    return reply.type('text/html').send(accountDeletePage({ singleUser }));
+    if (singleUser) {
+      return reply.code(403).type('text/html').send(accountDeletePage({ singleUser: true }));
+    }
+    return reply.type('text/html').send(accountDeletePage({ singleUser: false }));
   });
 
   // POST account-delete form (#392) - processes the form submission.

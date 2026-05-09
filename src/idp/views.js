@@ -669,10 +669,11 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
     <h1>Delete your account</h1>
 
     <div class="danger">
-      <strong>This is permanent.</strong> Your account record and credentials will be
-      removed; future sign-ins with this username will fail. Anyone holding your
-      WebID URI will see it become a tombstone — federated references (ActivityPub,
-      Nostr, type indexes) cannot be retracted from this server.
+      <strong>This is permanent.</strong> Your account record, credentials, and pod data
+      (every file you've stored — including your WebID profile document) will be removed.
+      Future sign-ins with this username will fail. Federated references (ActivityPub
+      follows, Nostr relays, type indexes) cannot be retracted from this server, so
+      external links to your WebID URI will become dangling.
       <br><br>
       <span style="font-size: 12px; color: #7f1d1d;">
         Note: access tokens already issued may remain usable until they
@@ -697,11 +698,11 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
              placeholder="Must match the username above">
 
       <div class="checkbox-row">
-        <input type="checkbox" id="purgeData" name="purgeData" value="on">
-        <label for="purgeData">
-          <strong>Also delete all my pod data.</strong> Removes the pod folder
-          on disk — every file you've stored on this server is destroyed.
-          Off by default; your pod data is preserved if you leave this unchecked.
+        <input type="checkbox" id="keepData" name="keepData" value="on">
+        <label for="keepData">
+          <strong>Keep my pod data on this server.</strong> Check only if you want
+          to delete just your account record and leave your files in place. Default
+          (unchecked) wipes the pod folder along with the account.
         </label>
       </div>
 
