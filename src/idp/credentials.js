@@ -408,6 +408,14 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
         request.log.error({ err, path: candidate, username: account.username },
           'Pod data purge failed after account deletion');
       }
+    } else {
+      // Belt-and-suspenders rejection — shouldn't trigger on registered
+      // pod names but logging it surfaces config drift (e.g. someone
+      // changed dataRoot, podName field is malformed, etc.) and makes
+      // the "purge did not complete" UX message diagnosable from the
+      // operator's logs without leaking the path to the client.
+      request.log.warn({ path: candidate, dataRoot: root, podName: account.podName, username: account.username },
+        'Pod data purge skipped: candidate path is not a proper child of dataRoot');
     }
   }
   return { purged };
@@ -484,10 +492,14 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
     }));
   }
 
-  // Destructive-action UX guard: typed username must match. Compare
-  // case-sensitively against the *typed* form value, not the resolved
-  // account — the user shouldn't be able to typo their way to a delete
-  // that hits a different (lowercased) record.
+  // Destructive-action UX guard: the user must type the same string
+  // twice. The string-equality check is case-sensitive on the typed
+  // form values; that's purely the typing-it-again confirmation
+  // pattern (catch typos / accidental submits). Note: findByUsername()
+  // lowercases internally, so "Alice" + "Alice" both resolve to the
+  // same account record as "alice" — the case-sensitive comparison
+  // here doesn't gate which record gets deleted, only whether the
+  // user typed the same thing twice.
   if (username !== confirmUsername) {
     return reply.type('text/html').send(accountDeletePage({
       error: 'Confirmation does not match the username you entered.',

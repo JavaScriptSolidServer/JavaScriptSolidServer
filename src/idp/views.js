@@ -669,11 +669,12 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
     <h1>Delete your account</h1>
 
     <div class="danger">
-      <strong>This is permanent.</strong> Your account record, credentials, and pod data
-      (every file you've stored — including your WebID profile document) will be removed.
-      Future sign-ins with this username will fail. Federated references (ActivityPub
-      follows, Nostr relays, type indexes) cannot be retracted from this server, so
-      external links to your WebID URI will become dangling.
+      <strong>This is permanent.</strong> Your account record and credentials will be
+      removed; future sign-ins with this username will fail. By default, your pod
+      data (every file you've stored, including your WebID profile document) is
+      also wiped — check the box below if you want to keep it. Federated references
+      (ActivityPub follows, Nostr relays, type indexes) cannot be retracted from
+      this server.
       <br><br>
       <span style="font-size: 12px; color: #7f1d1d;">
         Note: access tokens already issued may remain usable until they
