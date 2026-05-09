@@ -3,12 +3,12 @@
  * Handles the user-facing parts of the authentication flow
  */
 
-import { authenticate, findById, findByWebId, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
+import { authenticate, findById, findByUsername, findByWebId, createAccount, updateLastLogin, setPasskeyPromptDismissed } from './accounts.js';
 import { loginPage, consentPage, errorPage, registerPage, passkeyPromptPage } from './views.js';
 import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
-import { verifyNostrAuth } from '../auth/nostr.js';
+import { verifyNostrAuth, getNostrPubkey, verifyNostrPubkeyAgainstWebId } from '../auth/nostr.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
@@ -659,6 +659,33 @@ export async function handlePasskeySkip(request, reply, provider) {
 }
 
 /**
+ * Pull the optional `username` field out of a schnorr-login POST.
+ *
+ * JSS registers a wildcard parseAs:'buffer' content-type parser
+ * (src/server.js), so request.body for application/x-www-form-urlencoded
+ * arrives as a Buffer that needs string-decode + URLSearchParams. JSON
+ * and already-parsed object bodies are also accepted for flexibility.
+ */
+function parseUsernameField(request) {
+  const body = request.body;
+  if (!body) return '';
+  const ct = (request.headers?.['content-type'] || '').toLowerCase();
+  let bag = {};
+  if (Buffer.isBuffer(body) || typeof body === 'string') {
+    const s = Buffer.isBuffer(body) ? body.toString() : body;
+    if (ct.includes('application/json')) {
+      try { bag = JSON.parse(s); } catch { bag = {}; }
+    } else {
+      try { bag = Object.fromEntries(new URLSearchParams(s).entries()); }
+      catch { bag = {}; }
+    }
+  } else if (typeof body === 'object') {
+    bag = body;
+  }
+  return (bag.username || '').toString().trim();
+}
+
+/**
  * Handle POST /idp/interaction/:uid/schnorr-login
  * Authenticates user via Schnorr signature (NIP-98)
  */
@@ -689,16 +716,36 @@ export async function handleSchnorrLogin(request, reply, provider) {
     const identity = authResult.webId;
     request.log.info({ identity, uid }, 'Schnorr auth verified');
 
-    // Try to find an existing account linked to this identity
+    // Try to find an existing account linked to this identity. The
+    // primary path: identity is already a WebID (e.g. resolved via the
+    // existing did:nostr DID-doc resolver) and an account exists for it.
     let account = await findByWebId(identity);
 
     if (!account) {
-      // No account linked to this did:nostr
-      // For now, return error - user needs to link their did:nostr to an account
-      // Future: could auto-create account or prompt for linking
+      // Fallback: if the user typed a username on the login form, check
+      // whether the verified Nostr pubkey is declared as a CID
+      // verificationMethod referenced from `authentication` in that
+      // user's WebID profile (#400's IdP-side parallel — #403). The
+      // signature has already been verified above, so this is just
+      // "does this verified pubkey belong to the typed user".
+      const typedUsername = parseUsernameField(request);
+      if (typedUsername) {
+        const candidate = await findByUsername(typedUsername);
+        if (candidate?.webId) {
+          const pubkey = await getNostrPubkey(request);
+          if (pubkey && await verifyNostrPubkeyAgainstWebId(candidate.webId, pubkey)) {
+            account = candidate;
+            request.log.info({ accountId: account.id, webId: candidate.webId, uid },
+              'Schnorr login resolved via typed username + profile VM');
+          }
+        }
+      }
+    }
+
+    if (!account) {
       return reply.code(403).type('application/json').send({
         success: false,
-        error: 'No account linked to this identity. Please register or link your Schnorr key to an existing account.'
+        error: 'No account linked to this identity. Type your username and add a Schnorr verificationMethod to your WebID profile (or link via did:nostr DID document).'
       });
     }
 

@@ -512,6 +512,45 @@ function firstHeaderValue(v) {
  * Returns the entry (object form) on match, normalized so .id is the
  * absolute IRI. Returns null on no match.
  */
+/**
+ * Confirm that a verified Nostr pubkey is declared as a CID
+ * verificationMethod referenced from `authentication` in the given
+ * WebID's profile. Used by the Schnorr-login IdP path (#403): once
+ * the signature is verified and the user has typed their username,
+ * the IdP layer can derive the candidate WebID and ask this whether
+ * the verified pubkey actually belongs to that WebID.
+ *
+ * Returns true on match, false on no-match / fetch failure / VM not
+ * in authentication / controller mismatch.
+ *
+ * @param {string} webId - canonical WebID URI (with or without #me)
+ * @param {string} pubkeyHex - 32-byte x-only Nostr pubkey hex
+ * @returns {Promise<boolean>}
+ */
+export async function verifyNostrPubkeyAgainstWebId(webId, pubkeyHex) {
+  if (typeof webId !== 'string' || !webId) return false;
+  if (typeof pubkeyHex !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkeyHex)) return false;
+  const docUrl = stripHash(webId);
+  let profile;
+  try {
+    profile = await fetchCidDocument(docUrl);
+  } catch {
+    return false;
+  }
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) return false;
+
+  // Confirm the profile actually identifies itself as the WebID we're
+  // asking about — otherwise a profile hosted at the WebID's URL could
+  // declare a different fragment as its subject and trick us.
+  const subject = absolutize(profile['@id'] || profile.id, docUrl);
+  if (!subject || subject !== webId) return false;
+
+  const vm = findNostrVmInProfile(profile, pubkeyHex.toLowerCase(), docUrl);
+  if (!vm) return false;
+  if (!isInProofPurpose(profile, 'authentication', vm.id, docUrl)) return false;
+  return true;
+}
+
 function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
   const target = pubkeyHex.toLowerCase();
   const targetB64u = hexToBase64url(target);

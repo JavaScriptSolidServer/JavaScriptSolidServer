@@ -16,7 +16,7 @@ import { describe, it, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { generateSecretKey, getPublicKey, finalizeEvent } from '../src/nostr/event.js';
-import { verifyNostrAuth } from '../src/auth/nostr.js';
+import { verifyNostrAuth, verifyNostrPubkeyAgainstWebId } from '../src/auth/nostr.js';
 import { _clearProfileCacheForTests } from '../src/auth/cid-doc-fetch.js';
 
 /** Compute the BIP-340 even-y JWK coordinates for an x-only Nostr pubkey. */
@@ -490,6 +490,45 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     const r = await verifyNostrAuth(req);
     assert.strictEqual(r.error, null);
     assert.strictEqual(r.webId, WEBID);
+  });
+
+  // --- IdP Schnorr-login helper (#403) ---------------------------------
+
+  describe('verifyNostrPubkeyAgainstWebId', () => {
+    it('returns true when the pubkey is a Multikey VM in authentication', async () => {
+      _clearProfileCacheForTests();
+      nextProfile = buildProfile({ pubkey: pk });
+      const ok = await verifyNostrPubkeyAgainstWebId(WEBID, pk);
+      assert.strictEqual(ok, true);
+    });
+
+    it('returns false when the pubkey is in verificationMethod but NOT in authentication', async () => {
+      _clearProfileCacheForTests();
+      nextProfile = buildProfile({ pubkey: pk, withAuth: false });
+      const ok = await verifyNostrPubkeyAgainstWebId(WEBID, pk);
+      assert.strictEqual(ok, false);
+    });
+
+    it('returns false when the profile has no matching VM', async () => {
+      _clearProfileCacheForTests();
+      const otherPk = getPublicKey(generateSecretKey());
+      nextProfile = buildProfile({ pubkey: otherPk });
+      const ok = await verifyNostrPubkeyAgainstWebId(WEBID, pk);
+      assert.strictEqual(ok, false);
+    });
+
+    it("returns false when the profile's @id differs from the asked WebID", async () => {
+      _clearProfileCacheForTests();
+      nextProfile = { ...buildProfile({ pubkey: pk }), '@id': `${DOC_URL}#bob` };
+      const ok = await verifyNostrPubkeyAgainstWebId(WEBID, pk);
+      assert.strictEqual(ok, false);
+    });
+
+    it('returns false on bad input', async () => {
+      assert.strictEqual(await verifyNostrPubkeyAgainstWebId('', pk), false);
+      assert.strictEqual(await verifyNostrPubkeyAgainstWebId(WEBID, 'not-hex'), false);
+      assert.strictEqual(await verifyNostrPubkeyAgainstWebId(WEBID, ''), false);
+    });
   });
 
   it('still rejects an invalid signature regardless of the profile', async () => {
