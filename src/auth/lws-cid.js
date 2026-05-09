@@ -136,7 +136,10 @@ export async function verifyLwsCidAuth(request) {
     return { webId: null, error: `malformed JWT: ${err.message}` };
   }
 
-  if (!header.alg || header.alg === 'none') {
+  if (typeof header.alg !== 'string' || header.alg.length === 0) {
+    return { webId: null, error: 'JWT header missing alg' };
+  }
+  if (header.alg === 'none') {
     return { webId: null, error: 'JWT MUST NOT use "none" as the signing algorithm' };
   }
   if (!ACCEPTED_ALGS.has(header.alg)) {

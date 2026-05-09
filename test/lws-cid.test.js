@@ -212,6 +212,19 @@ describe('verifyLwsCidAuth', () => {
     assert.match(r.error, /none/);
   });
 
+  it('rejects missing alg with a distinct error (not the "none" message)', async () => {
+    // Built without an alg header. The detector would normally screen
+    // these out, but the verifier should still produce a clear error
+    // if called directly (defense-in-depth).
+    const h64 = b64u(Buffer.from(JSON.stringify({ kid: VM_ID, typ: 'JWT' })));
+    const p64 = b64u(Buffer.from(JSON.stringify(claims())));
+    const sig = b64u(Buffer.from('not-a-real-signature'));
+    const token = `${h64}.${p64}.${sig}`;
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /missing alg/);
+    assert.doesNotMatch(r.error, /"none"/);
+  });
+
   it('rejects when sub != iss', async () => {
     const token = makeJwt({
       privKey: priv,
