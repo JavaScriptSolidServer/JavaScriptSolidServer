@@ -165,15 +165,37 @@ export async function verifyLwsCidAuth(request) {
   // match the profile's id values.
   const kid = kidUrl.toString();
 
+  // Auth credentials over plaintext HTTP are a non-starter — fail loud
+  // and early with a clear error rather than letting the request limp
+  // along to a generic "could not fetch / SSRF protection" failure
+  // downstream. (The SSRF guard still has its own production check as
+  // defense-in-depth.)
+  if (kidUrl.protocol !== 'https:') {
+    return { webId: null, error: 'kid must use https' };
+  }
+
   // FPWD §4: sub === iss === client_id, all the same WebID URI.
+  // Compare canonicalized forms so semantically equal but textually
+  // different URIs (different case, default ports written out, etc.)
+  // pass equality. The canonical form is also what we hand back to
+  // callers — WAC and other downstream consumers do string equality on
+  // the WebID, so handing them a non-canonical form would fail to
+  // match ACL agent entries.
   const { sub, iss, client_id, aud, exp, iat, nbf } = payload;
   if (!sub || !iss || !client_id) {
     return { webId: null, error: 'JWT missing sub/iss/client_id' };
   }
-  if (sub !== iss || sub !== client_id) {
+  let webId, canonicalIss, canonicalClientId;
+  try {
+    webId = new URL(sub).toString();
+    canonicalIss = new URL(iss).toString();
+    canonicalClientId = new URL(client_id).toString();
+  } catch (err) {
+    return { webId: null, error: `invalid sub/iss/client_id URI: ${err.message}` };
+  }
+  if (webId !== canonicalIss || webId !== canonicalClientId) {
     return { webId: null, error: 'sub, iss, and client_id MUST all use the same URI value' };
   }
-  const webId = sub;
 
   // The kid's document URL must match the WebID's document URL — the VM
   // lives inside the subject's CID document.

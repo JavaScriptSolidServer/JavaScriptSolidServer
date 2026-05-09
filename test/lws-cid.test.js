@@ -531,6 +531,38 @@ describe('verifyLwsCidAuth', () => {
     assert.strictEqual(r.webId, WEBID);
   });
 
+  it('rejects http: kid early with a clear message (not a generic SSRF failure)', async () => {
+    const httpKid = 'http://example.com/profile/card.jsonld#k1';
+    const httpSub = 'http://example.com/profile/card.jsonld#me';
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: httpKid },
+      payload: claims(undefined, { sub: httpSub, iss: httpSub, client_id: httpSub }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.match(r.error, /kid must use https/);
+  });
+
+  it('canonicalizes sub (case/default-port) before subject-identity check', async () => {
+    // JWT carries non-canonical sub/iss/client_id (uppercase scheme,
+    // explicit default port). Profile @id is canonical. After
+    // canonicalization, both should match and the returned webId is
+    // canonical (so downstream WAC ACL string matching works).
+    const noncanonical = 'HTTPS://Example.COM:443/profile/card.jsonld#me';
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(undefined, {
+        sub: noncanonical,
+        iss: noncanonical,
+        client_id: noncanonical,
+      }),
+    });
+    const r = await verifyLwsCidAuth(makeRequest(token));
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, WEBID); // canonical form returned
+  });
+
   it('canonicalizes kid (case/default-port) before matching VM ids', async () => {
     // JWT carries a non-canonical kid (uppercase scheme + host,
     // explicit default port); the profile's VM id is canonical.
