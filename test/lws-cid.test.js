@@ -359,6 +359,18 @@ describe('verifyLwsCidAuth', () => {
     assert.match(r.error, /aud.*does not include/);
   });
 
+  it('rejects when server origin cannot be determined', async () => {
+    const token = makeJwt({
+      privKey: priv,
+      header: { alg: 'ES256K', kid: VM_ID },
+      payload: claims(),
+    });
+    // No host header, no x-forwarded-host, no fastify hostname.
+    const req = { headers: { authorization: `Bearer ${token}` } };
+    const r = await verifyLwsCidAuth(req);
+    assert.match(r.error, /cannot determine server origin/);
+  });
+
   it('honors x-forwarded-proto/host for aud check (behind reverse proxy)', async () => {
     const token = makeJwt({
       privKey: priv,

@@ -208,14 +208,21 @@ export async function verifyLwsCidAuth(request) {
   if (audList.length === 0) {
     return { webId: null, error: 'JWT aud claim is required' };
   }
-  if (reqOrigin) {
-    const audMatch = audList.some((a) => normalizeOrigin(a) === reqOrigin);
-    if (!audMatch) {
-      return {
-        webId: null,
-        error: `aud does not include this server's origin (${reqOrigin})`,
-      };
-    }
+  if (!reqOrigin) {
+    // We can't determine our own origin, so we can't verify aud. Per
+    // FPWD, aud MUST include the target server — failing closed is
+    // safer than silently accepting any aud value.
+    return {
+      webId: null,
+      error: 'cannot determine server origin to verify aud',
+    };
+  }
+  const audMatch = audList.some((a) => normalizeOrigin(a) === reqOrigin);
+  if (!audMatch) {
+    return {
+      webId: null,
+      error: `aud does not include this server's origin (${reqOrigin})`,
+    };
   }
 
   // Fetch the CID document (= WebID profile) and locate the VM by kid.
@@ -390,7 +397,10 @@ async function fetchProfileNoCache(docUrl) {
     let res;
     try {
       res = await fetch(currentUrl, {
-        headers: { Accept: 'application/ld+json' },
+        // Prefer JSON-LD but accept plain JSON too — some WebID hosts
+        // serve `application/json` for `card.jsonld`. The body is JSON
+        // either way; we don't perform JSON-LD-specific processing here.
+        headers: { Accept: 'application/ld+json, application/json;q=0.9' },
         redirect: 'manual',
         signal: controller.signal,
       });
@@ -483,7 +493,7 @@ function absolutize(u, base) {
  */
 async function verifyEs256kJwt(token, jwk) {
   if (jwk.kty !== 'EC' || (jwk.crv !== 'secp256k1' && jwk.crv !== 'P-256K')) {
-    throw new Error(`ES256K requires kty:EC crv:secp256k1, got kty:${jwk.kty} crv:${jwk.crv}`);
+    throw new Error(`ES256K requires kty:EC and crv:secp256k1 (or legacy crv:P-256K), got kty:${jwk.kty} crv:${jwk.crv}`);
   }
   if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string') {
     throw new Error('JWK missing x/y coordinates');
