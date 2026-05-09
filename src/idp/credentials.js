@@ -414,7 +414,7 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
 }
 
 /**
- * Handle GET / POST /idp/account/delete (#392) — form-driven account deletion.
+ * Handle POST /idp/account/delete (#392) — form-driven account deletion.
  *
  * Public unauthenticated endpoint that takes a form-encoded body with
  * username + currentPassword + confirmUsername (+ optional purgeData
@@ -427,9 +427,13 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
  *     username field pre-filled (no redirect — single response, status
  *     200 with the rendered form)
  *
- * Single-user mode: rendered as the disabled-message page instead of
- * the form, both on GET and POST. Same policy as the JSON endpoint
- * (which 403s with the equivalent message).
+ * GET /idp/account/delete is a separate route that just renders the
+ * form via accountDeletePage(); see src/idp/index.js. This handler is
+ * POST-only.
+ *
+ * Single-user mode: this handler short-circuits to the disabled-message
+ * page (matches the GET route's behavior). Same policy as the JSON
+ * endpoint, which 403s with the equivalent message.
  *
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply

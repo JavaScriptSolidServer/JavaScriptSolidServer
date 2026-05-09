@@ -538,10 +538,9 @@ export function consentPage(uid, client, params, account) {
  *
  * Public unauthenticated page (matches the existing /idp landing and
  * /idp/register pattern). Auth happens at submission time: the user
- * supplies an identifier (username or email) + password, which the
- * server validates and uses as proof-of-possession for the delete.
- * The "type your identifier to confirm" field is the destructive-action
- * UX guard.
+ * supplies username + password, which the server validates and uses as
+ * proof-of-possession for the delete. The "type your username again to
+ * confirm" field is the destructive-action UX guard.
  *
  * On any failure (wrong password, mismatched confirmation, etc.) the
  * handler re-renders this same form in place at status 200 with an
@@ -700,10 +699,9 @@ export function accountDeletePage({ error = null, username = '', singleUser = fa
       <div class="checkbox-row">
         <input type="checkbox" id="purgeData" name="purgeData" value="on">
         <label for="purgeData">
-          <strong>Also delete all my pod data.</strong> Removes
-          <code>&lt;dataRoot&gt;/&lt;username&gt;/</code> from disk —
-          every file you've stored on this server is destroyed. Off by default;
-          your pod data is preserved if you leave this unchecked.
+          <strong>Also delete all my pod data.</strong> Removes the pod folder
+          on disk — every file you've stored on this server is destroyed.
+          Off by default; your pod data is preserved if you leave this unchecked.
         </label>
       </div>
 
