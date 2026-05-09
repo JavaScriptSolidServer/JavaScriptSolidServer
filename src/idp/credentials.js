@@ -374,6 +374,26 @@ export async function handleDeleteAccount(request, reply, options = {}) {
 }
 
 /**
+ * Apply anti-clickjacking + no-store cache headers to a response.
+ * Used on every account-deletion HTML response (form, success, error
+ * re-render, disabled-message page) and on the corresponding routes.
+ *
+ *  - Cache-Control: no-store  — destructive form/success page should
+ *    never sit in a shared cache; if a token gets shared via the URL
+ *    the browser shouldn't replay the action from cache either.
+ *  - X-Frame-Options + frame-ancestors — block clickjacking.
+ *    Embedding this form in a hostile iframe and tricking a user into
+ *    submitting a captured action is exactly the threat shape these
+ *    headers exist to mitigate.
+ */
+export function setNoCacheClickjackHeaders(reply) {
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+  reply.header('X-Frame-Options', 'DENY');
+  reply.header('Content-Security-Policy', "frame-ancestors 'none'");
+}
+
+/**
  * Internal: delete an account record + optional pod-data purge.
  * Shared between the JSON endpoint (handleDeleteAccount) and the
  * form-driven endpoint (handleAccountDeleteForm in #392).
@@ -451,6 +471,10 @@ async function deleteAccountAndOptionallyPurge(request, account, purgeData) {
  * @param {boolean} [options.singleUser] - Single-user mode flag
  */
 export async function handleAccountDeleteForm(request, reply, options = {}) {
+  // Every response from this handler is a destructive-action surface
+  // that re-takes the user's password — never cache, never embed.
+  setNoCacheClickjackHeaders(reply);
+
   if (options.singleUser) {
     // 403 matches the GET route, /idp/register's disabled-route policy,
     // and the JSON DELETE endpoint's 403 — consistent status across

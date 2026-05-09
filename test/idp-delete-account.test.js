@@ -314,6 +314,45 @@ describe('GET/POST /idp/account/delete — HTML form (#392)', () => {
     assert.match(html, /Delete my account permanently/);
   });
 
+  it('GET sets anti-clickjacking + no-store headers', async () => {
+    // Destructive-action page (form for account deletion) — must not
+    // be cacheable or embeddable in an iframe.
+    const res = await fetch(`${baseUrl}/idp/account/delete`);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
+    assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+  });
+
+  it('POST sets the same security headers on success and error responses', async () => {
+    // Error response: missing fields
+    const errRes = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'x' }),
+    });
+    assert.match(errRes.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(errRes.headers.get('x-frame-options'), 'DENY');
+    assert.match(errRes.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+
+    // Success response: full delete flow
+    const id = `lyle${Date.now()}`;
+    await createPod(baseUrl, id, `${id}@example.com`, 'password123');
+    const okRes = await fetch(`${baseUrl}/idp/account/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        username: id,
+        currentPassword: 'password123',
+        confirmUsername: id,
+      }),
+    });
+    assert.strictEqual(okRes.status, 200);
+    assert.match(okRes.headers.get('cache-control') || '', /no-store/i);
+    assert.strictEqual(okRes.headers.get('x-frame-options'), 'DENY');
+    assert.match(okRes.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+  });
+
   it('POST happy path: deletes account AND wipes pod data by default; login fails after', async () => {
     // Form's default is purge-on (the user is leaving — wipe everything).
     // The JSON DELETE endpoint keeps purge-off as default (matches CLI for
