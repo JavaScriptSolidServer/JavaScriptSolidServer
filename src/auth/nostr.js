@@ -26,6 +26,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 import { fetchCidDocument } from './cid-doc-fetch.js';
+import { normalizeControllers } from './lws-cid.js';
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -176,9 +177,21 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Event timestamp outside acceptable window (±60s)' };
   }
 
-  // Build full URL for validation
-  const protocol = request.protocol || 'http';
-  const host = request.headers.host || request.hostname;
+  // Build full URL for validation. Behind a reverse proxy the public-
+  // facing URL is what the client signed, but request.headers.host /
+  // request.protocol carry the internal upstream values. Honor the
+  // forwarded headers (matching the conventions in src/ap/* and the
+  // LWS-CID verifier) so a NIP-98 sig for the public URL still
+  // matches in proxied deployments. Proto is lowercased + allowlisted
+  // to avoid casing-mismatches from misconfigured proxies.
+  const protoRaw = firstHeaderValue(request.headers['x-forwarded-proto'])
+                || request.protocol
+                || 'http';
+  const protoLower = protoRaw.toLowerCase();
+  const protocol = (protoLower === 'http' || protoLower === 'https') ? protoLower : 'http';
+  const host = firstHeaderValue(request.headers['x-forwarded-host'])
+            || request.headers.host
+            || request.hostname;
   const fullUrl = `${protocol}://${host}${request.url}`;
 
   // Validate URL tag matches request URL
@@ -319,6 +332,17 @@ async function tryResolveViaCidVerificationMethod(request, pubkeyHex) {
   const vm = findNostrVmInProfile(profile, pubkeyHex, docUrl);
   if (!vm) return null;
   if (!isInProofPurpose(profile, 'authentication', vm.id, docUrl)) return null;
+
+  // Controller consistency: the VM's `controller` MUST be in the
+  // profile's expected controller set (declared `controller`, with
+  // @id fallback). Without this, a profile with a Nostr-keyed VM
+  // controlled by some unrelated identity could still upgrade us to
+  // the WebID — a key-binding the actual subject never asserted.
+  // Mirrors the lws-cid.js check using the same normalizer.
+  const expectedCtrls = normalizeControllers(profile.controller ?? profile['@id'] ?? profile.id, docUrl);
+  if (expectedCtrls.length === 0) return null;
+  const vmCtrls = normalizeControllers(vm.controller, docUrl);
+  if (!vmCtrls.some((c) => expectedCtrls.includes(c))) return null;
 
   return ownerWebId;
 }

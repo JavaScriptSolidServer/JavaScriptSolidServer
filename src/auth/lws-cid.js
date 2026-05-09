@@ -448,7 +448,9 @@ function isInProofPurpose(profile, predicate, kid, baseUrl) {
   return false;
 }
 
-function normalizeControllers(value, baseUrl) {
+// Exported so the NIP-98 → WebID path (src/auth/nostr.js) can perform
+// the same controller consistency check the LWS-CID verifier uses.
+export function normalizeControllers(value, baseUrl) {
   if (value === undefined || value === null) return [];
   const list = Array.isArray(value) ? value : [value];
   const out = [];

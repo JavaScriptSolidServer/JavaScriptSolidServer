@@ -320,25 +320,25 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
   });
 
   it('handles IPv6 literal host without crashing the host parser', async () => {
-    // host.split(':')[0] would mangle '[::1]:3000' to '['. Make sure
-    // the URL-aware parser gives a usable hostname.
-    const url = `https://${POD_HOST}/private/data.ttl`;
+    // host.split(':')[0] would mangle '[::1]:3000' to '['. The
+    // URL-aware parser must give a usable hostname instead of
+    // crashing. Sign with the IPv6 host so the existing NIP-98
+    // URL-match check passes — this test is about getPodOwnerWebId
+    // not crashing, not about URL matching.
+    const v6Host = '[2001:db8::1]:8443';
+    const url = `https://${v6Host}/private/data.ttl`;
     const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
-    const req = makeRequest({ url });
+    const req = makeRequest({ url, host: v6Host, mode: 'path' });
     req.headers.authorization = authHeader;
-    // Inject an IPv6 forwarded host with port. This shouldn't match
-    // any of our deployment-shape branches (it's neither baseDomain
-    // nor a pod-shaped URL), so we expect did:nostr fallback — the
-    // important thing is we don't crash on the parse.
-    req.headers['x-forwarded-host'] = '[2001:db8::1]:8443';
-    // Force path-mode so the URL pod-segment branch runs.
     req.subdomainsEnabled = false;
 
     const r = await verifyNostrAuth(req);
-    // Either path-segment match (alice's pod) or did:nostr fallback
-    // is acceptable; the goal is "no crash on IPv6 parsing".
-    assert.ok(r.webId === WEBID || r.webId === `did:nostr:${pk}`,
-      `unexpected webId ${r.webId}`);
+    // No crash. The IPv6 path-mode WebID is malformed (a known
+    // limitation matching JSS pod creation, see in-source comment),
+    // so this falls back to did:nostr — that's the explicit
+    // acceptable outcome.
+    assert.strictEqual(r.error, null);
+    assert.strictEqual(r.webId, `did:nostr:${pk}`);
   });
 
   it('handles host:port without breaking baseDomain match', async () => {
