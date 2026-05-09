@@ -32,9 +32,26 @@ const DEFAULT_MAX_BYTES = 256 * 1024;
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 5000;
 
+// Auth is on the hot path; refetching the CID document on every
+// request is unacceptable for both latency and reliability (and would
+// amplify self-traffic when the profile is hosted on this same
+// server). Bounded LRU — an attacker could otherwise grow the cache
+// without limit by sending tokens / requests with many distinct
+// document URLs. Mirrors the pattern in did-nostr.js.
+const profileCache = new Map(); // url -> { profile, timestamp, failureTtl?, error? }
+const PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes for hits
+const PROFILE_FAILURE_TTL = 60 * 1000;   // 1 minute for misses
+const PROFILE_CACHE_MAX = 1000;
+
+/** @internal — exposed for tests */
+export function _clearProfileCacheForTests() {
+  profileCache.clear();
+}
+
 /**
  * Fetch and parse a JSON CID document with SSRF, redirect, and
- * body-size protections.
+ * body-size protections — and a bounded TTL cache so auth-path callers
+ * don't refetch on every request.
  *
  * @param {string} docUrl - URL to fetch (untrusted — comes from JWT
  *   claims or is derived from a request).
@@ -44,6 +61,46 @@ const FETCH_TIMEOUT_MS = 5000;
  * @throws on any validation, network, redirect, size, or parse failure
  */
 export async function fetchCidDocument(docUrl, opts = {}) {
+  // Cache hit (or recent failure) — return immediately. On hit we
+  // delete-then-set so this entry moves to the tail of the Map's
+  // insertion order, giving LRU eviction without a separate structure.
+  const cached = profileCache.get(docUrl);
+  if (cached) {
+    const ttl = cached.failureTtl ? PROFILE_FAILURE_TTL : PROFILE_CACHE_TTL;
+    if (Date.now() - cached.timestamp < ttl) {
+      profileCache.delete(docUrl);
+      profileCache.set(docUrl, cached);
+      if (cached.failureTtl) throw new Error(cached.error);
+      return cached.profile;
+    }
+    profileCache.delete(docUrl);
+  }
+
+  try {
+    const profile = await fetchCidDocumentNoCache(docUrl, opts);
+    setCached(docUrl, { profile, timestamp: Date.now() });
+    return profile;
+  } catch (err) {
+    setCached(docUrl, {
+      timestamp: Date.now(),
+      failureTtl: true,
+      error: err.message,
+    });
+    throw err;
+  }
+}
+
+/** Insert into the bounded LRU; evict the oldest entry past the cap. */
+function setCached(url, entry) {
+  profileCache.set(url, entry);
+  while (profileCache.size > PROFILE_CACHE_MAX) {
+    const oldest = profileCache.keys().next().value;
+    if (oldest === undefined) break;
+    profileCache.delete(oldest);
+  }
+}
+
+async function fetchCidDocumentNoCache(docUrl, opts = {}) {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const originalOrigin = new URL(docUrl).origin;
   let currentUrl = docUrl;

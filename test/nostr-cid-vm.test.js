@@ -17,6 +17,7 @@ import assert from 'node:assert';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { generateSecretKey, getPublicKey, finalizeEvent } from '../src/nostr/event.js';
 import { verifyNostrAuth } from '../src/auth/nostr.js';
+import { _clearProfileCacheForTests } from '../src/auth/cid-doc-fetch.js';
 
 /** Compute the BIP-340 even-y JWK coordinates for an x-only Nostr pubkey. */
 function evenYJwk(xOnlyHex) {
@@ -156,6 +157,9 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
     nextProfile = buildProfile({ pubkey: pk });
     pathProfile = null;
     urlResponses = new Map();
+    // Cache lives in cid-doc-fetch.js now and is shared with lws-cid.js;
+    // must clear so a previous test's profile doesn't satisfy this one.
+    _clearProfileCacheForTests();
   });
 
   it('upgrades did:nostr → WebID when the pubkey is in the profile as f-form Multikey VM', async () => {

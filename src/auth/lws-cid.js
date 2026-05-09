@@ -35,7 +35,10 @@
 import * as jose from 'jose';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
-import { fetchCidDocument } from './cid-doc-fetch.js';
+import { fetchCidDocument, _clearProfileCacheForTests } from './cid-doc-fetch.js';
+
+// Re-export for the existing test suite, which already calls this.
+export { _clearProfileCacheForTests };
 
 // JWS algorithms we accept. ES256K (RFC8812) is the primary target —
 // secp256k1, the same curve as Nostr — but we support the common JWS
@@ -55,25 +58,11 @@ const MAX_LIFETIME = 3600; // 1 hour
 // Clock skew tolerance for exp/nbf checks (seconds).
 const CLOCK_SKEW = 60;
 
-// Profile fetch cache. Auth is on the hot path; refetching the CID
-// document on every request is unacceptable for both latency and
-// reliability. Mirrors the pattern in did-nostr.js, but bounded — an
-// attacker can otherwise grow the cache without limit by sending tokens
-// with many distinct `sub` URLs.
-const profileCache = new Map(); // url -> { profile, timestamp, failureTtl?, error? }
-const PROFILE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes for hits
-const PROFILE_FAILURE_TTL = 60 * 1000;   // 1 minute for misses
-const PROFILE_CACHE_MAX = 1000;          // simple LRU bound
-
 // Max profile body size — passed to the shared fetcher. CID documents
 // are tiny in practice (~1-5 KB); 256 KB leaves plenty of headroom
-// while bounding any DoS attempt.
+// while bounding any DoS attempt. The cache itself lives in
+// cid-doc-fetch.js so both this module and the NIP-98 path benefit.
 const MAX_PROFILE_BYTES = 256 * 1024;
-
-/** @internal — exposed for tests */
-export function _clearProfileCacheForTests() {
-  profileCache.clear();
-}
 
 /**
  * Cheap detector — does this request carry an LWS-CID JWT?
@@ -425,57 +414,12 @@ function normalizeOrigin(s) {
   }
 }
 
-async function fetchProfile(docUrl) {
-  // Cache hit (or recent failure) — return immediately. On hit we
-  // delete-then-reset so this entry moves to the tail of the Map's
-  // insertion order, giving us LRU eviction without an extra structure.
-  const cached = profileCache.get(docUrl);
-  if (cached) {
-    const ttl = cached.failureTtl ? PROFILE_FAILURE_TTL : PROFILE_CACHE_TTL;
-    if (Date.now() - cached.timestamp < ttl) {
-      profileCache.delete(docUrl);
-      profileCache.set(docUrl, cached);
-      if (cached.failureTtl) throw new Error(cached.error);
-      return cached.profile;
-    }
-    profileCache.delete(docUrl);
-  }
-
-  try {
-    const profile = await fetchProfileNoCache(docUrl);
-    setCached(docUrl, { profile, timestamp: Date.now() });
-    return profile;
-  } catch (err) {
-    setCached(docUrl, {
-      timestamp: Date.now(),
-      failureTtl: true,
-      error: err.message,
-    });
-    throw err;
-  }
-}
-
-/** Insert into the bounded LRU; evict the oldest entry past the cap. */
-function setCached(url, entry) {
-  profileCache.set(url, entry);
-  while (profileCache.size > PROFILE_CACHE_MAX) {
-    // Map iterates in insertion order; first key is the oldest.
-    const oldest = profileCache.keys().next().value;
-    if (oldest === undefined) break;
-    profileCache.delete(oldest);
-  }
-}
-
 /**
- * Fetch the CID document with SSRF protection. Delegates to the
- * shared `fetchCidDocument` helper so the per-request defenses (SSRF
- * validation per hop, manual redirects, same-origin enforcement,
- * body-size cap) live in one place — see src/auth/cid-doc-fetch.js.
- *
- * The cache wrapper around this function (above) is LWS-CID-specific
- * and stays here.
+ * Fetch the CID document. Delegates to the shared `fetchCidDocument`
+ * helper which handles SSRF / redirects / body cap AND a bounded TTL
+ * cache (see src/auth/cid-doc-fetch.js).
  */
-async function fetchProfileNoCache(docUrl) {
+async function fetchProfile(docUrl) {
   return fetchCidDocument(docUrl, { maxBytes: MAX_PROFILE_BYTES });
 }
 
