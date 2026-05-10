@@ -177,6 +177,10 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
     // Critical correctness test: the post-pass must NOT corrupt
     // literal values. A literal "foo;bar" with the post-pass naïvely
     // applied would become "foo ;bar" — silent data corruption.
+    //
+    // Assert by VALUE, not by lexical form. A quote-agnostic parser
+    // round-trip survives any future N3 writer style change
+    // (single vs double quotes, long-string `"""..."""`, etc.).
     const doc = {
       '@context': { 'ex': 'https://example.test/ns#' },
       '@id': 'https://example.test/s',
@@ -185,26 +189,42 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       'ex:both': 'a;b.c',
     };
     const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
-    // The literals must round-trip verbatim — no inserted space.
-    assert.ok(content.includes('"foo;bar"'),
-      `literal "foo;bar" must survive verbatim, got:\n${content}`);
-    assert.ok(content.includes('"has.dot"'),
-      `literal "has.dot" must survive verbatim, got:\n${content}`);
-    assert.ok(content.includes('"a;b.c"'),
-      `literal "a;b.c" must survive verbatim, got:\n${content}`);
+    // Round-trip: parse the emitted Turtle, walk the quads, assert
+    // the literal values came back exactly as authored.
+    const { Parser } = await import('n3');
+    const parser = new Parser({ baseIRI: 'https://example.test/' });
+    const quads = parser.parse(content);
+    const objectsByPredicate = new Map();
+    for (const q of quads) {
+      if (q.object.termType !== 'Literal') continue;
+      objectsByPredicate.set(q.predicate.value, q.object.value);
+    }
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#semicolonInside'), 'foo;bar',
+      `literal value for ex:semicolonInside must be "foo;bar"`);
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#dotInside'), 'has.dot',
+      `literal value for ex:dotInside must be "has.dot"`);
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#both'), 'a;b.c',
+      `literal value for ex:both must be "a;b.c"`);
   });
 
   it('does NOT add a space inside an IRI containing `;` (#419 safety)', async () => {
     // An IRI's content is bracketed by `<...>` — the post-pass
-    // shouldn't touch what's inside.
+    // shouldn't touch what's inside. Assert by value via parser
+    // round-trip so we don't depend on N3 writer formatting.
     const doc = {
       '@context': { 'ex': 'https://example.test/ns#' },
       '@id': 'https://example.test/s',
       'ex:rel': { '@id': 'https://example.test/path;with;semis' },
     };
     const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
-    assert.ok(content.includes('<https://example.test/path;with;semis>'),
-      `IRI must survive verbatim with internal ;, got:\n${content}`);
+    const { Parser } = await import('n3');
+    const parser = new Parser({ baseIRI: 'https://example.test/' });
+    const quads = parser.parse(content);
+    const rels = quads
+      .filter(q => q.predicate.value === 'https://example.test/ns#rel')
+      .map(q => q.object.value);
+    assert.deepStrictEqual(rels, ['https://example.test/path;with;semis'],
+      `IRI value must round-trip with internal ; intact`);
   });
 
   it('cyclical nested node reference does not hang', async () => {
