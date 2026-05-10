@@ -153,7 +153,6 @@ async function rebuildPubkeyIndex() {
     // from "containment rejected".
     const reasons = containmentSkipped.map(s => `${s.path}: ${s.reason}`);
     let profile = null;
-    let profilePath = null;
     let mtimeMs = 0;
     for (const candidate of candidates) {
       let stat;
@@ -190,7 +189,6 @@ async function rebuildPubkeyIndex() {
         continue;
       }
       profile = parsed;
-      profilePath = candidate;
       mtimeMs = stat.mtimeMs;
       break;
     }

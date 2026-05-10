@@ -405,10 +405,13 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
       } else {
         try { await fs.remove(decoyProfilePath); } catch { /* best effort */ }
       }
-      // Subdomain fixture file + empty parent dirs.
+      // Subdomain fixture file + empty parent dirs. fs-extra's
+      // `remove` handles both files and (recursively) dirs and
+      // is a no-op on missing paths — replaces the deprecated
+      // node `fs.rmdir`.
       try { await fs.remove(subProfilePath); } catch { /* best effort */ }
-      try { await fs.rmdir(path.dirname(subProfilePath)); } catch { /* not empty / gone */ }
-      try { await fs.rmdir(path.dirname(path.dirname(subProfilePath))); } catch { /* not empty / gone */ }
+      try { await fs.remove(path.dirname(subProfilePath)); } catch { /* best effort */ }
+      try { await fs.remove(path.dirname(path.dirname(subProfilePath))); } catch { /* best effort */ }
       // Index entry + account record.
       try {
         const idx = await fs.readJson(indexPath);
