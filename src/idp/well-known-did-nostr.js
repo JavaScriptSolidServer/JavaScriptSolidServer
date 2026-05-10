@@ -111,7 +111,22 @@ async function rebuildPubkeyIndex() {
     let profilePath;
     try {
       const webIdUrl = new URL(account.webId);
-      profilePath = path.join(dataRoot, webIdUrl.pathname);
+      // Strip leading `/` so it's treated as a relative segment, then
+      // resolve and confirm the result stays inside dataRoot. An
+      // account record with a path like `..` or `\0` shouldn't be
+      // able to read arbitrary files (defense in depth — operator
+      // privilege already controls this surface, but cheap to harden).
+      const relPath = webIdUrl.pathname.replace(/^\/+/, '');
+      const dataRootAbs = path.resolve(dataRoot);
+      const resolved = path.resolve(dataRootAbs, relPath);
+      if (resolved !== dataRootAbs && !resolved.startsWith(dataRootAbs + path.sep)) {
+        console.error(
+          `well-known-did-nostr: account ${accountId} webId ` +
+          `${account.webId} resolves outside dataRoot — skipping`,
+        );
+        continue;
+      }
+      profilePath = resolved;
     } catch {
       continue; // unparseable webId — skip
     }

@@ -250,6 +250,37 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     assert.strictEqual(doc.alsoKnownAs[0], rootWebId);
   });
 
+  it('refuses to read profile paths that escape DATA_ROOT', async () => {
+    // An account record with a maliciously-shaped webId
+    // (`https://host/../etc/passwd`) must NOT cause the indexer to
+    // read outside DATA_ROOT. Operators control this surface, but
+    // path containment is a cheap defense-in-depth check.
+    const sk = generateSecretKey();
+    const evilPk = getPublicKey(sk);
+    const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
+    const indexPath = path.join(accountsDir, '_webid_index.json');
+    const idx = await fs.readJson(indexPath);
+    const evilId = 'evil-traversal-account';
+    const evilWebId = `${baseUrl}/../../../etc/passwd#me`;
+    idx[evilWebId] = evilId;
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.writeJson(path.join(accountsDir, `${evilId}.json`), {
+      id: evilId,
+      podName: 'evil',
+      webId: evilWebId,
+    }, { spaces: 2 });
+
+    // Index rebuild should skip the evil account silently and not
+    // 500 on the unrelated request.
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${evilPk}.json`);
+    assert.strictEqual(r.status, 404);
+
+    // Cleanup so subsequent tests' index isn't polluted.
+    delete idx[evilWebId];
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.remove(path.join(accountsDir, `${evilId}.json`));
+  });
+
   it('handles profiles whose authentication entries are relative fragments', async () => {
     // Profiles in the wild often use relative `#me`-style fragments
     // for the subject. The indexer must absolutize `authentication`
