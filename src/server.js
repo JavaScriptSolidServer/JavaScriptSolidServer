@@ -11,7 +11,10 @@ import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
-import { buildWellKnownDidNostrHandler } from './idp/well-known-did-nostr.js';
+// well-known-did-nostr is loaded lazily inside the idpEnabled branch
+// below so non-IdP deployments don't pull in the IdP accounts module
+// (bcryptjs etc.) just to register Fastify routes. The same lazy-load
+// pattern is used in src/auth/nostr.js for the NIP-98 verifier.
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
@@ -658,26 +661,32 @@ export function createServer(options = {}) {
   // dynamic-segment + .json suffix gets swallowed by the wildcard
   // GET /* handler below and never reaches our route.
   if (idpEnabled) {
-    const wellKnownDidNostr = buildWellKnownDidNostrHandler();
-    fastify.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
-    // HEAD shares the GET implementation so headers (Content-Type,
-    // Cache-Control, Last-Modified, etc.) match. Without this the
-    // request falls through to the wildcard HEAD /* below and the
-    // LDP layer returns 404 because there's no on-disk file.
-    fastify.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
-    // The well-known namespace is read-only — published documents are
-    // generated, not stored. Block writes explicitly so they don't
-    // fall through to the wildcard write handlers (which would
-    // otherwise accept unauthenticated PUT/POST under
-    // /.well-known/* since that path is excluded from the auth
-    // preHandler).
-    const methodNotAllowed = async (request, reply) => reply.code(405)
-      .header('Allow', 'GET, HEAD, OPTIONS')
-      .send({ error: 'Method Not Allowed' });
-    fastify.put('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-    fastify.post('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-    fastify.patch('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-    fastify.delete('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+    // Async plugin registration so the dynamic import lives in here,
+    // not at module top level. Non-IdP deployments never enter this
+    // branch and never pull in the IdP accounts module.
+    fastify.register(async (instance) => {
+      const { buildWellKnownDidNostrHandler } = await import('./idp/well-known-did-nostr.js');
+      const wellKnownDidNostr = buildWellKnownDidNostrHandler();
+      instance.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+      // HEAD shares the GET implementation so headers (Content-Type,
+      // Cache-Control, Last-Modified, etc.) match. Without this the
+      // request falls through to the wildcard HEAD /* below and the
+      // LDP layer returns 404 because there's no on-disk file.
+      instance.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+      // The well-known namespace is read-only — published documents are
+      // generated, not stored. Block writes explicitly so they don't
+      // fall through to the wildcard write handlers (which would
+      // otherwise accept unauthenticated PUT/POST under
+      // /.well-known/* since that path is excluded from the auth
+      // preHandler).
+      const methodNotAllowed = async (request, reply) => reply.code(405)
+        .header('Allow', 'GET, HEAD, OPTIONS')
+        .send({ error: 'Method Not Allowed' });
+      instance.put('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+      instance.post('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+      instance.patch('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+      instance.delete('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+    });
   }
 
   // LDP routes - using wildcard routing

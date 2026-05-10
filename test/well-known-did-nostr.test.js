@@ -18,7 +18,10 @@ import { _resetIndexForTests } from '../src/idp/well-known-did-nostr.js';
 import { extractNostrPubkeysFromProfile } from '../src/auth/nostr.js';
 
 const TEST_HOST = '127.0.0.1';
-const TEST_DATA_DIR = './data';
+// Dedicated per-suite directory so we don't clobber a developer's
+// local `./data` (which is also JSS's default data root) and don't
+// race with other suites that use `./data` via the shared helper.
+const TEST_DATA_DIR = './test-data-well-known-did-nostr';
 
 /** Pick an OS-assigned port up front so idpIssuer can include it. */
 async function getAvailablePort() {
@@ -54,6 +57,11 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
   let server;
   let baseUrl;
   let alicePk;
+  // Capture the original DATA_ROOT before the suite mutates it, so
+  // the after() hook can restore it. Other tests in the repo follow
+  // this save/restore pattern (e.g. idp-change-password.test.js) to
+  // avoid cross-test environment leakage.
+  const originalDataRoot = process.env.DATA_ROOT;
 
   before(async () => {
     // IdP must be enabled — pod creation only writes an account
@@ -97,6 +105,11 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
   after(async () => {
     await server.close();
     await fs.remove(TEST_DATA_DIR);
+    if (originalDataRoot === undefined) {
+      delete process.env.DATA_ROOT;
+    } else {
+      process.env.DATA_ROOT = originalDataRoot;
+    }
   });
 
   beforeEach(() => {
@@ -141,11 +154,19 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const otherPk = getPublicKey(generateSecretKey());
     const r = await fetch(`${baseUrl}/.well-known/did/nostr/${otherPk}.json`);
     assert.strictEqual(r.status, 404);
+    // Per-status header policy: 404 still sets Nostr-Timestamp (so
+    // clients can correlate the resolver clock with the negative
+    // answer) and a short cache so newly added keys surface fast.
+    assert.ok(r.headers.get('nostr-timestamp'));
+    assert.match(r.headers.get('cache-control') || '', /max-age=60/);
   });
 
   it('returns 400 for a non-hex pubkey', async () => {
     const r = await fetch(`${baseUrl}/.well-known/did/nostr/not-a-real-pubkey.json`);
     assert.strictEqual(r.status, 400);
+    // 400 sets Nostr-Timestamp but never caches (request was malformed).
+    assert.ok(r.headers.get('nostr-timestamp'));
+    assert.match(r.headers.get('cache-control') || '', /no-store/);
   });
 
   it('returns 400 for a wrong-length hex pubkey', async () => {

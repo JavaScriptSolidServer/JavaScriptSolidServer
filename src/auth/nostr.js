@@ -25,7 +25,10 @@ import { verifyEvent, getEventHash } from '../nostr/event.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
-import { resolveDidNostrLocally } from '../idp/well-known-did-nostr.js';
+// resolveDidNostrLocally is loaded lazily (inside the idpEnabled
+// branch) so non-IdP deployments don't pay the IdP/accounts module
+// startup cost (bcryptjs, oidc-provider helpers, etc.) just by
+// importing the NIP-98 verifier.
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
 import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile } from './nostr-keys.js'; // re-exported for back-compat
@@ -291,6 +294,9 @@ export async function verifyNostrAuth(request) {
   // is in use. On non-IdP deployments the local resolver has nothing
   // to find and would just spin disk on every request.
   if (request.idpEnabled) {
+    // Dynamic import: only load the IdP-accounts stack when IdP is
+    // actually enabled. Cached after first load (ESM module caching).
+    const { resolveDidNostrLocally } = await import('../idp/well-known-did-nostr.js');
     const localWebId = await resolveDidNostrLocally(event.pubkey);
     if (localWebId) {
       return { webId: localWebId, error: null };

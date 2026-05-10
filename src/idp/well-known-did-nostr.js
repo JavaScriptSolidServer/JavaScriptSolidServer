@@ -84,7 +84,20 @@ async function rebuildPubkeyIndex() {
   // diagnose; better to refuse and log loudly.
   const seenAccounts = new Map(); // pubkey -> Set<accountId>
   for (const [, accountId] of Object.entries(webIdIndex)) {
-    const account = await findById(accountId);
+    // Wrap each account read so one corrupt/unreadable account file
+    // can't take down resolution for everyone — the index would just
+    // skip that account and a single 500 wouldn't cascade across the
+    // whole pod's NIP-98 traffic.
+    let account;
+    try {
+      account = await findById(accountId);
+    } catch (err) {
+      console.error(
+        `well-known-did-nostr: skipping account ${accountId} ` +
+        `(read failed: ${err.message})`,
+      );
+      continue;
+    }
     if (!account?.podName || !account?.webId) continue;
     const profilePath = path.join(dataRoot, account.podName, 'profile', 'card.jsonld');
     let profile;
@@ -264,9 +277,23 @@ export function buildWellKnownDidNostrHandler() {
               : raw.endsWith('.json') ? '.json'
               : '';
     const pubkey = (ext ? raw.slice(0, -ext.length) : raw).toLowerCase();
+    // Per-status header policy (so success and failure responses are
+    // both predictable to clients/CDNs):
+    //   200  Cache-Control: max-age=3600  — DID doc seldom changes
+    //   404  Cache-Control: max-age=60    — short TTL so a newly added
+    //                                       key surfaces quickly
+    //   400  Cache-Control: no-store      — request was malformed; never cache
+    // Nostr-Timestamp is set on EVERY response (including errors) per
+    // the did:nostr spec recommendation that clients can correlate the
+    // resolver's clock with the answer they got. Last-Modified only
+    // makes sense for 200 (it tracks the underlying profile mtime);
+    // for errors we omit it because there's no underlying resource.
+    const nowEpoch = Math.floor(Date.now() / 1000);
     if (!/^[0-9a-f]{64}$/.test(pubkey)) {
       return reply.code(400)
         .header('Content-Type', 'application/json')
+        .header('Cache-Control', 'no-store')
+        .header('Nostr-Timestamp', String(nowEpoch))
         .send({ error: 'pubkey must be 64 hex chars' });
     }
     const found = await findAccountByNostrPubkey(pubkey);
@@ -274,6 +301,7 @@ export function buildWellKnownDidNostrHandler() {
       return reply.code(404)
         .header('Cache-Control', 'max-age=60')
         .header('Content-Type', 'application/json')
+        .header('Nostr-Timestamp', String(nowEpoch))
         .send({ error: 'no local account claims this pubkey' });
     }
     const { account, mtimeMs } = found;
@@ -283,6 +311,7 @@ export function buildWellKnownDidNostrHandler() {
       return reply.code(404)
         .header('Cache-Control', 'max-age=60')
         .header('Content-Type', 'application/json')
+        .header('Nostr-Timestamp', String(nowEpoch))
         .send({ error: 'account has no webId' });
     }
 
