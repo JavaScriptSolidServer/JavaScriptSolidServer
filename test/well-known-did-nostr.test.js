@@ -120,6 +120,29 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const r = await fetch(`${baseUrl}/.well-known/did/nostr/abcdef.json`);
     assert.strictEqual(r.status, 400);
   });
+
+  it('does NOT publish a VM that is in verificationMethod but not in authentication', async () => {
+    // Add a key to the profile under verificationMethod but explicitly
+    // omit it from `authentication` — the user has decided this key
+    // is NOT for auth (revocation pending, assertion-only, etc.).
+    // Index must respect that intent.
+    const otherSk = generateSecretKey();
+    const otherPk = getPublicKey(otherSk);
+    const profilePath = path.join(TEST_DATA_DIR, 'alice', 'profile', 'card.jsonld');
+    const profile = await fs.readJson(profilePath);
+    const REVOKED_VM_ID = `${profile['@id'].replace('#me', '')}#nostr-revoked`;
+    profile.verificationMethod.push({
+      id: REVOKED_VM_ID,
+      type: 'Multikey',
+      controller: profile['@id'],
+      publicKeyMultibase: fformMultikey(otherPk),
+    });
+    // NOTE: NOT added to profile.authentication
+    await fs.writeJson(profilePath, profile, { spaces: 2 });
+
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${otherPk}.json`);
+    assert.strictEqual(r.status, 404);
+  });
 });
 
 describe('extractNostrPubkeysFromProfile', () => {

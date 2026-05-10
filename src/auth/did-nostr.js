@@ -7,6 +7,8 @@
  * 3. Verifying bidirectional link (WebID links back to did:nostr)
  */
 
+import { validateExternalUrl } from '../utils/ssrf.js';
+
 // Default DID resolver endpoint
 const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
 
@@ -37,12 +39,9 @@ function rateLimitedError(key, message) {
 }
 
 /**
- * Fetch with timeout
- */
-/**
- * Are two URLs same-origin? Used by the DID-doc resolver: a doc
- * served from the same host as the WebID it claims is authoritative
- * for that origin and doesn't need a bidirectional check.
+ * Are two URLs same-origin? Used as a shortcut in the resolver: a DID
+ * doc served from the same origin as the WebID it claims is
+ * authoritative and doesn't need a bidirectional sameAs check.
  */
 function sameOrigin(urlA, urlB) {
   if (typeof urlA !== 'string' || typeof urlB !== 'string') return false;
@@ -53,6 +52,9 @@ function sameOrigin(urlA, urlB) {
   }
 }
 
+/**
+ * Fetch with a timeout via AbortController.
+ */
 async function fetchWithTimeout(url, options = {}, timeout = 5000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -69,24 +71,21 @@ async function fetchWithTimeout(url, options = {}, timeout = 5000) {
 /**
  * Resolve did:nostr pubkey to WebID via DID document.
  *
- * Tries each resolver in order. The auth callers in JSS prepend the
- * request's own host (`https://<host>/.well-known/did/nostr`) so a
- * local account's DID doc is found via JSS's own well-known publisher
- * (#407) — zero-network self-resolution — and only falls back to the
- * external resolver when the pubkey isn't ours.
+ * Local users are resolved by `resolveDidNostrLocally` in the auth
+ * caller (well-known-did-nostr.js exports an in-process function) —
+ * this resolver is the cross-pod fallback that fetches an external
+ * DID doc, so all fetches run through the SSRF guard.
  *
  * @param {string} pubkey - 64-char hex Nostr pubkey
- * @param {string|string[]} [resolverUrlOrUrls] - one or more DID resolver
- *   base URLs (without the trailing `/<pubkey>.json`). Defaults to the
- *   single configured DEFAULT_DID_RESOLVER.
+ * @param {string} [resolverUrl] - DID resolver base URL (without the
+ *   trailing `/<pubkey>.json`). Defaults to the configured
+ *   DEFAULT_DID_RESOLVER (nostr.social).
  * @returns {Promise<string|null>} WebID URL or null
  */
-export async function resolveDidNostrToWebId(pubkey, resolverUrlOrUrls = DEFAULT_DID_RESOLVER) {
+export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_RESOLVER) {
   if (!pubkey || pubkey.length !== 64) {
     return null;
   }
-  const resolvers = Array.isArray(resolverUrlOrUrls) ? resolverUrlOrUrls : [resolverUrlOrUrls];
-  if (resolvers.length === 0) return null;
 
   // Check cache (lazy eviction of expired entries)
   const cacheKey = pubkey.toLowerCase();
@@ -100,27 +99,28 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrlOrUrls = DEFAULT
   }
 
   try {
-    // Try each resolver in order; first success wins. Track which URL
-    // the doc came from so verifyWebIdBacklink can apply the
-    // same-origin shortcut (an authoritative DID doc served from the
-    // WebID's own host doesn't need a bidirectional sameAs check).
-    let didDoc = null;
-    let foundAtUrl = null;
-    for (const resolverUrl of resolvers) {
-      const didUrl = `${resolverUrl}/${pubkey}.json`;
-      const didRes = await fetchWithTimeout(didUrl, {
-        headers: { 'Accept': 'application/did+json, application/json' }
-      }).catch(() => null);
-      if (didRes && didRes.ok) {
-        didDoc = await didRes.json();
-        foundAtUrl = didUrl;
-        break;
-      }
-    }
-    if (!didDoc) {
+    // SSRF guard: the resolver URL is configurable (an operator could
+    // point at a private resolver) but better safe — match the same
+    // policy the LWS-CID verifier and CORS proxy apply.
+    const didUrl = `${resolverUrl}/${pubkey}.json`;
+    const validation = await validateExternalUrl(didUrl, {
+      requireHttps: process.env.NODE_ENV === 'production',
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) {
       cache.set(cacheKey, { webId: null, timestamp: Date.now() });
       return null;
     }
+    const didRes = await fetchWithTimeout(didUrl, {
+      headers: { 'Accept': 'application/did+json, application/json' }
+    }).catch(() => null);
+    if (!didRes || !didRes.ok) {
+      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      return null;
+    }
+    const didDoc = await didRes.json();
+    const foundAtUrl = didUrl;
 
     // Extract WebID from alsoKnownAs (array) or profile.webid or profile.sameAs
     let webId = null;
@@ -179,6 +179,14 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrlOrUrls = DEFAULT
 async function verifyWebIdBacklink(webId, pubkey) {
   try {
     const expectedDid = `did:nostr:${pubkey.toLowerCase()}`;
+    // SSRF guard: the WebID came out of an externally-fetched DID doc,
+    // so it's untrusted until verified.
+    const validation = await validateExternalUrl(webId, {
+      requireHttps: process.env.NODE_ENV === 'production',
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) return false;
 
     // Fetch WebID profile
     const res = await fetchWithTimeout(webId, {

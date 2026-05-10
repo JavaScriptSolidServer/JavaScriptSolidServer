@@ -49,8 +49,20 @@ function getWebIdIndexPath() {
   return path.join(getAccountsDir(), '_webid_index.json');
 }
 
+/**
+ * Read a JSON file, returning null only when it doesn't exist.
+ * Other failures (parse error, permission denied, etc.) propagate
+ * via console.error so operational issues aren't silently swallowed
+ * — they'd otherwise disable DID-doc publishing without any signal.
+ */
 async function readJsonOrEmpty(file) {
-  try { return await fs.readJson(file); } catch { return null; }
+  try {
+    return await fs.readJson(file);
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    console.error(`well-known-did-nostr: failed to read ${file}: ${err.message}`);
+    return null;
+  }
 }
 
 async function rebuildPubkeyIndex({ dataRoot }) {
@@ -66,20 +78,57 @@ async function rebuildPubkeyIndex({ dataRoot }) {
     if (!account?.podName) continue;
     const profilePath = path.join(dataRoot, account.podName, 'profile', 'card.jsonld');
     let profile;
+    let mtimeMs = 0;
     try {
+      const stat = await fs.stat(profilePath);
+      mtimeMs = stat.mtimeMs;
       const text = await fs.readFile(profilePath, 'utf8');
       profile = JSON.parse(text);
     } catch {
       continue; // unreadable / non-existent — skip
     }
-    for (const { pubkey } of extractNostrPubkeysFromProfile(profile)) {
+    // Only index VMs that the user has explicitly placed in
+    // `authentication`. A pubkey present in verificationMethod but
+    // intentionally not in authentication shouldn't be published —
+    // the user excluded it from auth purposes (revocation pending,
+    // assertion-only, etc.). Publishing it anyway would defeat the
+    // user's intent.
+    const authIds = collectAuthenticationIds(profile);
+    for (const { pubkey, vm } of extractNostrPubkeysFromProfile(profile)) {
+      const vmId = absolutize(vm.id || vm['@id'], stripHashIfAny(profile['@id']));
+      if (!vmId || !authIds.has(vmId)) continue;
       // First-write wins; if two accounts somehow declare the same
       // pubkey, the first one resolved keeps the binding.
-      if (!idx.has(pubkey)) idx.set(pubkey, accountId);
+      if (!idx.has(pubkey)) idx.set(pubkey, { accountId, mtimeMs });
     }
   }
   pubkeyIndex = idx;
   indexBuiltAt = Date.now();
+}
+
+function collectAuthenticationIds(profile) {
+  const out = new Set();
+  const auth = profile?.authentication;
+  const baseUrl = stripHashIfAny(profile?.['@id'] || profile?.id || '');
+  const list = Array.isArray(auth) ? auth : (auth ? [auth] : []);
+  for (const ent of list) {
+    let id;
+    if (typeof ent === 'string') id = ent;
+    else if (ent && typeof ent === 'object') id = ent['@id'] || ent.id;
+    if (id) out.add(absolutize(id, baseUrl));
+  }
+  return out;
+}
+
+function absolutize(u, base) {
+  if (!u) return u;
+  try { return new URL(u, base).toString(); } catch { return u; }
+}
+
+function stripHashIfAny(u) {
+  if (typeof u !== 'string') return u;
+  try { const url = new URL(u); url.hash = ''; return url.toString(); }
+  catch { return u; }
 }
 
 async function findAccountByNostrPubkey(pubkeyHex, opts) {
@@ -87,9 +136,30 @@ async function findAccountByNostrPubkey(pubkeyHex, opts) {
   if (!pubkeyIndex || (Date.now() - indexBuiltAt) > INDEX_TTL_MS) {
     await rebuildPubkeyIndex(opts);
   }
-  const accountId = pubkeyIndex.get(lower);
-  if (!accountId) return null;
-  return findById(accountId);
+  const entry = pubkeyIndex.get(lower);
+  if (!entry) return null;
+  const account = await findById(entry.accountId);
+  if (!account) return null;
+  return { account, mtimeMs: entry.mtimeMs };
+}
+
+/**
+ * In-process local DID resolution: given a Nostr pubkey, return the
+ * matching account's WebID without any network fetch. Lets the
+ * verifyNostrAuth resolver chain prefer local users via direct
+ * function call instead of a same-host HTTP loop, removing both the
+ * latency and the SSRF surface that came with feeding request-
+ * controlled host headers into a `fetch()`.
+ *
+ * Returns null for non-local pubkeys (caller falls back to the
+ * external HTTP resolver, with SSRF protection).
+ */
+export async function resolveDidNostrLocally(pubkeyHex) {
+  if (typeof pubkeyHex !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkeyHex)) return null;
+  const found = await findAccountByNostrPubkey(pubkeyHex.toLowerCase(), {
+    dataRoot: process.env.DATA_ROOT || './data',
+  });
+  return found?.account?.webId || null;
 }
 
 /**
@@ -128,6 +198,16 @@ function buildDidDocument({ pubkey, webId }) {
  * `<pubkey>.jsonld`; the body is the same DID doc either way. The
  * spec specifies `.json` as the canonical path, so that's the
  * primary; the others are friendly aliases.
+ *
+ * Note on the dataRoot option: this handler reads profiles from
+ * `<dataRoot>/<podName>/profile/card.jsonld`, but it also calls
+ * `findById()` from accounts.js, which reads from
+ * `<process.env.DATA_ROOT>/.idp/accounts/`. To keep the two layers
+ * consistent we mirror DATA_ROOT into options.dataRoot at the
+ * default, so passing `dataRoot` only differs when you've ALSO set
+ * DATA_ROOT to the same value (typical) — in which case the
+ * parameter is just an explicit form of the env. Custom values
+ * outside DATA_ROOT are out of scope.
  */
 export function buildWellKnownDidNostrHandler({ dataRoot } = {}) {
   const root = dataRoot || process.env.DATA_ROOT || './data';
@@ -136,19 +216,20 @@ export function buildWellKnownDidNostrHandler({ dataRoot } = {}) {
     const ext = raw.endsWith('.jsonld') ? '.jsonld'
               : raw.endsWith('.json') ? '.json'
               : '';
-    const pubkey = ext ? raw.slice(0, -ext.length) : raw;
-    if (!/^[0-9a-f]{64}$/i.test(pubkey)) {
+    const pubkey = (ext ? raw.slice(0, -ext.length) : raw).toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(pubkey)) {
       return reply.code(400)
         .header('Content-Type', 'application/json')
-        .send({ error: 'pubkey must be 64 hex chars (lowercase)' });
+        .send({ error: 'pubkey must be 64 hex chars' });
     }
-    const account = await findAccountByNostrPubkey(pubkey, { dataRoot: root });
-    if (!account) {
+    const found = await findAccountByNostrPubkey(pubkey, { dataRoot: root });
+    if (!found?.account) {
       return reply.code(404)
         .header('Cache-Control', 'max-age=60')
         .header('Content-Type', 'application/json')
         .send({ error: 'no local account claims this pubkey' });
     }
+    const { account, mtimeMs } = found;
     if (!account.webId) {
       // Defensive — every account has a webId, but if one slips through,
       // the DID doc would be useless without alsoKnownAs.
@@ -162,11 +243,15 @@ export function buildWellKnownDidNostrHandler({ dataRoot } = {}) {
     const contentType = ext === '.jsonld'
       ? 'application/did+ld+json; charset=utf-8'
       : 'application/did+json; charset=utf-8';
+    // Last-Modified reflects when the underlying mapping (the user's
+    // profile file) actually changed — NOT the request time — so
+    // clients/CDNs can do conditional GET correctly.
+    const lastModifiedDate = mtimeMs > 0 ? new Date(mtimeMs) : new Date(indexBuiltAt);
     return reply
       .header('Content-Type', contentType)
       .header('Cache-Control', 'max-age=3600')
-      .header('Nostr-Timestamp', String(Math.floor(Date.now() / 1000)))
-      .header('Last-Modified', new Date().toUTCString())
+      .header('Nostr-Timestamp', String(Math.floor(lastModifiedDate.getTime() / 1000)))
+      .header('Last-Modified', lastModifiedDate.toUTCString())
       .send(didDoc);
   };
 }

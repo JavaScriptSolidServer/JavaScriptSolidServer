@@ -25,6 +25,7 @@ import { verifyEvent, getEventHash } from '../nostr/event.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
+import { resolveDidNostrLocally } from '../idp/well-known-did-nostr.js';
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
 
@@ -282,13 +283,21 @@ export async function verifyNostrAuth(request) {
     return { webId: vmWebId, error: null };
   }
 
-  // Second lookup: did:nostr DID-document resolver. Tries the
-  // request's own host first (so a local account's auto-published
-  // DID doc per #407 resolves with no external network hop) before
-  // falling back to the configured external resolver
-  // (nostr.social etc.) for cross-pod identities.
-  const resolvers = buildResolverList(request);
-  const resolvedWebId = await resolveDidNostrToWebId(event.pubkey, resolvers);
+  // Second lookup: in-process local DID resolution (#407). Fast path
+  // — direct function call into the local account index, no HTTP
+  // fetch, no SSRF surface from request-controlled headers. Catches
+  // any user who's published a Nostr Multikey VM into their profile
+  // on this same pod.
+  const localWebId = await resolveDidNostrLocally(event.pubkey);
+  if (localWebId) {
+    return { webId: localWebId, error: null };
+  }
+
+  // Third lookup: external did:nostr DID-document resolver. Fetches
+  // a DID doc from the configured external resolver (nostr.social) and
+  // checks bidirectional alsoKnownAs ↔ WebID linking. Used only for
+  // cross-pod identities (the local case is handled above).
+  const resolvedWebId = await resolveDidNostrToWebId(event.pubkey);
   if (resolvedWebId) {
     return { webId: resolvedWebId, error: null };
   }
@@ -495,30 +504,6 @@ function getPodOwnerWebId(request) {
  */
 async function fetchProfileSafely(docUrl) {
   return fetchCidDocument(docUrl, { maxBytes: MAX_PROFILE_BYTES });
-}
-
-/**
- * Build the ordered resolver list for did:nostr lookup.
- *
- * Local-first: try this pod's own well-known DID-doc endpoint
- * (#407 — a JSS pod is its own DID resolver for its accounts) before
- * falling back to the configured external resolver. For same-pod
- * sign-ins this is a zero-network self-resolve; cross-pod identities
- * still resolve via nostr.social etc.
- */
-function buildResolverList(request) {
-  const list = [];
-  const headers = request.headers || {};
-  const proto = firstHeaderValue(headers['x-forwarded-proto']) || request.protocol || 'https';
-  const host  = firstHeaderValue(headers['x-forwarded-host'])
-              || request.hostname
-              || firstHeaderValue(headers.host);
-  if (host && /^[A-Za-z0-9.\-:[\]]+$/.test(host)) {
-    list.push(`${proto.toLowerCase()}://${host}/.well-known/did/nostr`);
-  }
-  // Fallback: keep the existing external resolver as last resort.
-  list.push('https://nostr.social/.well-known/did/nostr');
-  return list;
 }
 
 function firstHeaderValue(v) {
