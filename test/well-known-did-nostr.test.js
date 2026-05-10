@@ -14,7 +14,11 @@ import fs from 'fs-extra';
 import { createServer as createNetServer } from 'net';
 import { generateSecretKey, getPublicKey } from '../src/nostr/event.js';
 import { createServer } from '../src/server.js';
-import { _resetIndexForTests, profilePathFromWebId } from '../src/idp/well-known-did-nostr.js';
+import {
+  _resetIndexForTests,
+  profilePathFromWebId,
+  profilePathCandidates,
+} from '../src/idp/well-known-did-nostr.js';
 import { extractNostrPubkeysFromProfile } from '../src/auth/nostr.js';
 
 const TEST_HOST = '127.0.0.1';
@@ -299,6 +303,63 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const doc = await r.json();
     assert.strictEqual(doc.id, `did:nostr:${rootPk}`);
     assert.strictEqual(doc.alsoKnownAs[0], rootWebId);
+  });
+
+  it('indexes subdomain-mode pods (#411): /<host-first-label>/profile/...', async () => {
+    // Subdomain layout: WebID host = `<podname>.<basedomain>` and
+    // the profile lives at `<DATA_ROOT>/<podname>/profile/card.jsonld`
+    // (NOT at `<DATA_ROOT>/profile/card.jsonld`). Pre-#411 the
+    // indexer derived the path from `webIdUrl.pathname` only,
+    // dropped the subdomain, and ENOENT-skipped every subdomain
+    // pod silently — so the entire `Sign in with Schnorr` zero-
+    // typing UX fell through to the typed-username fallback on
+    // every subdomain-mode deployment (e.g. solid.social).
+    //
+    // The test server is at 127.0.0.1:<port>; its hostname has
+    // only one label and so isn't a real subdomain test. Instead
+    // we simulate the layout: write a profile at
+    // <TEST_DATA_DIR>/sub/profile/card.jsonld (the on-disk shape
+    // a subdomain pod produces) and synthesize an account whose
+    // WebID host has `sub.` as its first label. Because the
+    // synthesized WebID points at a public domain, its DID-doc
+    // generation also confirms the path-derivation logic doesn't
+    // depend on the request's host.
+    const sk = generateSecretKey();
+    const subPk = getPublicKey(sk);
+    const subWebId = 'http://sub.example.test/profile/card.jsonld#me';
+    const subProfilePath = path.join(TEST_DATA_DIR, 'sub', 'profile', 'card.jsonld');
+    const VM_ID = 'http://sub.example.test/profile/card.jsonld#k';
+    await fs.ensureDir(path.dirname(subProfilePath));
+    await fs.writeJson(subProfilePath, {
+      '@context': 'https://www.w3.org/ns/solid/v1',
+      '@id': subWebId,
+      verificationMethod: [{
+        id: VM_ID,
+        type: 'Multikey',
+        controller: subWebId,
+        publicKeyMultibase: fformMultikey(subPk),
+      }],
+      authentication: [VM_ID],
+    }, { spaces: 2 });
+
+    const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
+    const indexPath = path.join(accountsDir, '_webid_index.json');
+    const idx = await fs.readJson(indexPath);
+    const accountId = 'subdomain-pod-test-account';
+    idx[subWebId] = accountId;
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.writeJson(path.join(accountsDir, `${accountId}.json`), {
+      id: accountId,
+      podName: 'sub',
+      webId: subWebId,
+      email: 'sub@example.test',
+    }, { spaces: 2 });
+
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${subPk}.json`);
+    assert.strictEqual(r.status, 200, 'subdomain-mode pod must be findable');
+    const doc = await r.json();
+    assert.strictEqual(doc.id, `did:nostr:${subPk}`);
+    assert.strictEqual(doc.alsoKnownAs[0], subWebId);
   });
 
   // No `it()` here — path containment is now exercised directly
@@ -626,6 +687,71 @@ describe('profilePathFromWebId — DATA_ROOT containment', () => {
         p === null || p.startsWith(DATA_ROOT + path.sep) || p === DATA_ROOT,
         `${evil} → ${p} escaped DATA_ROOT`,
       );
+    }
+  });
+});
+
+describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
+  // The original `profilePathFromWebId` only emitted ONE candidate
+  // (`<dataRoot><pathname>`), which broke subdomain-mode pods on
+  // solid.social: account `b0b1707f-...` with WebID
+  // `https://test.solid.social/profile/card.jsonld#me` lives on disk
+  // at `<dataRoot>/test/profile/card.jsonld`, but the indexer was
+  // looking at `<dataRoot>/profile/card.jsonld` and ENOENT-ing.
+  //
+  // `profilePathCandidates` returns the full ordered list. Tests
+  // cover all three deployment shapes JSS supports.
+  const DATA_ROOT = '/srv/jss/data';
+
+  it('path-mode named pod: <dataRoot>/<pod>/profile/card.jsonld', () => {
+    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
+    assert.ok(cands.includes('/srv/jss/data/alice/profile/card.jsonld'),
+      `expected path-mode candidate; got ${cands.join(', ')}`);
+  });
+
+  it('root pod: <dataRoot>/profile/card.jsonld', () => {
+    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me');
+    assert.ok(cands.includes('/srv/jss/data/profile/card.jsonld'),
+      `expected root-pod candidate; got ${cands.join(', ')}`);
+  });
+
+  it('subdomain-mode pod: emits <dataRoot>/<host-first-label>/profile/...', () => {
+    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
+    // BOTH should be there — the path-mode candidate (which won't
+    // exist on disk for a subdomain-mode pod) and the subdomain
+    // candidate. The caller fs.stats each in order.
+    assert.ok(cands.includes('/srv/jss/data/profile/card.jsonld'),
+      `expected path-mode candidate; got ${cands.join(', ')}`);
+    assert.ok(cands.includes('/srv/jss/data/test/profile/card.jsonld'),
+      `expected subdomain candidate; got ${cands.join(', ')}`);
+  });
+
+  it('does NOT emit a subdomain candidate for a single-label host', () => {
+    // `localhost` has only one label — there's no "host first label
+    // as pod dir" candidate to add (it would just duplicate the
+    // path-mode one).
+    const cands = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me');
+    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+  });
+
+  it('returns [] for an unparseable webId', () => {
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, 'not a url'), []);
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, null), []);
+  });
+
+  it('every candidate stays inside dataRootAbs', () => {
+    // The same containment invariant that profilePathFromWebId
+    // enforces — extended to ALL emitted candidates.
+    for (const w of [
+      'https://example.com/alice/profile/card.jsonld#me',
+      'https://alice.example.com/profile/card.jsonld#me',
+      'https://h/../../../etc/passwd',
+      'https://h.com/../../../etc/passwd',
+    ]) {
+      for (const c of profilePathCandidates(DATA_ROOT, w)) {
+        assert.ok(c === DATA_ROOT || c.startsWith(DATA_ROOT + path.sep),
+          `${w} → ${c} escaped DATA_ROOT`);
+      }
     }
   });
 });

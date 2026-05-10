@@ -138,45 +138,72 @@ async function rebuildPubkeyIndex() {
       continue;
     }
     if (!account?.webId) continue;
-    const profilePath = profilePathFromWebId(dataRoot, account.webId, accountId);
-    if (!profilePath) continue;
-    let profile;
+    // Probe candidate paths in order until one ALSO passes the @id
+    // check. Multiple candidates can exist on disk simultaneously
+    // (e.g. a root pod and named pods coexisting under the same
+    // dataRoot, or a subdomain pod with a coincidentally-named
+    // path-mode pod). The path-mode candidate may exist but belong
+    // to a different account — keep going until we find one whose
+    // declared `@id` matches account.webId.
+    const candidates = profilePathCandidates(dataRoot, account.webId);
+    let profile = null;
+    let profilePath = null;
     let mtimeMs = 0;
-    try {
-      const stat = await fs.stat(profilePath);
-      mtimeMs = stat.mtimeMs;
-      // Size cap to bound per-rebuild memory/CPU. A user can write
-      // their own profile, and TTL-expired rebuilds can be triggered
-      // by attacker-driven NIP-98 traffic — without this an
-      // adversarially-large profile could pin the event loop on
-      // JSON.parse during the rebuild loop.
+    let firstError = null;
+    for (const candidate of candidates) {
+      let stat;
+      try {
+        stat = await fs.stat(candidate);
+      } catch (err) {
+        // Remember the first error for log diagnostics if NO
+        // candidate is reachable. ENOENT is the normal "wrong
+        // candidate, try next" — don't surface it.
+        if (firstError === null && err.code !== 'ENOENT') firstError = err;
+        continue;
+      }
+      if (!stat.isFile()) continue;
       if (stat.size > MAX_PROFILE_BYTES) {
         console.error(
-          `well-known-did-nostr: skipping account ${accountId} ` +
-          `— profile size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
+          `well-known-did-nostr: skipping candidate ${candidate} for ` +
+          `account ${accountId} — size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
         );
         continue;
       }
-      const text = await fs.readFile(profilePath, 'utf8');
-      profile = JSON.parse(text);
-    } catch (err) {
-      // Log so operators can debug "why isn't my pubkey publishing?".
-      // Rate-limited per account so a single perpetually-broken
-      // profile can't flood logs every TTL cycle.
-      logProfileFailure(accountId, profilePath, err);
-      continue; // unreadable / malformed — skip
+      let parsed;
+      try {
+        parsed = JSON.parse(await fs.readFile(candidate, 'utf8'));
+      } catch (err) {
+        if (firstError === null) firstError = err;
+        continue;
+      }
+      // First-line @id check. Other CID-semantics checks happen
+      // below; if those fail we don't fall through to another
+      // candidate (they apply to the profile's content, not its
+      // location, so re-probing wouldn't help).
+      const declaredSubject = absolutize(parsed?.['@id'] || parsed?.id, stripHashIfAny(account.webId));
+      if (declaredSubject !== account.webId) continue;
+      profile = parsed;
+      profilePath = candidate;
+      mtimeMs = stat.mtimeMs;
+      break;
     }
-    // CID semantics — match the resource-side checks:
-    // (1) profile's @id MUST match the account's webId (no fragment-
-    //     swapping attack via a stored profile that claims to be
-    //     someone else)
+    if (!profile) {
+      // Nothing on disk matched. Surface the issue for operators —
+      // either the profile genuinely doesn't exist (ENOENT on every
+      // candidate) or each candidate's `@id` mismatched. Either way
+      // worth logging once per hour per account.
+      const tried = candidates.length ? candidates.join(' | ') : '(no candidates)';
+      const err = firstError || { code: 'ENOENT', message: 'no candidate matched account.webId' };
+      logProfileFailure(accountId, tried, err);
+      continue;
+    }
+    // CID semantics (continued) — match the resource-side checks:
     // (2) VM's controller MUST be in the profile's expected controller
     //     set (declared `controller`, with @id fallback)
     // (3) VM MUST be referenced from `authentication` — a key in
     //     verificationMethod alone (no auth membership) shouldn't be
     //     published as authentic
-    const profileSubject = absolutize(profile?.['@id'] || profile?.id, stripHashIfAny(account.webId));
-    if (!profileSubject || profileSubject !== account.webId) continue;
+    const profileSubject = account.webId;  // already validated above
     const expectedControllers = collectControllerIds(profile, profileSubject);
     if (expectedControllers.size === 0) continue;
     // Pass the already-validated absolute subject as the base. Without
@@ -259,6 +286,56 @@ export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
   }
   return resolved;
 }
+
+/**
+ * Build the candidate filesystem paths to probe for a given WebID,
+ * covering the deployment shapes JSS supports:
+ *
+ *   1. Path-mode named pod  (host=`example.com`, path=`/alice/profile/card.jsonld`)
+ *      → `<dataRoot>/alice/profile/card.jsonld`
+ *   2. Root pod (single-user) (host=`example.com`, path=`/profile/card.jsonld`)
+ *      → `<dataRoot>/profile/card.jsonld`
+ *   3. Subdomain-mode pod   (host=`alice.example.com`, path=`/profile/card.jsonld`)
+ *      → `<dataRoot>/alice/profile/card.jsonld`
+ *
+ * Cases (1) and (2) both fall out of `profilePathFromWebId` (path mode
+ * and root pod share the same derivation rule). Case (3) needs an
+ * extra "host first label as pod dir" candidate, which the original
+ * implementation didn't have — that's #411.
+ *
+ * Containment-checked. All candidates resolve to absolute paths that
+ * are at-or-under `dataRootAbs`. Caller fs.stats each in order and
+ * uses the first that exists; the @id-vs-account.webId check
+ * downstream rejects any false positive (reading the wrong file
+ * gets a profile whose `@id` won't match `account.webId`).
+ *
+ * @internal exported for tests
+ */
+export function profilePathCandidates(dataRoot, webId) {
+  if (typeof webId !== 'string') return [];
+  let url;
+  try { url = new URL(webId); } catch { return []; }
+  const pathnameRel = url.pathname.replace(/^\/+/, '');
+  const dataRootAbs = path.resolve(dataRoot);
+  const insideRoot = (p) => p === dataRootAbs || p.startsWith(dataRootAbs + path.sep);
+  const out = [];
+  const add = (...parts) => {
+    const r = path.resolve(dataRootAbs, ...parts);
+    if (insideRoot(r) && !out.includes(r)) out.push(r);
+  };
+  // Path-mode named pod OR root pod.
+  add(pathnameRel);
+  // Subdomain mode: take the first DNS label of the host as the pod
+  // directory under dataRoot. Only meaningful for hosts with at
+  // least two labels (`alice.example.com`); a bare host like
+  // `example.com` falls back to candidate #1 above (root/path mode).
+  const hostLabels = url.hostname.split('.');
+  if (hostLabels.length >= 2 && hostLabels[0]) {
+    add(hostLabels[0], pathnameRel);
+  }
+  return out;
+}
+
 
 function collectControllerIds(source, baseUrl) {
   const out = new Set();
