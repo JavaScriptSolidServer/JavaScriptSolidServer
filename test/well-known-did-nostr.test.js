@@ -323,9 +323,22 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     // fails the @id check, and the loop must fall through to the
     // subdomain candidate. Self-contained — doesn't depend on
     // earlier tests' fixtures or test-execution order.
+    //
+    // Snapshot any pre-existing file at the decoy path so the
+    // earlier "indexes root-level pods" test's fixture (or any
+    // future fixture sharing that path) can be restored after
+    // this test runs. Without this snapshot, deleting the decoy
+    // unconditionally would silently wipe legitimate state.
     const decoyPk = getPublicKey(generateSecretKey()); // unrelated key
     const decoyProfilePath = path.join(TEST_DATA_DIR, 'profile', 'card.jsonld');
     const decoyWebId = `${baseUrl}/profile/card.jsonld#decoy`;
+    let decoySnapshot = null;
+    try {
+      decoySnapshot = await fs.readFile(decoyProfilePath, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+      // didn't exist — nothing to restore
+    }
     await fs.ensureDir(path.dirname(decoyProfilePath));
     await fs.writeJson(decoyProfilePath, {
       '@context': 'https://www.w3.org/ns/solid/v1',
@@ -376,9 +389,21 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     assert.strictEqual(doc.id, `did:nostr:${subPk}`);
     assert.strictEqual(doc.alsoKnownAs[0], subWebId);
 
-    // Cleanup: leave neither the decoy nor the index entry behind
-    // so the test isolates correctly even when re-run / reordered.
-    await fs.remove(decoyProfilePath);
+    // Cleanup: leave neither the decoy nor the subdomain
+    // fixture behind. Restore (or delete) the decoy file so
+    // any prior fixture state at that path is preserved.
+    if (decoySnapshot !== null) {
+      await fs.writeFile(decoyProfilePath, decoySnapshot, 'utf8');
+    } else {
+      await fs.remove(decoyProfilePath);
+    }
+    await fs.remove(subProfilePath);
+    // Also remove the parent `<TEST_DATA_DIR>/sub` dir if empty
+    // (won't be if other tests added siblings — that's fine).
+    try {
+      await fs.rmdir(path.dirname(subProfilePath));
+      await fs.rmdir(path.dirname(path.dirname(subProfilePath)));
+    } catch { /* not empty / already gone — fine */ }
     delete idx[subWebId];
     await fs.writeJson(indexPath, idx, { spaces: 2 });
     await fs.remove(path.join(accountsDir, `${accountId}.json`));
