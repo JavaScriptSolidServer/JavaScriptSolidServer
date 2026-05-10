@@ -153,6 +153,95 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       `node n3 should appear:\n${content}`);
   });
 
+  it('emits a space before `;` and `.` terminators (#419)', async () => {
+    // The de-facto convention in W3C spec examples and Apache Jena
+    // RIOT is to separate the statement-terminator from the previous
+    // token by a space. n3.js packs them; JSS post-processes the
+    // output to add the space.
+    //
+    // Use TWO predicates on the same subject so n3.js emits a `;`
+    // continuation (multiple triples on one subject). If a future
+    // N3 upgrade ever switched to "one triple per statement" style
+    // and dropped `;` entirely, this test would otherwise pass
+    // vacuously. The presence-of-terminator assertions below pin
+    // that behavior.
+    const doc = {
+      '@context': { 'foaf': 'http://xmlns.com/foaf/0.1/' },
+      '@id': 'https://example.test/alice',
+      'foaf:name': 'Alice',
+      'foaf:age': 30,
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    // Pin "at least one ` ;` and one ` .` exists" with a literal
+    // SPACE — not just any whitespace. The intended output style
+    // (matching W3C Turtle 1.1 spec examples) is a single space
+    // separator: `value ;` / `value .`. Allowing `\n;` or `\t;`
+    // would let the test pass on visually-different output.
+    assert.match(content, / ;/, `output must contain at least one " ;" terminator (space-prefixed), got:\n${content}`);
+    assert.match(content, / \.(?:\s|$)/, `output must contain at least one " ." terminator (space-prefixed), got:\n${content}`);
+    // Every `;` must be preceded by a literal space. Same for `.`
+    // at end-of-statement. Reject anything else (newline, tab,
+    // packed-against-token).
+    const offendingSemi = /[^ ];/.test(content);
+    const offendingDot = /[^ ]\.\s*$/m.test(content) || /[^ ]\.\n/.test(content);
+    assert.ok(!offendingSemi, `every ; must be preceded by a single space, got:\n${content}`);
+    assert.ok(!offendingDot, `every . at line/doc end must be preceded by a single space, got:\n${content}`);
+  });
+
+  it('does NOT add a space inside literals containing `;` or `.` (#419 safety)', async () => {
+    // Critical correctness test: the post-pass must NOT corrupt
+    // literal values. A literal "foo;bar" with the post-pass naïvely
+    // applied would become "foo ;bar" — silent data corruption.
+    //
+    // Assert by VALUE, not by lexical form. A quote-agnostic parser
+    // round-trip survives any future N3 writer style change
+    // (single vs double quotes, long-string `"""..."""`, etc.).
+    const doc = {
+      '@context': { 'ex': 'https://example.test/ns#' },
+      '@id': 'https://example.test/s',
+      'ex:semicolonInside': 'foo;bar',
+      'ex:dotInside': 'has.dot',
+      'ex:both': 'a;b.c',
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    // Round-trip: parse the emitted Turtle, walk the quads, assert
+    // the literal values came back exactly as authored.
+    const { Parser } = await import('n3');
+    const parser = new Parser({ baseIRI: 'https://example.test/' });
+    const quads = parser.parse(content);
+    const objectsByPredicate = new Map();
+    for (const q of quads) {
+      if (q.object.termType !== 'Literal') continue;
+      objectsByPredicate.set(q.predicate.value, q.object.value);
+    }
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#semicolonInside'), 'foo;bar',
+      `literal value for ex:semicolonInside must be "foo;bar"`);
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#dotInside'), 'has.dot',
+      `literal value for ex:dotInside must be "has.dot"`);
+    assert.strictEqual(objectsByPredicate.get('https://example.test/ns#both'), 'a;b.c',
+      `literal value for ex:both must be "a;b.c"`);
+  });
+
+  it('does NOT add a space inside an IRI containing `;` (#419 safety)', async () => {
+    // An IRI's content is bracketed by `<...>` — the post-pass
+    // shouldn't touch what's inside. Assert by value via parser
+    // round-trip so we don't depend on N3 writer formatting.
+    const doc = {
+      '@context': { 'ex': 'https://example.test/ns#' },
+      '@id': 'https://example.test/s',
+      'ex:rel': { '@id': 'https://example.test/path;with;semis' },
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    const { Parser } = await import('n3');
+    const parser = new Parser({ baseIRI: 'https://example.test/' });
+    const quads = parser.parse(content);
+    const rels = quads
+      .filter(q => q.predicate.value === 'https://example.test/ns#rel')
+      .map(q => q.object.value);
+    assert.deepStrictEqual(rels, ['https://example.test/path;with;semis'],
+      `IRI value must round-trip with internal ; intact`);
+  });
+
   it('cyclical nested node reference does not hang', async () => {
     // Two nested nodes reference each other. BFS must not loop.
     const a = { '@id': 'https://example.test/a', 'ex:knows': null };
