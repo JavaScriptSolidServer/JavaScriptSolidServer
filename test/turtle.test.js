@@ -172,16 +172,20 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       'foaf:age': 30,
     };
     const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
-    // Pin "at least one ; and one . exists" — otherwise an absent
-    // terminator would let the negative assertions pass vacuously.
-    assert.match(content, /\s;/, `output must contain at least one ; terminator, got:\n${content}`);
-    assert.match(content, /\s\.(?:\s|$)/, `output must contain at least one . terminator, got:\n${content}`);
-    // Every `;` must be preceded by whitespace (space or newline).
-    // Same for `.` at end-of-statement.
-    const offendingSemi = /[^\s];/.test(content);
-    const offendingDot = /[^\s]\.\s*$/m.test(content) || /[^\s]\.\n/.test(content);
-    assert.ok(!offendingSemi, `every ; must be preceded by whitespace, got:\n${content}`);
-    assert.ok(!offendingDot, `every . at line/doc end must be preceded by whitespace, got:\n${content}`);
+    // Pin "at least one ` ;` and one ` .` exists" with a literal
+    // SPACE — not just any whitespace. The intended output style
+    // (matching W3C Turtle 1.1 spec examples) is a single space
+    // separator: `value ;` / `value .`. Allowing `\n;` or `\t;`
+    // would let the test pass on visually-different output.
+    assert.match(content, / ;/, `output must contain at least one " ;" terminator (space-prefixed), got:\n${content}`);
+    assert.match(content, / \.(?:\s|$)/, `output must contain at least one " ." terminator (space-prefixed), got:\n${content}`);
+    // Every `;` must be preceded by a literal space. Same for `.`
+    // at end-of-statement. Reject anything else (newline, tab,
+    // packed-against-token).
+    const offendingSemi = /[^ ];/.test(content);
+    const offendingDot = /[^ ]\.\s*$/m.test(content) || /[^ ]\.\n/.test(content);
+    assert.ok(!offendingSemi, `every ; must be preceded by a single space, got:\n${content}`);
+    assert.ok(!offendingDot, `every . at line/doc end must be preceded by a single space, got:\n${content}`);
   });
 
   it('does NOT add a space inside literals containing `;` or `.` (#419 safety)', async () => {
