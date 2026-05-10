@@ -658,7 +658,7 @@ export function createServer(options = {}) {
   // dynamic-segment + .json suffix gets swallowed by the wildcard
   // GET /* handler below and never reaches our route.
   if (idpEnabled) {
-    const wellKnownDidNostr = buildWellKnownDidNostrHandler({ dataRoot: options.root });
+    const wellKnownDidNostr = buildWellKnownDidNostrHandler();
     fastify.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
   }
 

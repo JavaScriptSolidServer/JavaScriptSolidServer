@@ -28,17 +28,14 @@ import { resolveDidNostrToWebId } from './did-nostr.js';
 import { resolveDidNostrLocally } from '../idp/well-known-did-nostr.js';
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
+import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile } from './nostr-keys.js'; // re-exported for back-compat
+export { extractNostrPubkeysFromProfile };
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
 
 // Timestamp tolerance in seconds
 const TIMESTAMP_TOLERANCE = 60;
-
-// Multicodec varint for secp256k1-pub: 0xe7 0x01 → "e701" hex.
-// Used to decode f-form Multikey verificationMethod values back into
-// the 32-byte x-only Nostr pubkey.
-const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
 // Profile-fetch body-size cap. Matches the LWS-CID verifier; both
 // callers go through the shared fetchCidDocument helper.
@@ -288,9 +285,16 @@ export async function verifyNostrAuth(request) {
   // fetch, no SSRF surface from request-controlled headers. Catches
   // any user who's published a Nostr Multikey VM into their profile
   // on this same pod.
-  const localWebId = await resolveDidNostrLocally(event.pubkey);
-  if (localWebId) {
-    return { webId: localWebId, error: null };
+  //
+  // Gated on idpEnabled because the index reads from
+  // <DATA_ROOT>/.idp/accounts which only exists when the IdP layer
+  // is in use. On non-IdP deployments the local resolver has nothing
+  // to find and would just spin disk on every request.
+  if (request.idpEnabled) {
+    const localWebId = await resolveDidNostrLocally(event.pubkey);
+    if (localWebId) {
+      return { webId: localWebId, error: null };
+    }
   }
 
   // Third lookup: external did:nostr DID-document resolver. Fetches
@@ -578,39 +582,6 @@ export async function verifyNostrPubkeyAgainstWebId(webId, pubkeyHex) {
 }
 
 /**
- * Enumerate every Nostr pubkey declared in a profile's
- * verificationMethod entries. Used by the well-known DID-nostr
- * publisher (#407) to build a `pubkey → account` index.
- *
- * Returns an array of `{ pubkey: <64-hex>, vm: <entry> }` — empty if
- * no Nostr-shaped VMs are present. Matches both encodings:
- *   - f-form Multikey (publicKeyMultibase)
- *   - JsonWebKey (kty: EC, crv: secp256k1) — derives x as the pubkey
- */
-export function extractNostrPubkeysFromProfile(profile) {
-  if (!profile || typeof profile !== 'object') return [];
-  const out = [];
-  const vms = asArray(profile.verificationMethod);
-  for (const vm of vms) {
-    if (!vm || typeof vm !== 'object') continue;
-    if (typeof vm.publicKeyMultibase === 'string') {
-      const xonly = decodeFFormSecp256k1(vm.publicKeyMultibase);
-      if (xonly) out.push({ pubkey: xonly, vm });
-    } else if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
-      const jwk = vm.publicKeyJwk;
-      if (jwk.kty === 'EC' && (jwk.crv === 'secp256k1' || jwk.crv === 'P-256K') && typeof jwk.x === 'string') {
-        try {
-          const hex = Buffer.from(jwk.x.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
-            .toString('hex').toLowerCase();
-          if (/^[0-9a-f]{64}$/.test(hex)) out.push({ pubkey: hex, vm });
-        } catch { /* skip */ }
-      }
-    }
-  }
-  return out;
-}
-
-/**
  * Find a verificationMethod whose key material matches the Nostr
  * x-only pubkey hex. Two encodings supported:
  *   - f-form Multikey:  publicKeyMultibase = "f" + "e701" + parity + xonly
@@ -642,23 +613,6 @@ function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
     }
   }
   return null;
-}
-
-/**
- * Decode an f-form Multikey for secp256k1-pub back into the 32-byte
- * x-only pubkey hex. Returns null if the input isn't this shape.
- */
-function decodeFFormSecp256k1(mb) {
-  if (typeof mb !== 'string' || !mb.startsWith('f')) return null;
-  const hex = mb.slice(1).toLowerCase();
-  if (!/^[0-9a-f]+$/.test(hex)) return null;
-  if (!hex.startsWith(MULTICODEC_SECP256K1_PUB_HEX)) return null;
-  const rest = hex.slice(MULTICODEC_SECP256K1_PUB_HEX.length);
-  // Expect parity byte (02/03) + 32-byte xonly = 66 hex chars.
-  if (rest.length !== 66) return null;
-  const parity = rest.slice(0, 2);
-  if (parity !== '02' && parity !== '03') return null;
-  return rest.slice(2);
 }
 
 function hexToBase64url(hex) {

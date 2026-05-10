@@ -23,7 +23,7 @@
 import path from 'path';
 import fs from 'fs-extra';
 import { findById } from './accounts.js';
-import { extractNostrPubkeysFromProfile } from '../auth/nostr.js';
+import { extractNostrPubkeysFromProfile } from '../auth/nostr-keys.js';
 
 // In-memory pubkey → accountId index. Built lazily from disk; rebuilt
 // when the TTL expires. Real production wants a write-path hook on
@@ -50,10 +50,14 @@ function getWebIdIndexPath() {
 }
 
 /**
- * Read a JSON file, returning null only when it doesn't exist.
- * Other failures (parse error, permission denied, etc.) propagate
- * via console.error so operational issues aren't silently swallowed
- * — they'd otherwise disable DID-doc publishing without any signal.
+ * Read a JSON file. Returns null in two cases (with different
+ * semantics, kept the same return shape for caller simplicity):
+ *
+ *   - ENOENT — silently null. The index file legitimately doesn't
+ *     exist on a fresh deployment with no accounts yet.
+ *   - Any other error (parse error, permission denied, etc.) — null
+ *     PLUS a loud console.error so operational issues surface in logs
+ *     instead of silently disabling DID-doc publishing.
  */
 async function readJsonOrEmpty(file) {
   try {
@@ -65,17 +69,23 @@ async function readJsonOrEmpty(file) {
   }
 }
 
-async function rebuildPubkeyIndex({ dataRoot }) {
+async function rebuildPubkeyIndex() {
   const idx = new Map();
+  const dataRoot = process.env.DATA_ROOT || './data';
   const webIdIndex = await readJsonOrEmpty(getWebIdIndexPath());
   if (!webIdIndex) {
     pubkeyIndex = idx;
     indexBuiltAt = Date.now();
     return;
   }
+  // Track pubkeys that appear under more than one account so we can
+  // EXCLUDE them rather than silently picking one. An ambiguous binding
+  // would make resolution depend on insertion order and be hard to
+  // diagnose; better to refuse and log loudly.
+  const seenAccounts = new Map(); // pubkey -> Set<accountId>
   for (const [, accountId] of Object.entries(webIdIndex)) {
     const account = await findById(accountId);
-    if (!account?.podName) continue;
+    if (!account?.podName || !account?.webId) continue;
     const profilePath = path.join(dataRoot, account.podName, 'profile', 'card.jsonld');
     let profile;
     let mtimeMs = 0;
@@ -87,23 +97,68 @@ async function rebuildPubkeyIndex({ dataRoot }) {
     } catch {
       continue; // unreadable / non-existent — skip
     }
-    // Only index VMs that the user has explicitly placed in
-    // `authentication`. A pubkey present in verificationMethod but
-    // intentionally not in authentication shouldn't be published —
-    // the user excluded it from auth purposes (revocation pending,
-    // assertion-only, etc.). Publishing it anyway would defeat the
-    // user's intent.
+    // CID semantics — match the resource-side checks:
+    // (1) profile's @id MUST match the account's webId (no fragment-
+    //     swapping attack via a stored profile that claims to be
+    //     someone else)
+    // (2) VM's controller MUST be in the profile's expected controller
+    //     set (declared `controller`, with @id fallback)
+    // (3) VM MUST be referenced from `authentication` — a key in
+    //     verificationMethod alone (no auth membership) shouldn't be
+    //     published as authentic
+    const profileSubject = absolutize(profile?.['@id'] || profile?.id, stripHashIfAny(account.webId));
+    if (!profileSubject || profileSubject !== account.webId) continue;
+    const expectedControllers = collectControllerIds(profile, profileSubject);
+    if (expectedControllers.size === 0) continue;
     const authIds = collectAuthenticationIds(profile);
+
     for (const { pubkey, vm } of extractNostrPubkeysFromProfile(profile)) {
-      const vmId = absolutize(vm.id || vm['@id'], stripHashIfAny(profile['@id']));
+      const vmId = absolutize(vm.id || vm['@id'], stripHashIfAny(profileSubject));
       if (!vmId || !authIds.has(vmId)) continue;
-      // First-write wins; if two accounts somehow declare the same
-      // pubkey, the first one resolved keeps the binding.
+      const vmCtrls = collectControllerIds({ controller: vm.controller }, profileSubject);
+      let controllerOk = false;
+      for (const c of vmCtrls) {
+        if (expectedControllers.has(c)) { controllerOk = true; break; }
+      }
+      if (!controllerOk) continue;
+
+      // Duplicate-pubkey detection: track every account that claims
+      // it; resolve at the end of the scan.
+      if (!seenAccounts.has(pubkey)) seenAccounts.set(pubkey, new Set());
+      seenAccounts.get(pubkey).add(accountId);
       if (!idx.has(pubkey)) idx.set(pubkey, { accountId, mtimeMs });
+    }
+  }
+  // Drop ambiguous pubkeys and warn loudly.
+  for (const [pubkey, accountIds] of seenAccounts) {
+    if (accountIds.size > 1) {
+      console.error(
+        `well-known-did-nostr: pubkey ${pubkey} claimed by ` +
+        `${accountIds.size} accounts (${[...accountIds].join(', ')}) — ` +
+        `omitting from index to avoid ambiguous resolution`,
+      );
+      idx.delete(pubkey);
     }
   }
   pubkeyIndex = idx;
   indexBuiltAt = Date.now();
+}
+
+function collectControllerIds(source, baseUrl) {
+  const out = new Set();
+  const c = source?.controller;
+  const list = Array.isArray(c) ? c : (c ? [c] : []);
+  for (const ent of list) {
+    let id;
+    if (typeof ent === 'string') id = ent;
+    else if (ent && typeof ent === 'object') id = ent['@id'] || ent.id;
+    if (id) out.add(absolutize(id, baseUrl));
+  }
+  // Fallback to @id when no explicit controller (CID v1 self-control).
+  if (out.size === 0 && source && (source['@id'] || source.id)) {
+    out.add(absolutize(source['@id'] || source.id, baseUrl));
+  }
+  return out;
 }
 
 function collectAuthenticationIds(profile) {
@@ -131,10 +186,10 @@ function stripHashIfAny(u) {
   catch { return u; }
 }
 
-async function findAccountByNostrPubkey(pubkeyHex, opts) {
+async function findAccountByNostrPubkey(pubkeyHex) {
   const lower = pubkeyHex.toLowerCase();
   if (!pubkeyIndex || (Date.now() - indexBuiltAt) > INDEX_TTL_MS) {
-    await rebuildPubkeyIndex(opts);
+    await rebuildPubkeyIndex();
   }
   const entry = pubkeyIndex.get(lower);
   if (!entry) return null;
@@ -156,9 +211,7 @@ async function findAccountByNostrPubkey(pubkeyHex, opts) {
  */
 export async function resolveDidNostrLocally(pubkeyHex) {
   if (typeof pubkeyHex !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkeyHex)) return null;
-  const found = await findAccountByNostrPubkey(pubkeyHex.toLowerCase(), {
-    dataRoot: process.env.DATA_ROOT || './data',
-  });
+  const found = await findAccountByNostrPubkey(pubkeyHex.toLowerCase());
   return found?.account?.webId || null;
 }
 
@@ -199,18 +252,12 @@ function buildDidDocument({ pubkey, webId }) {
  * spec specifies `.json` as the canonical path, so that's the
  * primary; the others are friendly aliases.
  *
- * Note on the dataRoot option: this handler reads profiles from
- * `<dataRoot>/<podName>/profile/card.jsonld`, but it also calls
- * `findById()` from accounts.js, which reads from
- * `<process.env.DATA_ROOT>/.idp/accounts/`. To keep the two layers
- * consistent we mirror DATA_ROOT into options.dataRoot at the
- * default, so passing `dataRoot` only differs when you've ALSO set
- * DATA_ROOT to the same value (typical) — in which case the
- * parameter is just an explicit form of the env. Custom values
- * outside DATA_ROOT are out of scope.
+ * The data root is read from `process.env.DATA_ROOT` (matching
+ * `accounts.js`). We don't accept a parameter for it because the
+ * account-index path is derived from the same env elsewhere — taking
+ * a parameter would create two sources of truth and be misleading.
  */
-export function buildWellKnownDidNostrHandler({ dataRoot } = {}) {
-  const root = dataRoot || process.env.DATA_ROOT || './data';
+export function buildWellKnownDidNostrHandler() {
   return async function handleWellKnownDidNostr(request, reply) {
     const raw = String(request.params.pubkeyAndExt || '');
     const ext = raw.endsWith('.jsonld') ? '.jsonld'
@@ -222,7 +269,7 @@ export function buildWellKnownDidNostrHandler({ dataRoot } = {}) {
         .header('Content-Type', 'application/json')
         .send({ error: 'pubkey must be 64 hex chars' });
     }
-    const found = await findAccountByNostrPubkey(pubkey, { dataRoot: root });
+    const found = await findAccountByNostrPubkey(pubkey);
     if (!found?.account) {
       return reply.code(404)
         .header('Cache-Control', 'max-age=60')
