@@ -72,18 +72,29 @@ const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles
  *
  * Throws on validation, network, redirect, or size failures so the
  * resolver can swallow them uniformly into a null/false return.
+ *
+ * Exported for tests so the redirect + cross-origin + cap logic can
+ * be unit-tested directly with a stubbed validator (the production
+ * validator hard-blocks loopback, which is the only thing a unit
+ * test can spin up — without injection the redirect tests can't
+ * tell the SSRF guard from the redirect guard).
+ *
+ * @param {object} [opts]
+ * @param {Function} [opts._validateUrl] - Test seam. Defaults to the
+ *   real `validateExternalUrl`. Production callers MUST NOT override.
  */
-async function fetchWithRedirectGuard(initialUrl, {
+export async function fetchWithRedirectGuard(initialUrl, {
   accept,
   timeout = DEFAULT_FETCH_TIMEOUT_MS,
   maxBytes = DEFAULT_MAX_BYTES,
+  _validateUrl = validateExternalUrl,
 } = {}) {
   const originalOrigin = new URL(initialUrl).origin;
   let currentUrl = initialUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const isLastAllowedHop = hop === MAX_REDIRECTS;
-    const validation = await validateExternalUrl(currentUrl, {
+    const validation = await _validateUrl(currentUrl, {
       requireHttps: process.env.NODE_ENV === 'production',
       blockPrivateIPs: true,
       resolveDNS: true,
@@ -185,24 +196,32 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     // 30x-redirect to a private IP / cloud metadata endpoint and
     // bypass the check. Same policy the LWS-CID verifier applies.
     const didUrl = `${resolverUrl}/${pubkey}.json`;
+    // Two failure classes with different cache TTLs:
+    //   - Transient: network error, SSRF/redirect refusal, non-2xx,
+    //     unparseable JSON. These should re-try sooner, so cache
+    //     with `failureTtl: true` (FAILURE_CACHE_TTL = 1 min).
+    //   - "No linkage": successful fetch but the DID doc had no
+    //     alsoKnownAs / profile.webid we could use. That's a valid
+    //     answer, not a transient blip — cache with the regular
+    //     CACHE_TTL (5 min) so we don't hammer the resolver.
     let didFetch;
     try {
       didFetch = await fetchWithRedirectGuard(didUrl, {
         accept: 'application/did+json, application/json',
       });
     } catch {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     if (didFetch.status < 200 || didFetch.status >= 300) {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     let didDoc;
     try {
       didDoc = JSON.parse(didFetch.body);
     } catch {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     // Use the FINAL post-redirect URL as the same-origin reference,

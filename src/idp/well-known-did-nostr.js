@@ -30,12 +30,21 @@ import { extractNostrPubkeysFromProfile } from '../auth/nostr-keys.js';
 // LDP PUT/PATCH so updates are immediate; that's filed as a follow-up.
 let pubkeyIndex = null; // Map<pubkeyHex, accountId>
 let indexBuiltAt = 0;
+let rebuildInFlight = null; // Promise — in-flight rebuild dedup
 const INDEX_TTL_MS = 5 * 60 * 1000;
+// Size cap on per-account profile reads. WebID profiles are tiny —
+// 64 KB is generous and matches the bound the LDP layer would impose
+// for any sane profile. A user shouldn't be able to make the indexer
+// allocate megabytes by writing a giant profile, especially since
+// rebuilds can be triggered by attacker-driven NIP-98 traffic once
+// the TTL expires.
+const MAX_PROFILE_BYTES = 64 * 1024;
 
 /** @internal — exposed for tests */
 export function _resetIndexForTests() {
   pubkeyIndex = null;
   indexBuiltAt = 0;
+  rebuildInFlight = null;
 }
 
 // Match the layout in src/idp/accounts.js — accounts live under
@@ -99,42 +108,25 @@ async function rebuildPubkeyIndex() {
       continue;
     }
     if (!account?.webId) continue;
-    // Derive the on-disk profile path from the WebID's pathname,
-    // not from `account.podName`. Root-level (single-user) pods
-    // store the profile at <DATA_ROOT>/profile/card.jsonld with
-    // no podName-shaped prefix even though the seeded account has
-    // `podName: 'me'` — joining `dataRoot/me/profile/card.jsonld`
-    // would silently miss that pod and never index its keys.
-    // The webId pathname ('/profile/card.jsonld' for root, or
-    // '/alice/profile/card.jsonld' for named) matches the on-disk
-    // layout in both cases.
-    let profilePath;
-    try {
-      const webIdUrl = new URL(account.webId);
-      // Strip leading `/` so it's treated as a relative segment, then
-      // resolve and confirm the result stays inside dataRoot. An
-      // account record with a path like `..` or `\0` shouldn't be
-      // able to read arbitrary files (defense in depth — operator
-      // privilege already controls this surface, but cheap to harden).
-      const relPath = webIdUrl.pathname.replace(/^\/+/, '');
-      const dataRootAbs = path.resolve(dataRoot);
-      const resolved = path.resolve(dataRootAbs, relPath);
-      if (resolved !== dataRootAbs && !resolved.startsWith(dataRootAbs + path.sep)) {
-        console.error(
-          `well-known-did-nostr: account ${accountId} webId ` +
-          `${account.webId} resolves outside dataRoot — skipping`,
-        );
-        continue;
-      }
-      profilePath = resolved;
-    } catch {
-      continue; // unparseable webId — skip
-    }
+    const profilePath = profilePathFromWebId(dataRoot, account.webId, accountId);
+    if (!profilePath) continue;
     let profile;
     let mtimeMs = 0;
     try {
       const stat = await fs.stat(profilePath);
       mtimeMs = stat.mtimeMs;
+      // Size cap to bound per-rebuild memory/CPU. A user can write
+      // their own profile, and TTL-expired rebuilds can be triggered
+      // by attacker-driven NIP-98 traffic — without this an
+      // adversarially-large profile could pin the event loop on
+      // JSON.parse during the rebuild loop.
+      if (stat.size > MAX_PROFILE_BYTES) {
+        console.error(
+          `well-known-did-nostr: skipping account ${accountId} ` +
+          `— profile size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
+        );
+        continue;
+      }
       const text = await fs.readFile(profilePath, 'utf8');
       profile = JSON.parse(text);
     } catch {
@@ -193,6 +185,45 @@ async function rebuildPubkeyIndex() {
   indexBuiltAt = Date.now();
 }
 
+/**
+ * Derive the on-disk profile path from a WebID (and validate
+ * containment in DATA_ROOT). Returns the absolute filesystem path
+ * or `null` if the WebID is unparseable / would escape dataRoot.
+ *
+ * Why a separate function: WHATWG URL parsing already strips most
+ * `..` traversal at the URL layer, but the path-resolve containment
+ * check is defense-in-depth for any future caller that bypasses
+ * URL parsing (string manipulation, alternate parser, etc.). Lives
+ * in its own function so the containment branch is unit-testable
+ * with raw inputs that DON'T go through `new URL()`.
+ *
+ * @internal exported for tests
+ */
+export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
+  if (typeof webId !== 'string') return null;
+  let pathname;
+  try {
+    pathname = new URL(webId).pathname;
+  } catch {
+    return null;
+  }
+  // Strip leading `/` so it's treated as a relative segment, then
+  // resolve and assert the result is at-or-under dataRootAbs. An
+  // account record whose webId path resolves outside dataRoot is
+  // never indexed.
+  const relPath = pathname.replace(/^\/+/, '');
+  const dataRootAbs = path.resolve(dataRoot);
+  const resolved = path.resolve(dataRootAbs, relPath);
+  if (resolved !== dataRootAbs && !resolved.startsWith(dataRootAbs + path.sep)) {
+    console.error(
+      `well-known-did-nostr: account ${accountId} webId ${webId} ` +
+      `resolves outside dataRoot (${resolved}) — skipping`,
+    );
+    return null;
+  }
+  return resolved;
+}
+
 function collectControllerIds(source, baseUrl) {
   const out = new Set();
   const c = source?.controller;
@@ -244,7 +275,17 @@ function stripHashIfAny(u) {
 async function findAccountByNostrPubkey(pubkeyHex) {
   const lower = pubkeyHex.toLowerCase();
   if (!pubkeyIndex || (Date.now() - indexBuiltAt) > INDEX_TTL_MS) {
-    await rebuildPubkeyIndex();
+    // Dedup concurrent rebuilds: under a burst of requests that all
+    // arrive after the TTL expires, only ONE rebuild runs and every
+    // other caller awaits its promise. Without this, N concurrent
+    // requests would each do a full disk scan + parse pass, with
+    // N-1 of them throwing away their result.
+    if (!rebuildInFlight) {
+      rebuildInFlight = rebuildPubkeyIndex().finally(() => {
+        rebuildInFlight = null;
+      });
+    }
+    await rebuildInFlight;
   }
   const entry = pubkeyIndex.get(lower);
   if (!entry) return null;

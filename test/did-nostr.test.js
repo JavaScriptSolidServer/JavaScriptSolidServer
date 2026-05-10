@@ -141,34 +141,50 @@ describe('DID:nostr Resolution', () => {
     });
   });
 
-  describe('SSRF / redirect hardening', () => {
-    // Spin up a tiny HTTP server to drive the redirect cases. We
-    // can't reach real private IPs from a unit test, but we CAN
-    // assert the resolver:
-    //   - refuses a cross-origin redirect (returns null cleanly)
-    //   - refuses a redirect chain longer than the cap
-    //   - re-validates SSRF on every hop (validation is per-hop in
-    //     fetchWithRedirectGuard; cross-origin refusal is the
-    //     observable consequence we can test without a private IP)
+  describe('fetchWithRedirectGuard SSRF / redirect hardening', () => {
+    // The production resolver wraps fetchWithRedirectGuard with
+    // validateExternalUrl as a hard SSRF gate, which by design
+    // rejects loopback (`127.0.0.1`) — the only thing a unit test
+    // can bind to. So testing the resolver end-to-end against a
+    // local server makes the redirect/cap logic invisible: every
+    // request fails on the SSRF guard before fetch is even called.
+    //
+    // Solution: import fetchWithRedirectGuard directly and inject
+    // a permissive `_validateUrl` stub. That isolates the redirect
+    // hop counter, cross-origin check, and size cap from the SSRF
+    // gate so we can actually observe each one.
     let http;
     let server;
     let port;
-    let mode = 'cross-origin';
+    let hopMode = 'cross-origin';
+    let fetchWithRedirectGuard;
+    const allowAll = async () => ({ valid: true });
 
     before(async () => {
       http = await import('node:http');
-      clearCache();
+      ({ fetchWithRedirectGuard } = await import('../src/auth/did-nostr.js'));
       server = http.createServer((req, res) => {
-        if (mode === 'cross-origin') {
-          // Redirect to a different origin (different host).
-          res.writeHead(302, { Location: 'http://other.invalid:1/foo.json' });
+        if (hopMode === 'cross-origin') {
+          res.writeHead(302, { Location: 'http://other.example:1/foo.json' });
           res.end();
           return;
         }
-        if (mode === 'loop') {
-          // Self-redirect — count hops by checking the URL path.
+        if (hopMode === 'loop') {
+          // Each hop appends `/r` to the path; the cap fires before
+          // we ever return a non-3xx.
           res.writeHead(302, { Location: req.url + '/r' });
           res.end();
+          return;
+        }
+        if (hopMode === 'oversize') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          // Stream a body larger than the 1 KB cap we'll pass.
+          res.end('"' + 'x'.repeat(2000) + '"');
+          return;
+        }
+        if (hopMode === 'ok') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end('{"ok":true}');
           return;
         }
         res.writeHead(404).end();
@@ -182,23 +198,53 @@ describe('DID:nostr Resolution', () => {
     });
 
     it('refuses cross-origin redirects', async () => {
-      mode = 'cross-origin';
-      const pubkey = 'a'.repeat(64);
-      // Resolver URL points at our local server's base; it'll 302
-      // to a foreign origin which fetchWithRedirectGuard refuses.
-      // NODE_ENV defaults to non-production in tests, so HTTP is
-      // allowed by validateExternalUrl — the redirect refusal must
-      // come from the cross-origin check, not the SSRF guard.
-      const result = await resolveDidNostrToWebId(pubkey, `http://127.0.0.1:${port}`);
-      assert.strictEqual(result, null);
+      hopMode = 'cross-origin';
+      await assert.rejects(
+        () => fetchWithRedirectGuard(`http://127.0.0.1:${port}/foo.json`, { _validateUrl: allowAll }),
+        /cross-origin redirect refused/,
+      );
     });
 
     it('refuses redirect chains exceeding the hop cap', async () => {
-      mode = 'loop';
-      clearCache();
-      const pubkey = 'b'.repeat(64);
-      const result = await resolveDidNostrToWebId(pubkey, `http://127.0.0.1:${port}`);
-      assert.strictEqual(result, null);
+      hopMode = 'loop';
+      await assert.rejects(
+        () => fetchWithRedirectGuard(`http://127.0.0.1:${port}/start`, { _validateUrl: allowAll }),
+        /too many redirects/,
+      );
+    });
+
+    it('refuses oversized response bodies', async () => {
+      hopMode = 'oversize';
+      await assert.rejects(
+        () => fetchWithRedirectGuard(`http://127.0.0.1:${port}/big`, {
+          _validateUrl: allowAll,
+          maxBytes: 1000,
+        }),
+        /response too large/,
+      );
+    });
+
+    it('re-runs SSRF validation on every hop', async () => {
+      hopMode = 'loop';
+      let calls = 0;
+      const counting = async (url) => {
+        calls++;
+        return { valid: true };
+      };
+      await assert.rejects(
+        () => fetchWithRedirectGuard(`http://127.0.0.1:${port}/start`, { _validateUrl: counting }),
+        /too many redirects/,
+      );
+      // 1 initial + MAX_REDIRECTS (5) hops = 6 calls if we re-validate
+      // on every hop. < 6 means the per-hop check is missing.
+      assert.ok(calls >= 6, `expected ≥6 validator calls, got ${calls}`);
+    });
+
+    it('returns the response body on success', async () => {
+      hopMode = 'ok';
+      const r = await fetchWithRedirectGuard(`http://127.0.0.1:${port}/ok`, { _validateUrl: allowAll });
+      assert.strictEqual(r.status, 200);
+      assert.strictEqual(r.body, '{"ok":true}');
     });
   });
 

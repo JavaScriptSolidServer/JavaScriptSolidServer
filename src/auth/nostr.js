@@ -14,10 +14,14 @@
  *      Match by f-form Multikey or by JsonWebKey x/y coordinates. If
  *      found, authenticate as the WebID. (#399 — pairs with the
  *      LWS10-CID verifier.)
- *   2. Resolve via the existing did:nostr DID-document path
+ *   2. (IdP-only) Look up the pubkey in the local in-process index
+ *      built from `<DATA_ROOT>/.idp/accounts/_webid_index.json`.
+ *      No HTTP, no SSRF surface — direct function call. Catches
+ *      same-pod users without a third-party round-trip. (#407)
+ *   3. Resolve via the external did:nostr DID-document path
  *      (nostr.social `.well-known` + bidirectional alsoKnownAs).
- *      If found, authenticate as the WebID it points to.
- *   3. Otherwise return `did:nostr:<64-char-hex-pubkey>` as the
+ *      Used for cross-pod identities; SSRF + redirect hardened.
+ *   4. Otherwise return `did:nostr:<64-char-hex-pubkey>` as the
  *      agent identity (the original behavior).
  */
 
