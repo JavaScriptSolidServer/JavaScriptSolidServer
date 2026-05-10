@@ -681,10 +681,12 @@ describe('Content Negotiation — q-weights and HEAD/GET parity (#325)', () => {
   describe('container with index.html — browser Accept (#409)', () => {
     // Regression: a container that has an index.html with a *valid*
     // <script type="application/ld+json"> data island used to return that
-    // data island as application/ld+json to plain browser GETs, because
-    // selectContentType's `*/*` fallback short-circuits before it sees
-    // text/html. Browsers send `Accept: text/html, ..., */*;q=0.8`, so
-    // the user-visible page silently flipped to JSON.
+    // data island as application/ld+json to plain browser GETs.
+    // selectContentType iterates the Accept list — for a browser sending
+    // `Accept: text/html, ..., */*;q=0.8` it sees text/html (and other
+    // HTML-ish types) but doesn't recognize any of them, then hits the
+    // `*/*` arm and returns JSON-LD, so the user-visible page silently
+    // flipped to JSON.
     const HTML_WITH_JSONLD = '<!DOCTYPE html><html><head><title>Home</title>'
       + '<script type="application/ld+json">'
       + JSON.stringify({ '@context': { foaf: 'http://xmlns.com/foaf/0.1/' }, '@id': '#me', 'foaf:name': 'Carol' })

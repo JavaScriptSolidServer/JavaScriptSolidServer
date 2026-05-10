@@ -161,11 +161,14 @@ export async function handleGet(request, reply) {
       const wantsTurtle = negotiated === RDF_TYPES.TURTLE
         || negotiated === RDF_TYPES.N3
         || negotiated === 'application/n-triples';
-      // Only treat as JSON-LD when Accept *explicitly* asks for JSON;
-      // otherwise selectContentType's `*/*` fallback wrongly diverts
-      // browser GETs (which include `*/*;q=0.8`) into the RDF branch and
-      // serves the embedded data island instead of the index.html body.
-      // Mirrors the HEAD-handler logic later in this file (#409).
+      // Only treat as JSON-LD when Accept *explicitly* asks for JSON.
+      // selectContentType doesn't recognize text/html or
+      // application/xhtml+xml, so for a browser Accept like
+      // `text/html, application/xhtml+xml, application/xml;q=0.9, */*;q=0.8`
+      // it walks past those unsupported types and lands on `*/*`, which
+      // returns JSON-LD — diverting plain browser GETs into the RDF
+      // branch and serving the embedded data island instead of the
+      // index.html body. Mirrors the HEAD-handler logic below (#409).
       const explicitJson = /\b(application\/ld\+json|application\/json)\b/i.test(acceptHeader);
       const wantsJsonLd = negotiated === RDF_TYPES.JSON_LD && explicitJson;
 
