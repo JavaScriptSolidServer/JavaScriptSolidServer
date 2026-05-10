@@ -158,6 +158,13 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
     // RIOT is to separate the statement-terminator from the previous
     // token by a space. n3.js packs them; JSS post-processes the
     // output to add the space.
+    //
+    // Use TWO predicates on the same subject so n3.js emits a `;`
+    // continuation (multiple triples on one subject). If a future
+    // N3 upgrade ever switched to "one triple per statement" style
+    // and dropped `;` entirely, this test would otherwise pass
+    // vacuously. The presence-of-terminator assertions below pin
+    // that behavior.
     const doc = {
       '@context': { 'foaf': 'http://xmlns.com/foaf/0.1/' },
       '@id': 'https://example.test/alice',
@@ -165,6 +172,10 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       'foaf:age': 30,
     };
     const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    // Pin "at least one ; and one . exists" — otherwise an absent
+    // terminator would let the negative assertions pass vacuously.
+    assert.match(content, /\s;/, `output must contain at least one ; terminator, got:\n${content}`);
+    assert.match(content, /\s\.(?:\s|$)/, `output must contain at least one . terminator, got:\n${content}`);
     // Every `;` must be preceded by whitespace (space or newline).
     // Same for `.` at end-of-statement.
     const offendingSemi = /[^\s];/.test(content);
