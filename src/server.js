@@ -11,6 +11,10 @@ import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
+// well-known-did-nostr is loaded lazily inside the idpEnabled branch
+// below so non-IdP deployments don't pull in the IdP accounts module
+// (bcryptjs etc.) just to register Fastify routes. The same lazy-load
+// pattern is used in src/auth/nostr.js for the NIP-98 verifier.
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
@@ -650,6 +654,68 @@ export function createServer(options = {}) {
       }
     }
   };
+
+  // /.well-known/did/nostr/<pubkey>(.json|.jsonld)? — did:nostr HTTP
+  // resolution for accounts on this pod (#407). Registered before the
+  // LDP wildcard so it actually matches; without this the
+  // dynamic-segment + .json suffix gets swallowed by the wildcard
+  // GET /* handler below and never reaches our route.
+  // The 405 method blocks for /.well-known/did/nostr/* must be
+  // registered REGARDLESS of idpEnabled. The global auth preHandler
+  // unconditionally skips WAC for any /.well-known/* request (that's
+  // the spec-mandated public namespace), so without these blocks the
+  // wildcard write handlers (PUT/POST/PATCH/DELETE /*) would still
+  // accept unauthenticated writes under this namespace on non-IdP
+  // deployments — anyone could PUT a file at
+  // /.well-known/did/nostr/whatever.json. The GET/HEAD generation
+  // (which actually serves DID docs) stays IdP-only since it reads
+  // the IdP accounts index.
+  const methodNotAllowed = async (request, reply) => reply.code(405)
+    .header('Allow', 'GET, HEAD, OPTIONS')
+    .send({ error: 'Method Not Allowed' });
+  // OPTIONS must report the SAME `Allow` set as the 405s. Without
+  // an explicit handler the request falls through to the wildcard
+  // `OPTIONS /*` which advertises GET, HEAD, PUT, DELETE, PATCH,
+  // POST — wrong for this namespace and confusing to CORS
+  // preflights. We also set the full CORS header set (origin,
+  // allowed-methods restricted to read-only, allowed-headers,
+  // credentials, max-age) so browser preflights to this endpoint
+  // succeed; bare 204 with only `Allow` would fail CORS.
+  const optionsForReadOnlyNamespace = async (request, reply) => {
+    const cors = getCorsHeaders(request.headers.origin);
+    cors['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS';
+    return reply.code(204)
+      .header('Allow', 'GET, HEAD, OPTIONS')
+      .headers(cors)
+      .send();
+  };
+  for (const pat of [
+    '/.well-known/did/nostr',
+    '/.well-known/did/nostr/',
+    '/.well-known/did/nostr/:pubkeyAndExt',
+    '/.well-known/did/nostr/*',
+  ]) {
+    fastify.put(pat, methodNotAllowed);
+    fastify.post(pat, methodNotAllowed);
+    fastify.patch(pat, methodNotAllowed);
+    fastify.delete(pat, methodNotAllowed);
+    fastify.options(pat, optionsForReadOnlyNamespace);
+  }
+  if (idpEnabled) {
+    // Async plugin registration so the dynamic import lives in here,
+    // not at module top level. Non-IdP deployments never enter this
+    // branch and never pull in the IdP accounts module.
+    fastify.register(async (instance) => {
+      const { buildWellKnownDidNostrHandler } = await import('./idp/well-known-did-nostr.js');
+      const wellKnownDidNostr = buildWellKnownDidNostrHandler();
+      instance.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+      // HEAD shares the GET implementation so headers (Content-Type,
+      // Cache-Control, Last-Modified, etc.) match. Without this the
+      // request falls through to the wildcard HEAD /* below and the
+      // LDP layer returns 404 because there's no on-disk file.
+      instance.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+    });
+  }
 
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)

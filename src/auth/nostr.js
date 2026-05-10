@@ -14,10 +14,14 @@
  *      Match by f-form Multikey or by JsonWebKey x/y coordinates. If
  *      found, authenticate as the WebID. (#399 — pairs with the
  *      LWS10-CID verifier.)
- *   2. Resolve via the existing did:nostr DID-document path
+ *   2. (IdP-only) Look up the pubkey in the local in-process index
+ *      built from `<DATA_ROOT>/.idp/accounts/_webid_index.json`.
+ *      No HTTP, no SSRF surface — direct function call. Catches
+ *      same-pod users without a third-party round-trip. (#407)
+ *   3. Resolve via the external did:nostr DID-document path
  *      (nostr.social `.well-known` + bidirectional alsoKnownAs).
- *      If found, authenticate as the WebID it points to.
- *   3. Otherwise return `did:nostr:<64-char-hex-pubkey>` as the
+ *      Used for cross-pod identities; SSRF + redirect hardened.
+ *   4. Otherwise return `did:nostr:<64-char-hex-pubkey>` as the
  *      agent identity (the original behavior).
  */
 
@@ -25,19 +29,20 @@ import { verifyEvent, getEventHash } from '../nostr/event.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
+// resolveDidNostrLocally is loaded lazily (inside the idpEnabled
+// branch) so non-IdP deployments don't pay the IdP/accounts module
+// startup cost (bcryptjs, oidc-provider helpers, etc.) just by
+// importing the NIP-98 verifier.
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
+import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile } from './nostr-keys.js'; // re-exported for back-compat
+export { extractNostrPubkeysFromProfile };
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
 
 // Timestamp tolerance in seconds
 const TIMESTAMP_TOLERANCE = 60;
-
-// Multicodec varint for secp256k1-pub: 0xe7 0x01 → "e701" hex.
-// Used to decode f-form Multikey verificationMethod values back into
-// the 32-byte x-only Nostr pubkey.
-const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
 // Profile-fetch body-size cap. Matches the LWS-CID verifier; both
 // callers go through the shared fetchCidDocument helper.
@@ -282,9 +287,30 @@ export async function verifyNostrAuth(request) {
     return { webId: vmWebId, error: null };
   }
 
-  // Second lookup: existing did:nostr DID-document resolver. Fetches
-  // an external DID doc (e.g. nostr.social/.well-known/...) and checks
-  // bidirectional alsoKnownAs ↔ WebID linking.
+  // Second lookup: in-process local DID resolution (#407). Fast path
+  // — direct function call into the local account index, no HTTP
+  // fetch, no SSRF surface from request-controlled headers. Catches
+  // any user who's published a Nostr Multikey VM into their profile
+  // on this same pod.
+  //
+  // Gated on idpEnabled because the index reads from
+  // <DATA_ROOT>/.idp/accounts which only exists when the IdP layer
+  // is in use. On non-IdP deployments the local resolver has nothing
+  // to find and would just spin disk on every request.
+  if (request.idpEnabled) {
+    // Dynamic import: only load the IdP-accounts stack when IdP is
+    // actually enabled. Cached after first load (ESM module caching).
+    const { resolveDidNostrLocally } = await import('../idp/well-known-did-nostr.js');
+    const localWebId = await resolveDidNostrLocally(event.pubkey);
+    if (localWebId) {
+      return { webId: localWebId, error: null };
+    }
+  }
+
+  // Third lookup: external did:nostr DID-document resolver. Fetches
+  // a DID doc from the configured external resolver (nostr.social) and
+  // checks bidirectional alsoKnownAs ↔ WebID linking. Used only for
+  // cross-pod identities (the local case is handled above).
   const resolvedWebId = await resolveDidNostrToWebId(event.pubkey);
   if (resolvedWebId) {
     return { webId: resolvedWebId, error: null };
@@ -597,23 +623,6 @@ function findNostrVmInProfile(profile, pubkeyHex, baseUrl) {
     }
   }
   return null;
-}
-
-/**
- * Decode an f-form Multikey for secp256k1-pub back into the 32-byte
- * x-only pubkey hex. Returns null if the input isn't this shape.
- */
-function decodeFFormSecp256k1(mb) {
-  if (typeof mb !== 'string' || !mb.startsWith('f')) return null;
-  const hex = mb.slice(1).toLowerCase();
-  if (!/^[0-9a-f]+$/.test(hex)) return null;
-  if (!hex.startsWith(MULTICODEC_SECP256K1_PUB_HEX)) return null;
-  const rest = hex.slice(MULTICODEC_SECP256K1_PUB_HEX.length);
-  // Expect parity byte (02/03) + 32-byte xonly = 66 hex chars.
-  if (rest.length !== 66) return null;
-  const parity = rest.slice(0, 2);
-  if (parity !== '02' && parity !== '03') return null;
-  return rest.slice(2);
 }
 
 function hexToBase64url(hex) {
