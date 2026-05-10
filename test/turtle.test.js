@@ -153,6 +153,60 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       `node n3 should appear:\n${content}`);
   });
 
+  it('emits a space before `;` and `.` terminators (#419)', async () => {
+    // The de-facto convention in W3C spec examples and Apache Jena
+    // RIOT is to separate the statement-terminator from the previous
+    // token by a space. n3.js packs them; JSS post-processes the
+    // output to add the space.
+    const doc = {
+      '@context': { 'foaf': 'http://xmlns.com/foaf/0.1/' },
+      '@id': 'https://example.test/alice',
+      'foaf:name': 'Alice',
+      'foaf:age': 30,
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    // Every `;` must be preceded by whitespace (space or newline).
+    // Same for `.` at end-of-statement.
+    const offendingSemi = /[^\s];/.test(content);
+    const offendingDot = /[^\s]\.\s*$/m.test(content) || /[^\s]\.\n/.test(content);
+    assert.ok(!offendingSemi, `every ; must be preceded by whitespace, got:\n${content}`);
+    assert.ok(!offendingDot, `every . at line/doc end must be preceded by whitespace, got:\n${content}`);
+  });
+
+  it('does NOT add a space inside literals containing `;` or `.` (#419 safety)', async () => {
+    // Critical correctness test: the post-pass must NOT corrupt
+    // literal values. A literal "foo;bar" with the post-pass naïvely
+    // applied would become "foo ;bar" — silent data corruption.
+    const doc = {
+      '@context': { 'ex': 'https://example.test/ns#' },
+      '@id': 'https://example.test/s',
+      'ex:semicolonInside': 'foo;bar',
+      'ex:dotInside': 'has.dot',
+      'ex:both': 'a;b.c',
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    // The literals must round-trip verbatim — no inserted space.
+    assert.ok(content.includes('"foo;bar"'),
+      `literal "foo;bar" must survive verbatim, got:\n${content}`);
+    assert.ok(content.includes('"has.dot"'),
+      `literal "has.dot" must survive verbatim, got:\n${content}`);
+    assert.ok(content.includes('"a;b.c"'),
+      `literal "a;b.c" must survive verbatim, got:\n${content}`);
+  });
+
+  it('does NOT add a space inside an IRI containing `;` (#419 safety)', async () => {
+    // An IRI's content is bracketed by `<...>` — the post-pass
+    // shouldn't touch what's inside.
+    const doc = {
+      '@context': { 'ex': 'https://example.test/ns#' },
+      '@id': 'https://example.test/s',
+      'ex:rel': { '@id': 'https://example.test/path;with;semis' },
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    assert.ok(content.includes('<https://example.test/path;with;semis>'),
+      `IRI must survive verbatim with internal ;, got:\n${content}`);
+  });
+
   it('cyclical nested node reference does not hang', async () => {
     // Two nested nodes reference each other. BFS must not loop.
     const a = { '@id': 'https://example.test/a', 'ex:knows': null };
