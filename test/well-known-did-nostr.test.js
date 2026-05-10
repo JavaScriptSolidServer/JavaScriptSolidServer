@@ -200,6 +200,56 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     }
   });
 
+  it('indexes root-level pods (profile at /profile/card.jsonld, no podName prefix)', async () => {
+    // Single-user / root-pod layout: the profile lives directly at
+    // <DATA_ROOT>/profile/card.jsonld with no podName subdirectory,
+    // even though the seeded IDP account record can have
+    // `podName: 'me'`. The indexer must derive the on-disk path
+    // from the WebID's pathname, NOT from podName, or this whole
+    // class of pods is invisible to local DID resolution.
+    const sk = generateSecretKey();
+    const rootPk = getPublicKey(sk);
+    const rootWebId = `${baseUrl}/profile/card.jsonld#me`;
+    const rootProfilePath = path.join(TEST_DATA_DIR, 'profile', 'card.jsonld');
+    const VM_ID = `${baseUrl}/profile/card.jsonld#nostr-root`;
+    await fs.ensureDir(path.dirname(rootProfilePath));
+    await fs.writeJson(rootProfilePath, {
+      '@context': 'https://www.w3.org/ns/solid/v1',
+      '@id': rootWebId,
+      verificationMethod: [{
+        id: VM_ID,
+        type: 'Multikey',
+        controller: rootWebId,
+        publicKeyMultibase: fformMultikey(rootPk),
+      }],
+      authentication: [VM_ID],
+    }, { spaces: 2 });
+
+    // Synthesize a matching account record + index entry. We bypass
+    // the IdP /pods POST flow because that creates a named pod with
+    // its own subdirectory; we want the root-pod shape specifically.
+    const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
+    const indexPath = path.join(accountsDir, '_webid_index.json');
+    const idx = await fs.readJson(indexPath);
+    const accountId = 'root-pod-test-account';
+    idx[rootWebId] = accountId;
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.writeJson(path.join(accountsDir, `${accountId}.json`), {
+      id: accountId,
+      podName: 'me',           // intentionally != on-disk layout
+      webId: rootWebId,
+      email: 'root@example.com',
+      // Other fields the account loader expects can be undefined for
+      // the lookup we're doing — findById just returns the JSON.
+    }, { spaces: 2 });
+
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${rootPk}.json`);
+    assert.strictEqual(r.status, 200);
+    const doc = await r.json();
+    assert.strictEqual(doc.id, `did:nostr:${rootPk}`);
+    assert.strictEqual(doc.alsoKnownAs[0], rootWebId);
+  });
+
   it('handles profiles whose authentication entries are relative fragments', async () => {
     // Profiles in the wild often use relative `#me`-style fragments
     // for the subject. The indexer must absolutize `authentication`

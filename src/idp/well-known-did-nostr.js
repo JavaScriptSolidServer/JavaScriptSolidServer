@@ -98,8 +98,23 @@ async function rebuildPubkeyIndex() {
       );
       continue;
     }
-    if (!account?.podName || !account?.webId) continue;
-    const profilePath = path.join(dataRoot, account.podName, 'profile', 'card.jsonld');
+    if (!account?.webId) continue;
+    // Derive the on-disk profile path from the WebID's pathname,
+    // not from `account.podName`. Root-level (single-user) pods
+    // store the profile at <DATA_ROOT>/profile/card.jsonld with
+    // no podName-shaped prefix even though the seeded account has
+    // `podName: 'me'` — joining `dataRoot/me/profile/card.jsonld`
+    // would silently miss that pod and never index its keys.
+    // The webId pathname ('/profile/card.jsonld' for root, or
+    // '/alice/profile/card.jsonld' for named) matches the on-disk
+    // layout in both cases.
+    let profilePath;
+    try {
+      const webIdUrl = new URL(account.webId);
+      profilePath = path.join(dataRoot, webIdUrl.pathname);
+    } catch {
+      continue; // unparseable webId — skip
+    }
     let profile;
     let mtimeMs = 0;
     try {
@@ -331,14 +346,18 @@ export function buildWellKnownDidNostrHandler() {
     const contentType = ext === '.jsonld'
       ? 'application/did+ld+json; charset=utf-8'
       : 'application/did+json; charset=utf-8';
-    // Last-Modified reflects when the underlying mapping (the user's
-    // profile file) actually changed — NOT the request time — so
-    // clients/CDNs can do conditional GET correctly.
+    // Two distinct timestamp semantics, two distinct headers:
+    //   - Nostr-Timestamp: the resolver's clock at answer time (uniform
+    //     across 200/404/400 — clients use it to correlate the resolver
+    //     clock with their own, regardless of cache hits).
+    //   - Last-Modified: when the underlying mapping (the user's
+    //     profile file) actually changed — only meaningful for 200,
+    //     so clients/CDNs can do conditional GET against the source.
     const lastModifiedDate = mtimeMs > 0 ? new Date(mtimeMs) : new Date(indexBuiltAt);
     return reply
       .header('Content-Type', contentType)
       .header('Cache-Control', 'max-age=3600')
-      .header('Nostr-Timestamp', String(Math.floor(lastModifiedDate.getTime() / 1000)))
+      .header('Nostr-Timestamp', String(nowEpoch))
       .header('Last-Modified', lastModifiedDate.toUTCString())
       .send(didDoc);
   };
