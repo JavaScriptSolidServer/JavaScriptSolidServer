@@ -155,80 +155,32 @@ describe('DID:nostr Resolution', () => {
     // a DID doc with `alsoKnownAs` pointing at the OTHER user's
     // WebID and the resolver would accept it.
     //
-    // This test simulates that: serve a DID doc and a profile
-    // from the same origin, but make the profile's
-    // verificationMethod NOT match the requested pubkey. Resolver
-    // must return null (CID-VM backlink check fails) instead of
-    // accepting on same-origin grounds.
-    let http;
-    let server;
-    let port;
-    let mode = 'attack'; // 'attack' | 'legit'
+    // We can't drive the live resolver here because
+    // validateExternalUrl unconditionally blocks loopback (the
+    // only thing a unit test can bind to), so we exercise the
+    // CID-VM backlink check directly via the exposed test seam
+    // with in-memory profiles. The full multi-tenant flow is
+    // observable in production once a public host is involved.
     let attackPubkey;
     let legitPubkey;
-    let legitYHex;
     let legitX;
     let legitY;
 
     before(async () => {
       const { secp256k1 } = await import('@noble/curves/secp256k1');
-      http = await import('node:http');
       // Use real on-curve keys; we need a valid point to match the
       // verifier's BIP-340 even-y derivation.
-      const sk = generateSecretKey();
-      legitPubkey = getPublicKey(sk);
-      const attackSk = generateSecretKey();
-      attackPubkey = getPublicKey(attackSk);
+      legitPubkey = getPublicKey(generateSecretKey());
+      attackPubkey = getPublicKey(generateSecretKey());
       const point = secp256k1.ProjectivePoint.fromHex('02' + legitPubkey);
-      legitYHex = point.toAffine().y.toString(16).padStart(64, '0');
+      const yHex = point.toAffine().y.toString(16).padStart(64, '0');
       const b64u = (hex) => Buffer.from(hex, 'hex').toString('base64')
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       legitX = b64u(legitPubkey);
-      legitY = b64u(legitYHex);
+      legitY = b64u(yHex);
       clearCache();
-      server = http.createServer((req, res) => {
-        if (req.url.endsWith('.json') && req.url.includes('did/nostr')) {
-          // DID doc: alsoKnownAs points at /profile/card on this same origin
-          res.writeHead(200, { 'Content-Type': 'application/did+json' });
-          res.end(JSON.stringify({
-            id: req.url.includes(attackPubkey) ? `did:nostr:${attackPubkey}` : `did:nostr:${legitPubkey}`,
-            alsoKnownAs: [`http://127.0.0.1:${port}/profile/card`],
-          }));
-          return;
-        }
-        if (req.url === '/profile/card') {
-          // The "victim" profile only declares legitPubkey via CID-VM.
-          // For the attack flow, attackPubkey is NOT in this profile,
-          // so the backlink check must fail.
-          const subj = `http://127.0.0.1:${port}/profile/card#me`;
-          res.writeHead(200, { 'Content-Type': 'application/ld+json' });
-          res.end(JSON.stringify({
-            '@id': subj,
-            verificationMethod: [{
-              id: `${subj.replace('#me','')}#k`,
-              type: 'JsonWebKey',
-              controller: subj,
-              publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x: legitX, y: legitY },
-            }],
-            authentication: [`${subj.replace('#me','')}#k`],
-          }));
-          return;
-        }
-        res.writeHead(404).end();
-      });
-      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-      port = server.address().port;
     });
 
-    after(async () => {
-      await new Promise((resolve) => server.close(resolve));
-    });
-
-    // Note: validateExternalUrl blocks loopback, so we can't drive
-    // the resolver against 127.0.0.1 — it short-circuits before any
-    // fetch. We test the CID-VM backlink directly via the exposed
-    // helper instead. (The same-origin path is observable in
-    // production, where validation passes for public hosts.)
     it('checkCidVmBacklink: accepts a profile with matching VM in authentication', async () => {
       const { _checkCidVmBacklinkForTests } = await import('../src/auth/did-nostr.js');
       const subj = `http://example.test/profile/card#me`;
