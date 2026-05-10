@@ -140,29 +140,35 @@ async function rebuildPubkeyIndex() {
     if (!account?.webId) continue;
     // Probe candidate paths in order until one ALSO passes the @id
     // check. Multiple candidates can exist on disk simultaneously
-    // (e.g. a root pod and named pods coexisting under the same
+    // (e.g. root pod and named pods coexisting under the same
     // dataRoot, or a subdomain pod with a coincidentally-named
-    // path-mode pod). The path-mode candidate may exist but belong
+    // path-mode dir). The path-mode candidate may exist but belong
     // to a different account — keep going until we find one whose
     // declared `@id` matches account.webId.
-    const candidates = profilePathCandidates(dataRoot, account.webId, account.podName);
+    const { paths: candidates, skipped: containmentSkipped } =
+      profilePathCandidates(dataRoot, account.webId, account.podName);
+    // Track per-candidate failure reasons so operators get a precise
+    // diagnostic when nothing matches — distinguishing
+    // "profile genuinely missing" from "@id mismatch" from "oversized"
+    // from "containment rejected".
+    const reasons = containmentSkipped.map(s => `${s.path}: ${s.reason}`);
     let profile = null;
     let profilePath = null;
     let mtimeMs = 0;
-    let firstError = null;
     for (const candidate of candidates) {
       let stat;
       try {
         stat = await fs.stat(candidate);
       } catch (err) {
-        // Remember the first error for log diagnostics if NO
-        // candidate is reachable. ENOENT is the normal "wrong
-        // candidate, try next" — don't surface it.
-        if (firstError === null && err.code !== 'ENOENT') firstError = err;
+        reasons.push(`${candidate}: ${err.code || 'stat-error'}`);
         continue;
       }
-      if (!stat.isFile()) continue;
+      if (!stat.isFile()) {
+        reasons.push(`${candidate}: not-a-regular-file`);
+        continue;
+      }
       if (stat.size > MAX_PROFILE_BYTES) {
+        reasons.push(`${candidate}: oversized (${stat.size} > ${MAX_PROFILE_BYTES})`);
         console.error(
           `well-known-did-nostr: skipping candidate ${candidate} for ` +
           `account ${accountId} — size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
@@ -173,28 +179,30 @@ async function rebuildPubkeyIndex() {
       try {
         parsed = JSON.parse(await fs.readFile(candidate, 'utf8'));
       } catch (err) {
-        if (firstError === null) firstError = err;
+        reasons.push(`${candidate}: parse-error (${err.message})`);
         continue;
       }
-      // First-line @id check. Other CID-semantics checks happen
-      // below; if those fail we don't fall through to another
-      // candidate (they apply to the profile's content, not its
-      // location, so re-probing wouldn't help).
       const declaredSubject = absolutize(parsed?.['@id'] || parsed?.id, stripHashIfAny(account.webId));
-      if (declaredSubject !== account.webId) continue;
+      if (declaredSubject !== account.webId) {
+        reasons.push(`${candidate}: @id-mismatch (declared=${declaredSubject || '(none)'})`);
+        continue;
+      }
       profile = parsed;
       profilePath = candidate;
       mtimeMs = stat.mtimeMs;
       break;
     }
     if (!profile) {
-      // Nothing on disk matched. Surface the issue for operators —
-      // either the profile genuinely doesn't exist (ENOENT on every
-      // candidate) or each candidate's `@id` mismatched. Either way
-      // worth logging once per hour per account.
-      const tried = candidates.length ? candidates.join(' | ') : '(no candidates)';
-      const err = firstError || { code: 'ENOENT', message: 'no candidate matched account.webId' };
-      logProfileFailure(accountId, tried, err);
+      // Nothing on disk matched. Surface the precise per-candidate
+      // failure reasons so operators can distinguish ENOENT (profile
+      // genuinely missing) from @id mismatch (wrong subdomain config?)
+      // from containment rejection (malformed webId path) without
+      // having to grep the file system.
+      const summary = reasons.length ? reasons.join(' | ') : '(no candidates)';
+      logProfileFailure(accountId, summary, {
+        code: 'NO_CANDIDATE_MATCHED',
+        message: `no candidate profile matched account.webId for ${account.webId}`,
+      });
       continue;
     }
     // CID semantics (continued) — match the resource-side checks:
@@ -298,49 +306,50 @@ export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
  *   3. Subdomain-mode pod   (host=`alice.example.com`, path=`/profile/card.jsonld`)
  *      → `<dataRoot>/alice/profile/card.jsonld`
  *
- * Cases (1) and (2) share the same derivation rule (just join
- * pathname under dataRoot). Case (3) needs an extra "host first
- * label as pod dir" candidate, which the original implementation
- * didn't have — that's #411.
+ * The subdomain candidate (3) is gated on `podName` matching the
+ * WebID host's first DNS label — without that gate, a root-pod
+ * WebID (`example.com`) would also emit `<dataRoot>/example/...`,
+ * which could be a different account's pod dir.
  *
- * The subdomain candidate is gated on the optional `podName` arg:
- * we only emit it when `<podName>.` is the host's actual first
- * label. Without that gate, a root-pod WebID (`example.com`) would
- * also emit `<dataRoot>/example/profile/...`, which could be a
- * different account's pod dir — wasted probes plus noisier failure
- * logs. The `@id` check downstream rejects mis-indexing either way,
- * but precision here keeps logs clean.
- *
- * Containment-checked. All candidates resolve to absolute paths that
- * are at-or-under `dataRootAbs`.
+ * Returns `{ paths, skipped }`:
+ *   - `paths` — absolute, containment-passed candidates to probe
+ *     in order
+ *   - `skipped` — diagnostic entries for paths rejected at this
+ *     stage (today only "outside-dataRoot"). Surfaced through the
+ *     rebuild loop's failure log so operators can distinguish
+ *     traversal / misconfig from "profile not on disk."
  *
  * @internal exported for tests
  */
 export function profilePathCandidates(dataRoot, webId, podName = null) {
-  if (typeof webId !== 'string') return [];
+  if (typeof webId !== 'string') return { paths: [], skipped: [] };
   let url;
-  try { url = new URL(webId); } catch { return []; }
+  try { url = new URL(webId); } catch { return { paths: [], skipped: [] }; }
   const pathnameRel = url.pathname.replace(/^\/+/, '');
   const dataRootAbs = path.resolve(dataRoot);
   const insideRoot = (p) => p === dataRootAbs || p.startsWith(dataRootAbs + path.sep);
-  const out = [];
-  const add = (...parts) => {
+  const paths = [];
+  const skipped = [];
+  const consider = (...parts) => {
     const r = path.resolve(dataRootAbs, ...parts);
-    if (insideRoot(r) && !out.includes(r)) out.push(r);
+    if (!insideRoot(r)) {
+      skipped.push({ path: r, reason: 'outside-dataRoot' });
+      return;
+    }
+    if (!paths.includes(r)) paths.push(r);
   };
   // Path-mode named pod OR root pod.
-  add(pathnameRel);
+  consider(pathnameRel);
   // Subdomain mode: only when the WebID host's first DNS label
-  // ACTUALLY matches the account's podName. Case-insensitive
-  // because DNS is case-insensitive.
+  // matches the account's podName (case-insensitive — DNS is).
   if (typeof podName === 'string' && podName.length > 0) {
     const host = url.hostname.toLowerCase();
     const expected = podName.toLowerCase() + '.';
     if (host.startsWith(expected)) {
-      add(podName, pathnameRel);
+      consider(podName, pathnameRel);
     }
   }
-  return out;
+  return { paths, skipped };
 }
 
 

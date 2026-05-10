@@ -704,63 +704,46 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
   const DATA_ROOT = '/srv/jss/data';
 
   it('path-mode named pod: <dataRoot>/<pod>/profile/card.jsonld', () => {
-    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
-    assert.ok(cands.includes('/srv/jss/data/alice/profile/card.jsonld'),
-      `expected path-mode candidate; got ${cands.join(', ')}`);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
+    assert.ok(paths.includes('/srv/jss/data/alice/profile/card.jsonld'),
+      `expected path-mode candidate; got ${paths.join(', ')}`);
   });
 
   it('root pod: <dataRoot>/profile/card.jsonld', () => {
-    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me');
-    assert.ok(cands.includes('/srv/jss/data/profile/card.jsonld'),
-      `expected root-pod candidate; got ${cands.join(', ')}`);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me');
+    assert.ok(paths.includes('/srv/jss/data/profile/card.jsonld'),
+      `expected root-pod candidate; got ${paths.join(', ')}`);
   });
 
   it('subdomain-mode pod: emits <dataRoot>/<podName>/profile/... when host first label matches podName', () => {
-    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me', 'test');
-    // BOTH should be there — the path-mode candidate (which won't
-    // exist on disk for a subdomain-mode pod) and the subdomain
-    // candidate. The caller fs.stats each in order.
-    assert.ok(cands.includes('/srv/jss/data/profile/card.jsonld'),
-      `expected path-mode candidate; got ${cands.join(', ')}`);
-    assert.ok(cands.includes('/srv/jss/data/test/profile/card.jsonld'),
-      `expected subdomain candidate; got ${cands.join(', ')}`);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me', 'test');
+    assert.ok(paths.includes('/srv/jss/data/profile/card.jsonld'),
+      `expected path-mode candidate; got ${paths.join(', ')}`);
+    assert.ok(paths.includes('/srv/jss/data/test/profile/card.jsonld'),
+      `expected subdomain candidate; got ${paths.join(', ')}`);
   });
 
   it('does NOT emit a subdomain candidate when podName is omitted', () => {
-    // Without podName, we can't tell whether the host's first
-    // label is actually this pod's subdomain — could be a totally
-    // unrelated user's pod dir on a different account. Skip the
-    // subdomain candidate and rely on the path-mode/root candidate.
-    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
-    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
+    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
   });
 
   it('does NOT emit a subdomain candidate when podName does not match the host first label', () => {
-    // Important: a root-pod WebID `https://example.com/profile/...`
-    // with podName='me' must NOT produce `<dataRoot>/example/...`
-    // — that'd be a different account's pod dir and only
-    // accidentally rejected by the @id check.
-    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me', 'me');
-    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me', 'me');
+    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
   });
 
   it('does NOT emit a subdomain candidate for a single-label host', () => {
-    // `localhost` has only one label — there's no "host first label
-    // as pod dir" candidate to add (it would just duplicate the
-    // path-mode one).
-    const cands = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me', 'localhost');
-    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+    const { paths } = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me', 'localhost');
+    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
   });
 
-  it('returns [] for an unparseable webId', () => {
-    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, 'not a url'), []);
-    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, null), []);
+  it('returns empty paths for an unparseable webId', () => {
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, 'not a url'), { paths: [], skipped: [] });
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, null), { paths: [], skipped: [] });
   });
 
   it('every candidate stays inside dataRootAbs', () => {
-    // The same containment invariant that profilePathFromWebId
-    // enforces — extended to ALL emitted candidates, including
-    // the subdomain candidate (when a matching podName is passed).
     const cases = [
       ['https://example.com/alice/profile/card.jsonld#me', 'alice'],
       ['https://alice.example.com/profile/card.jsonld#me', 'alice'],
@@ -768,10 +751,35 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
       ['https://h.com/../../../etc/passwd', 'h'],
     ];
     for (const [w, podName] of cases) {
-      for (const c of profilePathCandidates(DATA_ROOT, w, podName)) {
+      const { paths } = profilePathCandidates(DATA_ROOT, w, podName);
+      for (const c of paths) {
         assert.ok(c === DATA_ROOT || c.startsWith(DATA_ROOT + path.sep),
           `${w} (podName=${podName}) → ${c} escaped DATA_ROOT`);
       }
     }
+  });
+
+  it('returns the `{ paths, skipped }` shape so the caller can surface diagnostics', () => {
+    // Restructure of pass-2: the function returns BOTH the
+    // containment-passed paths AND a `skipped` list of rejected
+    // candidates with reasons. rebuildPubkeyIndex folds `skipped`
+    // into its per-account failure log so operators can
+    // distinguish "traversal/misconfig" from "profile not on disk."
+    //
+    // Through normal URL-parsed input the `skipped` list stays
+    // empty (URL normalization prevents traversal in pathname,
+    // and the podName-gated subdomain candidate rejects mismatches
+    // before path-resolve ever runs). The field exists as
+    // defense-in-depth for any future caller that bypasses URL
+    // parsing or feeds an externally-derived podName, AND so the
+    // rebuild loop's failure log has a hook to surface
+    // containment rejections instead of dropping them silently.
+    const result = profilePathCandidates(DATA_ROOT,
+      'https://alice.example.com/profile/card.jsonld#me', 'alice');
+    assert.ok(Array.isArray(result.paths), 'paths must be an array');
+    assert.ok(Array.isArray(result.skipped), 'skipped must be an array');
+    assert.ok(result.paths.length > 0, 'happy-path must yield paths');
+    assert.deepStrictEqual(result.skipped, [],
+      'normal URL-parsed input must produce no skipped entries');
   });
 });
