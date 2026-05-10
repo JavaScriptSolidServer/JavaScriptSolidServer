@@ -129,6 +129,30 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       `cid:controller predicate missing on the VM:\n${content}`);
   });
 
+  it('malformed `id`/`type` values are silently dropped, not crashed on (#415 review)', async () => {
+    // Profiles in the wild can have malformed user-authored content
+    // — e.g. `id: 42` or `type: null`. The converter must NOT throw
+    // (downstream `resolveUri.startsWith` and `expandUri.includes`
+    // assume strings); it should treat the malformed value as absent
+    // and skip the affected resource cleanly.
+    const doc = {
+      '@context': { 'cid': 'https://www.w3.org/ns/cid/v1#' },
+      '@id': 'https://example.test/s',
+      // Nested object with a non-string `id` — must not crash.
+      'cid:bad1': { id: 42, 'cid:foo': 'x' },
+      // Nested object with a null `type` — must not crash.
+      'cid:bad2': { id: 'https://example.test/n2', type: null, 'cid:foo': 'x' },
+      // Array `type` with mixed string/non-string entries — string
+      // entries should still emit.
+      'cid:mixed': { id: 'https://example.test/n3', type: ['Multikey', 42, null], 'cid:foo': 'x' },
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    assert.ok(typeof content === 'string', 'must produce a string output, not throw');
+    // The valid string type entry should survive in the mixed-type case.
+    assert.ok(content.includes('https://example.test/n3'),
+      `node n3 should appear:\n${content}`);
+  });
+
   it('cyclical nested node reference does not hang', async () => {
     // Two nested nodes reference each other. BFS must not loop.
     const a = { '@id': 'https://example.test/a', 'ex:knows': null };

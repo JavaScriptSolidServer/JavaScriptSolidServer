@@ -183,11 +183,26 @@ function quadsToJsonLd(quads, baseUri, prefixes = {}) {
  */
 function getNodeId(n) {
   if (!n || typeof n !== 'object') return undefined;
-  return n['@id'] !== undefined ? n['@id'] : n.id;
+  const v = n['@id'] !== undefined ? n['@id'] : n.id;
+  // Strict string-only — downstream resolveUri/`.startsWith` would
+  // throw on a number, null, or object. Malformed user content
+  // (a profile that authored `id: 42`) shouldn't crash conneg;
+  // treat non-string identifiers as absent.
+  return typeof v === 'string' ? v : undefined;
 }
 function getNodeType(n) {
   if (!n || typeof n !== 'object') return undefined;
-  return n['@type'] !== undefined ? n['@type'] : n.type;
+  const v = n['@type'] !== undefined ? n['@type'] : n.type;
+  // Accept string OR array — expandUri/`.includes` would throw on
+  // anything else. For arrays, filter to string entries downstream
+  // (handled by Array.isArray + the per-entry expandUri call which
+  // assumes string; we filter here to be safe).
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) {
+    const strs = v.filter(t => typeof t === 'string');
+    return strs.length > 0 ? strs : undefined;
+  }
+  return undefined;
 }
 
 /**
@@ -386,9 +401,13 @@ function valueToTerm(value, baseUri, context, isIdType = false) {
     // nested objects authored with `id` instead of `@id`. Without
     // it, an inline verificationMethod with `id`/`type` returned
     // null here and the parent predicate triple was lost.
-    const objId = value['@id'] !== undefined ? value['@id'] : value.id;
-    if (objId !== undefined) {
-      const uri = resolveUri(objId, baseUri);
+    //
+    // String-only — a numeric or null `@id`/`id` would crash
+    // resolveUri's `.startsWith`. Treat as absent and fall through
+    // to the @value/@language branches below.
+    const rawObjId = value['@id'] !== undefined ? value['@id'] : value.id;
+    if (typeof rawObjId === 'string') {
+      const uri = resolveUri(rawObjId, baseUri);
       return uri.startsWith('_:')
         ? blankNode(uri.slice(2))
         : namedNode(uri);
