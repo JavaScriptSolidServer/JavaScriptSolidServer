@@ -350,6 +350,48 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
   });
 });
 
+describe('Non-IdP /.well-known/did/nostr write blocking', () => {
+  // Regression test for the case Copilot caught: even with IdP
+  // disabled, writes under /.well-known/did/nostr/* must be 405.
+  // /.well-known/* bypasses the WAC preHandler unconditionally,
+  // so without dedicated 405 handlers the wildcard write routes
+  // would accept unauthenticated PUT/POST and create files on
+  // disk under this namespace.
+  let server;
+  let baseUrl;
+
+  before(async () => {
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+    server = createServer({
+      logger: false,
+      root: TEST_DATA_DIR + '-noidp',
+      idp: false,                       // <-- the point of the test
+      forceCloseConnections: true,
+    });
+    await server.listen({ port, host: TEST_HOST });
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(TEST_DATA_DIR + '-noidp');
+  });
+
+  it('returns 405 for PUT/POST/PATCH/DELETE under the namespace', async () => {
+    for (const subpath of ['', '/x', '/a/b']) {
+      for (const method of ['PUT', 'POST', 'PATCH', 'DELETE']) {
+        const r = await fetch(`${baseUrl}/.well-known/did/nostr${subpath}`, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: method === 'DELETE' ? undefined : '{}',
+        });
+        assert.strictEqual(r.status, 405,
+          `${method} /.well-known/did/nostr${subpath} should be 405 in non-IdP mode (got ${r.status})`);
+      }
+    }
+  });
+});
+
 describe('extractNostrPubkeysFromProfile', () => {
   it('finds f-form Multikey entries', () => {
     const sk = generateSecretKey();
@@ -366,22 +408,59 @@ describe('extractNostrPubkeysFromProfile', () => {
     assert.strictEqual(found[0].pubkey, pk);
   });
 
-  it('finds JsonWebKey entries with secp256k1 x-coord', () => {
+  it('finds JsonWebKey entries when y matches the BIP-340 canonical point', async () => {
+    const { secp256k1 } = await import('@noble/curves/secp256k1');
     const sk = generateSecretKey();
     const pk = getPublicKey(sk);
     // x-coord is the hex pubkey base64url-encoded.
-    const x = Buffer.from(pk, 'hex').toString('base64')
+    const b64u = (hex) => Buffer.from(hex, 'hex').toString('base64')
       .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const x = b64u(pk);
+    // Compute the canonical (even-y) y for this x — same logic as
+    // the verifier in src/auth/nostr.js.
+    const point = secp256k1.ProjectivePoint.fromHex('02' + pk);
+    const yHex = point.toAffine().y.toString(16).padStart(64, '0');
+    const y = b64u(yHex);
     const profile = {
       verificationMethod: [{
         id: '#k1',
         type: 'JsonWebKey',
-        publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x, y: 'irrelevant' },
+        publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x, y },
       }],
     };
     const found = extractNostrPubkeysFromProfile(profile);
     assert.strictEqual(found.length, 1);
     assert.strictEqual(found[0].pubkey, pk);
+  });
+
+  it('rejects JsonWebKey entries with mismatched y (not the BIP-340 canonical point)', () => {
+    const sk = generateSecretKey();
+    const pk = getPublicKey(sk);
+    const b64u = (hex) => Buffer.from(hex, 'hex').toString('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const profile = {
+      verificationMethod: [{
+        id: '#k1',
+        type: 'JsonWebKey',
+        // Right x, but a y that's clearly not on-curve. Indexer must
+        // refuse, otherwise it could publish a key the verifier will
+        // reject (401 on advertised pubkey).
+        publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x: b64u(pk), y: b64u('00'.repeat(32)) },
+      }],
+    };
+    assert.deepStrictEqual(extractNostrPubkeysFromProfile(profile), []);
+  });
+
+  it('rejects JsonWebKey entries missing y', () => {
+    const sk = generateSecretKey();
+    const pk = getPublicKey(sk);
+    const x = Buffer.from(pk, 'hex').toString('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const profile = {
+      verificationMethod: [{ id: '#k1', type: 'JsonWebKey',
+        publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x } }],
+    };
+    assert.deepStrictEqual(extractNostrPubkeysFromProfile(profile), []);
   });
 
   it('returns empty for profiles without Nostr-shaped VMs', () => {

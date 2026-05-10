@@ -660,6 +660,30 @@ export function createServer(options = {}) {
   // LDP wildcard so it actually matches; without this the
   // dynamic-segment + .json suffix gets swallowed by the wildcard
   // GET /* handler below and never reaches our route.
+  // The 405 method blocks for /.well-known/did/nostr/* must be
+  // registered REGARDLESS of idpEnabled. The global auth preHandler
+  // unconditionally skips WAC for any /.well-known/* request (that's
+  // the spec-mandated public namespace), so without these blocks the
+  // wildcard write handlers (PUT/POST/PATCH/DELETE /*) would still
+  // accept unauthenticated writes under this namespace on non-IdP
+  // deployments — anyone could PUT a file at
+  // /.well-known/did/nostr/whatever.json. The GET/HEAD generation
+  // (which actually serves DID docs) stays IdP-only since it reads
+  // the IdP accounts index.
+  const methodNotAllowed = async (request, reply) => reply.code(405)
+    .header('Allow', 'GET, HEAD, OPTIONS')
+    .send({ error: 'Method Not Allowed' });
+  for (const pat of [
+    '/.well-known/did/nostr',
+    '/.well-known/did/nostr/',
+    '/.well-known/did/nostr/:pubkeyAndExt',
+    '/.well-known/did/nostr/*',
+  ]) {
+    fastify.put(pat, methodNotAllowed);
+    fastify.post(pat, methodNotAllowed);
+    fastify.patch(pat, methodNotAllowed);
+    fastify.delete(pat, methodNotAllowed);
+  }
   if (idpEnabled) {
     // Async plugin registration so the dynamic import lives in here,
     // not at module top level. Non-IdP deployments never enter this
@@ -673,33 +697,6 @@ export function createServer(options = {}) {
       // request falls through to the wildcard HEAD /* below and the
       // LDP layer returns 404 because there's no on-disk file.
       instance.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
-      // The well-known namespace is read-only — published documents are
-      // generated, not stored. Block writes explicitly so they don't
-      // fall through to the wildcard write handlers (which would
-      // otherwise accept unauthenticated PUT/POST under
-      // /.well-known/* since that path is excluded from the auth
-      // preHandler).
-      //
-      // Two route shapes are required because the dynamic-segment
-      // route (`/.well-known/did/nostr/:pubkeyAndExt`) only matches
-      // a single path segment. A request like
-      // `PUT /.well-known/did/nostr/a/b` would otherwise fall
-      // through to the wildcard write routes — also block the
-      // `/*` subtree under this namespace.
-      const methodNotAllowed = async (request, reply) => reply.code(405)
-        .header('Allow', 'GET, HEAD, OPTIONS')
-        .send({ error: 'Method Not Allowed' });
-      for (const pat of [
-        '/.well-known/did/nostr',
-        '/.well-known/did/nostr/',
-        '/.well-known/did/nostr/:pubkeyAndExt',
-        '/.well-known/did/nostr/*',
-      ]) {
-        instance.put(pat, methodNotAllowed);
-        instance.post(pat, methodNotAllowed);
-        instance.patch(pat, methodNotAllowed);
-        instance.delete(pat, methodNotAllowed);
-      }
     });
   }
 

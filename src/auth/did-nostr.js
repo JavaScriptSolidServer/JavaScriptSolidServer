@@ -205,6 +205,10 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
   if (cached) {
     const ttl = cached.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
     if (Date.now() - cached.timestamp < ttl) {
+      // Re-insert to bump to MRU. Without this, a frequently-hit
+      // entry could still be evicted as "oldest" once the cache is
+      // at the cap, defeating the LRU intent.
+      setCacheEntry(cacheKey, cached);
       return cached.webId;
     }
     cache.delete(cacheKey);

@@ -289,7 +289,20 @@ async function findAccountByNostrPubkey(pubkeyHex) {
   }
   const entry = pubkeyIndex.get(lower);
   if (!entry) return null;
-  const account = await findById(entry.accountId);
+  // findById can throw on parse/permission errors. Treating it as a
+  // cache miss keeps DID-doc requests AND the in-process
+  // resolveDidNostrLocally call in src/auth/nostr.js from turning
+  // into 500s when a single account file is corrupt.
+  let account;
+  try {
+    account = await findById(entry.accountId);
+  } catch (err) {
+    console.error(
+      `well-known-did-nostr: findById(${entry.accountId}) threw — ` +
+      `treating as cache miss: ${err.message}`,
+    );
+    return null;
+  }
   if (!account) return null;
   return { account, mtimeMs: entry.mtimeMs };
 }

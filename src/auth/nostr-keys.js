@@ -7,8 +7,54 @@
  * circular import.
  */
 
+import { secp256k1 } from '@noble/curves/secp256k1';
+
 /** Multicodec varint for secp256k1-pub: 0xe7 0x01 → "e701" hex. */
 const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
+
+/**
+ * Validate a secp256k1 JWK as a Nostr key and return its x-only
+ * pubkey hex. Returns `null` if the JWK isn't a Nostr-shaped key
+ * or its `y` doesn't match the BIP-340 canonical (even-y) point
+ * for the declared `x`.
+ *
+ * Why y matters: every secp256k1 x has TWO valid points (positive
+ * and negative y). Nostr uses x-only pubkeys, which by BIP-340
+ * convention always pick the even-y point. A profile that declares
+ * a JWK with the right x but the wrong y is NOT the user's Nostr
+ * key — accepting it would let an attacker plant a JWK at someone
+ * else's WebID and have the indexer publish it as theirs.
+ *
+ * The verifier in src/auth/nostr.js (jwkMatchesNostrPubkey) does
+ * the same check. Keeping the indexer in sync prevents the
+ * "indexed but verifier rejects" inconsistency that would surface
+ * as a 401 on a key the well-known endpoint had advertised.
+ */
+export function pubkeyFromValidatedJwk(jwk) {
+  if (!jwk || typeof jwk !== 'object') return null;
+  if (jwk.kty !== 'EC') return null;
+  if (jwk.crv !== 'secp256k1' && jwk.crv !== 'P-256K') return null;
+  if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string') return null;
+  let xHex;
+  try {
+    xHex = Buffer.from(jwk.x.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+      .toString('hex').toLowerCase();
+  } catch { return null; }
+  if (!/^[0-9a-f]{64}$/.test(xHex)) return null;
+  let canonicalY;
+  try {
+    // Compressed SEC1 encoding for the EVEN-y point at this x.
+    const point = secp256k1.ProjectivePoint.fromHex('02' + xHex);
+    canonicalY = point.toAffine().y.toString(16).padStart(64, '0');
+  } catch { return null; }
+  let jwkYHex;
+  try {
+    jwkYHex = Buffer.from(jwk.y.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+      .toString('hex').toLowerCase();
+  } catch { return null; }
+  if (jwkYHex !== canonicalY) return null;
+  return xHex;
+}
 
 /**
  * Decode an f-form Multikey for secp256k1-pub back into the 32-byte
@@ -53,14 +99,13 @@ export function extractNostrPubkeysFromProfile(profile) {
       const xonly = decodeFFormSecp256k1(vm.publicKeyMultibase);
       if (xonly) out.push({ pubkey: xonly, vm });
     } else if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
-      const jwk = vm.publicKeyJwk;
-      if (jwk.kty === 'EC' && (jwk.crv === 'secp256k1' || jwk.crv === 'P-256K') && typeof jwk.x === 'string') {
-        try {
-          const hex = Buffer.from(jwk.x.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
-            .toString('hex').toLowerCase();
-          if (/^[0-9a-f]{64}$/.test(hex)) out.push({ pubkey: hex, vm });
-        } catch { /* skip */ }
-      }
+      // Require y to match the BIP-340 canonical point — the same
+      // check the NIP-98 verifier applies. Without this, the indexer
+      // could publish a JWK that the verifier will then reject,
+      // surfacing as a 401 on a key the well-known endpoint had
+      // advertised as authentic.
+      const xonly = pubkeyFromValidatedJwk(vm.publicKeyJwk);
+      if (xonly) out.push({ pubkey: xonly, vm });
     }
   }
   return out;
