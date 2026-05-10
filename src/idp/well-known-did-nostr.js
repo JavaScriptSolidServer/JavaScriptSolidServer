@@ -168,11 +168,13 @@ async function rebuildPubkeyIndex() {
         continue;
       }
       if (stat.size > MAX_PROFILE_BYTES) {
+        // Funnel through the rate-limited per-account logger
+        // (when no candidate matches at all). Direct console.error
+        // would spam logs every TTL rebuild for any account whose
+        // profile is oversized at one candidate but matches at
+        // another — and on every rebuild for genuinely-oversized
+        // accounts.
         reasons.push(`${candidate}: oversized (${stat.size} > ${MAX_PROFILE_BYTES})`);
-        console.error(
-          `well-known-did-nostr: skipping candidate ${candidate} for ` +
-          `account ${accountId} — size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
-        );
         continue;
       }
       let parsed;
@@ -198,10 +200,15 @@ async function rebuildPubkeyIndex() {
       // genuinely missing) from @id mismatch (wrong subdomain config?)
       // from containment rejection (malformed webId path) without
       // having to grep the file system.
+      //
+      // Keep the `path` argument to logProfileFailure path-shaped so
+      // downstream log readers don't get a giant summary string in
+      // the `profile=...` field. Per-candidate detail goes into
+      // `err.message` as a single line.
       const summary = reasons.length ? reasons.join(' | ') : '(no candidates)';
-      logProfileFailure(accountId, summary, {
+      logProfileFailure(accountId, '(multiple candidates)', {
         code: 'NO_CANDIDATE_MATCHED',
-        message: `no candidate profile matched account.webId for ${account.webId}`,
+        message: `no candidate profile matched ${account.webId} — tried: ${summary}`,
       });
       continue;
     }

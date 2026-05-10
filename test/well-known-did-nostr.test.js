@@ -315,15 +315,30 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     // typing UX fell through to the typed-username fallback on
     // every subdomain-mode deployment (e.g. solid.social).
     //
-    // The test server is at 127.0.0.1:<port>; its hostname has
-    // only one label and so isn't a real subdomain test. Instead
-    // we simulate the layout: write a profile at
-    // <TEST_DATA_DIR>/sub/profile/card.jsonld (the on-disk shape
-    // a subdomain pod produces) and synthesize an account whose
-    // WebID host has `sub.` as its first label. Because the
-    // synthesized WebID points at a public domain, its DID-doc
-    // generation also confirms the path-derivation logic doesn't
-    // depend on the request's host.
+    // This test ALSO exercises the "first candidate exists but
+    // belongs to a different account" path: we write a coexisting
+    // root-pod profile at `<TEST_DATA_DIR>/profile/card.jsonld`
+    // for an UNRELATED account (different webId, different VM).
+    // The subdomain account's path-mode candidate hits that file,
+    // fails the @id check, and the loop must fall through to the
+    // subdomain candidate. Self-contained — doesn't depend on
+    // earlier tests' fixtures or test-execution order.
+    const decoyPk = getPublicKey(generateSecretKey()); // unrelated key
+    const decoyProfilePath = path.join(TEST_DATA_DIR, 'profile', 'card.jsonld');
+    const decoyWebId = `${baseUrl}/profile/card.jsonld#decoy`;
+    await fs.ensureDir(path.dirname(decoyProfilePath));
+    await fs.writeJson(decoyProfilePath, {
+      '@context': 'https://www.w3.org/ns/solid/v1',
+      '@id': decoyWebId,
+      verificationMethod: [{
+        id: `${decoyWebId.replace('#decoy', '')}#k`,
+        type: 'Multikey',
+        controller: decoyWebId,
+        publicKeyMultibase: fformMultikey(decoyPk),
+      }],
+      authentication: [`${decoyWebId.replace('#decoy', '')}#k`],
+    }, { spaces: 2 });
+
     const sk = generateSecretKey();
     const subPk = getPublicKey(sk);
     const subWebId = 'http://sub.example.test/profile/card.jsonld#me';
@@ -360,6 +375,13 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const doc = await r.json();
     assert.strictEqual(doc.id, `did:nostr:${subPk}`);
     assert.strictEqual(doc.alsoKnownAs[0], subWebId);
+
+    // Cleanup: leave neither the decoy nor the index entry behind
+    // so the test isolates correctly even when re-run / reordered.
+    await fs.remove(decoyProfilePath);
+    delete idx[subWebId];
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.remove(path.join(accountsDir, `${accountId}.json`));
   });
 
   // No `it()` here — path containment is now exercised directly
@@ -701,41 +723,49 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
   //
   // `profilePathCandidates` returns the full ordered list. Tests
   // cover all three deployment shapes JSS supports.
-  const DATA_ROOT = '/srv/jss/data';
+  //
+  // DATA_ROOT is path.resolve()d so the assertions below build
+  // expected values via path.join — works on Windows (different
+  // separator/root) the same as on POSIX.
+  const DATA_ROOT = path.resolve('/srv/jss/data');
 
   it('path-mode named pod: <dataRoot>/<pod>/profile/card.jsonld', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
-    assert.ok(paths.includes('/srv/jss/data/alice/profile/card.jsonld'),
-      `expected path-mode candidate; got ${paths.join(', ')}`);
+    const expected = path.join(DATA_ROOT, 'alice', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
   });
 
   it('root pod: <dataRoot>/profile/card.jsonld', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me');
-    assert.ok(paths.includes('/srv/jss/data/profile/card.jsonld'),
-      `expected root-pod candidate; got ${paths.join(', ')}`);
+    const expected = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
   });
 
   it('subdomain-mode pod: emits <dataRoot>/<podName>/profile/... when host first label matches podName', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me', 'test');
-    assert.ok(paths.includes('/srv/jss/data/profile/card.jsonld'),
-      `expected path-mode candidate; got ${paths.join(', ')}`);
-    assert.ok(paths.includes('/srv/jss/data/test/profile/card.jsonld'),
-      `expected subdomain candidate; got ${paths.join(', ')}`);
+    const pathMode = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    const subdomain = path.join(DATA_ROOT, 'test', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(pathMode),
+      `expected path-mode candidate ${pathMode}; got ${paths.join(', ')}`);
+    assert.ok(paths.includes(subdomain),
+      `expected subdomain candidate ${subdomain}; got ${paths.join(', ')}`);
   });
 
   it('does NOT emit a subdomain candidate when podName is omitted', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
-    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
   });
 
   it('does NOT emit a subdomain candidate when podName does not match the host first label', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me', 'me');
-    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
   });
 
   it('does NOT emit a subdomain candidate for a single-label host', () => {
     const { paths } = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me', 'localhost');
-    assert.deepStrictEqual(paths, ['/srv/jss/data/profile/card.jsonld']);
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
   });
 
   it('returns empty paths for an unparseable webId', () => {
