@@ -14,7 +14,11 @@ import fs from 'fs-extra';
 import { createServer as createNetServer } from 'net';
 import { generateSecretKey, getPublicKey } from '../src/nostr/event.js';
 import { createServer } from '../src/server.js';
-import { _resetIndexForTests, profilePathFromWebId } from '../src/idp/well-known-did-nostr.js';
+import {
+  _resetIndexForTests,
+  profilePathFromWebId,
+  profilePathCandidates,
+} from '../src/idp/well-known-did-nostr.js';
 import { extractNostrPubkeysFromProfile } from '../src/auth/nostr.js';
 
 const TEST_HOST = '127.0.0.1';
@@ -299,6 +303,123 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const doc = await r.json();
     assert.strictEqual(doc.id, `did:nostr:${rootPk}`);
     assert.strictEqual(doc.alsoKnownAs[0], rootWebId);
+  });
+
+  it('indexes subdomain-mode pods (#411): /<host-first-label>/profile/...', async () => {
+    // Subdomain layout: WebID host = `<podname>.<basedomain>` and
+    // the profile lives at `<DATA_ROOT>/<podname>/profile/card.jsonld`
+    // (NOT at `<DATA_ROOT>/profile/card.jsonld`). Pre-#411 the
+    // indexer derived the path from `webIdUrl.pathname` only,
+    // dropped the subdomain, and ENOENT-skipped every subdomain
+    // pod silently — so the entire `Sign in with Schnorr` zero-
+    // typing UX fell through to the typed-username fallback on
+    // every subdomain-mode deployment (e.g. solid.social).
+    //
+    // This test ALSO exercises the "first candidate exists but
+    // belongs to a different account" path: we write a coexisting
+    // root-pod profile at `<TEST_DATA_DIR>/profile/card.jsonld`
+    // for an UNRELATED account (different webId, different VM).
+    // The subdomain account's path-mode candidate hits that file,
+    // fails the @id check, and the loop must fall through to the
+    // subdomain candidate. Self-contained — doesn't depend on
+    // earlier tests' fixtures or test-execution order.
+    //
+    // Snapshot any pre-existing file at the decoy path so the
+    // earlier "indexes root-level pods" test's fixture (or any
+    // future fixture sharing that path) can be restored after
+    // this test runs. Without this snapshot, deleting the decoy
+    // unconditionally would silently wipe legitimate state.
+    const decoyPk = getPublicKey(generateSecretKey()); // unrelated key
+    const decoyProfilePath = path.join(TEST_DATA_DIR, 'profile', 'card.jsonld');
+    const decoyWebId = `${baseUrl}/profile/card.jsonld#decoy`;
+    const sk = generateSecretKey();
+    const subPk = getPublicKey(sk);
+    const subWebId = 'http://sub.example.test/profile/card.jsonld#me';
+    const subProfilePath = path.join(TEST_DATA_DIR, 'sub', 'profile', 'card.jsonld');
+    const VM_ID = 'http://sub.example.test/profile/card.jsonld#k';
+    const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
+    const indexPath = path.join(accountsDir, '_webid_index.json');
+    const accountId = 'subdomain-pod-test-account';
+
+    // Snapshot any pre-existing file at the decoy path so a prior
+    // fixture (e.g. the "indexes root-level pods" test's profile
+    // at the same location) can be restored at cleanup. ENOENT
+    // means "didn't exist; remove on cleanup."
+    let decoySnapshot = null;
+    try {
+      decoySnapshot = await fs.readFile(decoyProfilePath, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+
+    // Mutate fixtures inside try; cleanup runs regardless of
+    // whether assertions throw, so a future regression doesn't
+    // leak filesystem state and turn the suite order-dependent.
+    try {
+      await fs.ensureDir(path.dirname(decoyProfilePath));
+      await fs.writeJson(decoyProfilePath, {
+        '@context': 'https://www.w3.org/ns/solid/v1',
+        '@id': decoyWebId,
+        verificationMethod: [{
+          id: `${decoyWebId.replace('#decoy', '')}#k`,
+          type: 'Multikey',
+          controller: decoyWebId,
+          publicKeyMultibase: fformMultikey(decoyPk),
+        }],
+        authentication: [`${decoyWebId.replace('#decoy', '')}#k`],
+      }, { spaces: 2 });
+
+      await fs.ensureDir(path.dirname(subProfilePath));
+      await fs.writeJson(subProfilePath, {
+        '@context': 'https://www.w3.org/ns/solid/v1',
+        '@id': subWebId,
+        verificationMethod: [{
+          id: VM_ID,
+          type: 'Multikey',
+          controller: subWebId,
+          publicKeyMultibase: fformMultikey(subPk),
+        }],
+        authentication: [VM_ID],
+      }, { spaces: 2 });
+
+      const idx = await fs.readJson(indexPath);
+      idx[subWebId] = accountId;
+      await fs.writeJson(indexPath, idx, { spaces: 2 });
+      await fs.writeJson(path.join(accountsDir, `${accountId}.json`), {
+        id: accountId,
+        podName: 'sub',
+        webId: subWebId,
+        email: 'sub@example.test',
+      }, { spaces: 2 });
+
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr/${subPk}.json`);
+      assert.strictEqual(r.status, 200, 'subdomain-mode pod must be findable');
+      const doc = await r.json();
+      assert.strictEqual(doc.id, `did:nostr:${subPk}`);
+      assert.strictEqual(doc.alsoKnownAs[0], subWebId);
+    } finally {
+      // Restore decoy (or delete if it was created by this test).
+      if (decoySnapshot !== null) {
+        try { await fs.writeFile(decoyProfilePath, decoySnapshot, 'utf8'); }
+        catch { /* best effort */ }
+      } else {
+        try { await fs.remove(decoyProfilePath); } catch { /* best effort */ }
+      }
+      // Subdomain fixture file + empty parent dirs. fs-extra's
+      // `remove` handles both files and (recursively) dirs and
+      // is a no-op on missing paths — replaces the deprecated
+      // node `fs.rmdir`.
+      try { await fs.remove(subProfilePath); } catch { /* best effort */ }
+      try { await fs.remove(path.dirname(subProfilePath)); } catch { /* best effort */ }
+      try { await fs.remove(path.dirname(path.dirname(subProfilePath))); } catch { /* best effort */ }
+      // Index entry + account record.
+      try {
+        const idx = await fs.readJson(indexPath);
+        delete idx[subWebId];
+        await fs.writeJson(indexPath, idx, { spaces: 2 });
+      } catch { /* best effort */ }
+      try { await fs.remove(path.join(accountsDir, `${accountId}.json`)); } catch { /* best effort */ }
+    }
   });
 
   // No `it()` here — path containment is now exercised directly
@@ -627,5 +748,106 @@ describe('profilePathFromWebId — DATA_ROOT containment', () => {
         `${evil} → ${p} escaped DATA_ROOT`,
       );
     }
+  });
+});
+
+describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
+  // The original `profilePathFromWebId` only emitted ONE candidate
+  // (`<dataRoot><pathname>`), which broke subdomain-mode pods on
+  // solid.social: account `b0b1707f-...` with WebID
+  // `https://test.solid.social/profile/card.jsonld#me` lives on disk
+  // at `<dataRoot>/test/profile/card.jsonld`, but the indexer was
+  // looking at `<dataRoot>/profile/card.jsonld` and ENOENT-ing.
+  //
+  // `profilePathCandidates` returns the full ordered list. Tests
+  // cover all three deployment shapes JSS supports.
+  //
+  // DATA_ROOT is path.resolve()d so the assertions below build
+  // expected values via path.join — works on Windows (different
+  // separator/root) the same as on POSIX.
+  const DATA_ROOT = path.resolve('/srv/jss/data');
+
+  it('path-mode named pod: <dataRoot>/<pod>/profile/card.jsonld', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
+    const expected = path.join(DATA_ROOT, 'alice', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
+  });
+
+  it('root pod: <dataRoot>/profile/card.jsonld', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me');
+    const expected = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
+  });
+
+  it('subdomain-mode pod: emits <dataRoot>/<podName>/profile/... when host first label matches podName', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me', 'test');
+    const pathMode = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    const subdomain = path.join(DATA_ROOT, 'test', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(pathMode),
+      `expected path-mode candidate ${pathMode}; got ${paths.join(', ')}`);
+    assert.ok(paths.includes(subdomain),
+      `expected subdomain candidate ${subdomain}; got ${paths.join(', ')}`);
+  });
+
+  it('does NOT emit a subdomain candidate when podName is omitted', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
+  });
+
+  it('does NOT emit a subdomain candidate when podName does not match the host first label', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me', 'me');
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
+  });
+
+  it('does NOT emit a subdomain candidate for a single-label host', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me', 'localhost');
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
+  });
+
+  it('returns empty paths for an unparseable webId', () => {
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, 'not a url'), { paths: [], skipped: [] });
+    assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, null), { paths: [], skipped: [] });
+  });
+
+  it('every candidate stays inside dataRootAbs', () => {
+    const cases = [
+      ['https://example.com/alice/profile/card.jsonld#me', 'alice'],
+      ['https://alice.example.com/profile/card.jsonld#me', 'alice'],
+      ['https://h/../../../etc/passwd', null],
+      ['https://h.com/../../../etc/passwd', 'h'],
+    ];
+    for (const [w, podName] of cases) {
+      const { paths } = profilePathCandidates(DATA_ROOT, w, podName);
+      for (const c of paths) {
+        assert.ok(c === DATA_ROOT || c.startsWith(DATA_ROOT + path.sep),
+          `${w} (podName=${podName}) → ${c} escaped DATA_ROOT`);
+      }
+    }
+  });
+
+  it('returns the `{ paths, skipped }` shape so the caller can surface diagnostics', () => {
+    // Restructure of pass-2: the function returns BOTH the
+    // containment-passed paths AND a `skipped` list of rejected
+    // candidates with reasons. rebuildPubkeyIndex folds `skipped`
+    // into its per-account failure log so operators can
+    // distinguish "traversal/misconfig" from "profile not on disk."
+    //
+    // Through normal URL-parsed input the `skipped` list stays
+    // empty (URL normalization prevents traversal in pathname,
+    // and the podName-gated subdomain candidate rejects mismatches
+    // before path-resolve ever runs). The field exists as
+    // defense-in-depth for any future caller that bypasses URL
+    // parsing or feeds an externally-derived podName, AND so the
+    // rebuild loop's failure log has a hook to surface
+    // containment rejections instead of dropping them silently.
+    const result = profilePathCandidates(DATA_ROOT,
+      'https://alice.example.com/profile/card.jsonld#me', 'alice');
+    assert.ok(Array.isArray(result.paths), 'paths must be an array');
+    assert.ok(Array.isArray(result.skipped), 'skipped must be an array');
+    assert.ok(result.paths.length > 0, 'happy-path must yield paths');
+    assert.deepStrictEqual(result.skipped, [],
+      'normal URL-parsed input must produce no skipped entries');
   });
 });

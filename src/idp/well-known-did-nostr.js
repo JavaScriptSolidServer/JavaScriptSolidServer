@@ -138,45 +138,85 @@ async function rebuildPubkeyIndex() {
       continue;
     }
     if (!account?.webId) continue;
-    const profilePath = profilePathFromWebId(dataRoot, account.webId, accountId);
-    if (!profilePath) continue;
-    let profile;
+    // Probe candidate paths in order until one ALSO passes the @id
+    // check. Multiple candidates can exist on disk simultaneously
+    // (e.g. root pod and named pods coexisting under the same
+    // dataRoot, or a subdomain pod with a coincidentally-named
+    // path-mode dir). The path-mode candidate may exist but belong
+    // to a different account — keep going until we find one whose
+    // declared `@id` matches account.webId.
+    const { paths: candidates, skipped: containmentSkipped } =
+      profilePathCandidates(dataRoot, account.webId, account.podName);
+    // Track per-candidate failure reasons so operators get a precise
+    // diagnostic when nothing matches — distinguishing
+    // "profile genuinely missing" from "@id mismatch" from "oversized"
+    // from "containment rejected".
+    const reasons = containmentSkipped.map(s => `${s.path}: ${s.reason}`);
+    let profile = null;
     let mtimeMs = 0;
-    try {
-      const stat = await fs.stat(profilePath);
-      mtimeMs = stat.mtimeMs;
-      // Size cap to bound per-rebuild memory/CPU. A user can write
-      // their own profile, and TTL-expired rebuilds can be triggered
-      // by attacker-driven NIP-98 traffic — without this an
-      // adversarially-large profile could pin the event loop on
-      // JSON.parse during the rebuild loop.
-      if (stat.size > MAX_PROFILE_BYTES) {
-        console.error(
-          `well-known-did-nostr: skipping account ${accountId} ` +
-          `— profile size ${stat.size} > ${MAX_PROFILE_BYTES} bytes`,
-        );
+    for (const candidate of candidates) {
+      let stat;
+      try {
+        stat = await fs.stat(candidate);
+      } catch (err) {
+        reasons.push(`${candidate}: ${err.code || 'stat-error'}`);
         continue;
       }
-      const text = await fs.readFile(profilePath, 'utf8');
-      profile = JSON.parse(text);
-    } catch (err) {
-      // Log so operators can debug "why isn't my pubkey publishing?".
-      // Rate-limited per account so a single perpetually-broken
-      // profile can't flood logs every TTL cycle.
-      logProfileFailure(accountId, profilePath, err);
-      continue; // unreadable / malformed — skip
+      if (!stat.isFile()) {
+        reasons.push(`${candidate}: not-a-regular-file`);
+        continue;
+      }
+      if (stat.size > MAX_PROFILE_BYTES) {
+        // Funnel through the rate-limited per-account logger
+        // (when no candidate matches at all). Direct console.error
+        // would spam logs every TTL rebuild for any account whose
+        // profile is oversized at one candidate but matches at
+        // another — and on every rebuild for genuinely-oversized
+        // accounts.
+        reasons.push(`${candidate}: oversized (${stat.size} > ${MAX_PROFILE_BYTES})`);
+        continue;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(await fs.readFile(candidate, 'utf8'));
+      } catch (err) {
+        reasons.push(`${candidate}: parse-error (${err.message})`);
+        continue;
+      }
+      const declaredSubject = absolutize(parsed?.['@id'] || parsed?.id, stripHashIfAny(account.webId));
+      if (declaredSubject !== account.webId) {
+        reasons.push(`${candidate}: @id-mismatch (declared=${declaredSubject || '(none)'})`);
+        continue;
+      }
+      profile = parsed;
+      mtimeMs = stat.mtimeMs;
+      break;
     }
-    // CID semantics — match the resource-side checks:
-    // (1) profile's @id MUST match the account's webId (no fragment-
-    //     swapping attack via a stored profile that claims to be
-    //     someone else)
+    if (!profile) {
+      // Nothing on disk matched. Surface the precise per-candidate
+      // failure reasons so operators can distinguish ENOENT (profile
+      // genuinely missing) from @id mismatch (wrong subdomain config?)
+      // from containment rejection (malformed webId path) without
+      // having to grep the file system.
+      //
+      // Keep the `path` argument to logProfileFailure path-shaped so
+      // downstream log readers don't get a giant summary string in
+      // the `profile=...` field. Per-candidate detail goes into
+      // `err.message` as a single line.
+      const summary = reasons.length ? reasons.join(' | ') : '(no candidates)';
+      logProfileFailure(accountId, '(multiple candidates)', {
+        code: 'NO_CANDIDATE_MATCHED',
+        message: `no candidate profile matched ${account.webId} — tried: ${summary}`,
+      });
+      continue;
+    }
+    // CID semantics (continued) — match the resource-side checks:
     // (2) VM's controller MUST be in the profile's expected controller
     //     set (declared `controller`, with @id fallback)
     // (3) VM MUST be referenced from `authentication` — a key in
     //     verificationMethod alone (no auth membership) shouldn't be
     //     published as authentic
-    const profileSubject = absolutize(profile?.['@id'] || profile?.id, stripHashIfAny(account.webId));
-    if (!profileSubject || profileSubject !== account.webId) continue;
+    const profileSubject = account.webId;  // already validated above
     const expectedControllers = collectControllerIds(profile, profileSubject);
     if (expectedControllers.size === 0) continue;
     // Pass the already-validated absolute subject as the base. Without
@@ -259,6 +299,64 @@ export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
   }
   return resolved;
 }
+
+/**
+ * Build the candidate filesystem paths to probe for a given WebID,
+ * covering the deployment shapes JSS supports:
+ *
+ *   1. Path-mode named pod  (host=`example.com`, path=`/alice/profile/card.jsonld`)
+ *      → `<dataRoot>/alice/profile/card.jsonld`
+ *   2. Root pod (single-user) (host=`example.com`, path=`/profile/card.jsonld`)
+ *      → `<dataRoot>/profile/card.jsonld`
+ *   3. Subdomain-mode pod   (host=`alice.example.com`, path=`/profile/card.jsonld`)
+ *      → `<dataRoot>/alice/profile/card.jsonld`
+ *
+ * The subdomain candidate (3) is gated on `podName` matching the
+ * WebID host's first DNS label — without that gate, a root-pod
+ * WebID (`example.com`) would also emit `<dataRoot>/example/...`,
+ * which could be a different account's pod dir.
+ *
+ * Returns `{ paths, skipped }`:
+ *   - `paths` — absolute, containment-passed candidates to probe
+ *     in order
+ *   - `skipped` — diagnostic entries for paths rejected at this
+ *     stage (today only "outside-dataRoot"). Surfaced through the
+ *     rebuild loop's failure log so operators can distinguish
+ *     traversal / misconfig from "profile not on disk."
+ *
+ * @internal exported for tests
+ */
+export function profilePathCandidates(dataRoot, webId, podName = null) {
+  if (typeof webId !== 'string') return { paths: [], skipped: [] };
+  let url;
+  try { url = new URL(webId); } catch { return { paths: [], skipped: [] }; }
+  const pathnameRel = url.pathname.replace(/^\/+/, '');
+  const dataRootAbs = path.resolve(dataRoot);
+  const insideRoot = (p) => p === dataRootAbs || p.startsWith(dataRootAbs + path.sep);
+  const paths = [];
+  const skipped = [];
+  const consider = (...parts) => {
+    const r = path.resolve(dataRootAbs, ...parts);
+    if (!insideRoot(r)) {
+      skipped.push({ path: r, reason: 'outside-dataRoot' });
+      return;
+    }
+    if (!paths.includes(r)) paths.push(r);
+  };
+  // Path-mode named pod OR root pod.
+  consider(pathnameRel);
+  // Subdomain mode: only when the WebID host's first DNS label
+  // matches the account's podName (case-insensitive — DNS is).
+  if (typeof podName === 'string' && podName.length > 0) {
+    const host = url.hostname.toLowerCase();
+    const expected = podName.toLowerCase() + '.';
+    if (host.startsWith(expected)) {
+      consider(podName, pathnameRel);
+    }
+  }
+  return { paths, skipped };
+}
+
 
 function collectControllerIds(source, baseUrl) {
   const out = new Set();
