@@ -123,7 +123,13 @@ async function rebuildPubkeyIndex() {
     if (!profileSubject || profileSubject !== account.webId) continue;
     const expectedControllers = collectControllerIds(profile, profileSubject);
     if (expectedControllers.size === 0) continue;
-    const authIds = collectAuthenticationIds(profile);
+    // Pass the already-validated absolute subject as the base. Without
+    // this, profiles with a relative subject (e.g. `"@id": "#me"`)
+    // would absolutize their `authentication` entries against an
+    // unusable base, leaving the IDs relative — and then the
+    // `authIds.has(vmId)` check below would never match even when the
+    // VM is actually authenticated.
+    const authIds = collectAuthenticationIds(profile, stripHashIfAny(profileSubject));
 
     for (const { pubkey, vm } of extractNostrPubkeysFromProfile(profile)) {
       const vmId = absolutize(vm.id || vm['@id'], stripHashIfAny(profileSubject));
@@ -174,10 +180,16 @@ function collectControllerIds(source, baseUrl) {
   return out;
 }
 
-function collectAuthenticationIds(profile) {
+/**
+ * Resolve a profile's `authentication` entries to a Set of absolute
+ * IDs. Caller MUST pass an already-absolute base URL — re-deriving
+ * the base from `profile['@id']` here would fail when the profile
+ * subject is relative (e.g. `"@id": "#me"`), leaving the resulting
+ * IDs relative and silently breaking the auth-membership check.
+ */
+function collectAuthenticationIds(profile, baseUrl) {
   const out = new Set();
   const auth = profile?.authentication;
-  const baseUrl = stripHashIfAny(profile?.['@id'] || profile?.id || '');
   const list = Array.isArray(auth) ? auth : (auth ? [auth] : []);
   for (const ent of list) {
     let id;

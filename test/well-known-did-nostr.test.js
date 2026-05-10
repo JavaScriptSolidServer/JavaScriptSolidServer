@@ -200,6 +200,53 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     }
   });
 
+  it('handles profiles whose authentication entries are relative fragments', async () => {
+    // Profiles in the wild often use relative `#me`-style fragments
+    // for the subject. The indexer must absolutize `authentication`
+    // entries against the validated absolute subject, not re-derive
+    // the base from `profile['@id']` (which would itself be relative
+    // and produce unusable IDs).
+    //
+    // We simulate this by writing the profile with the `@id` set to
+    // a relative fragment and the authentication entry as a relative
+    // fragment too. If the absolute base is honored, `#nostr-rel`
+    // resolves to the same VM ID as the absolutized version inside
+    // `verificationMethod`, the auth-membership check passes, and
+    // the DID doc is published.
+    const sk = generateSecretKey();
+    const pk = getPublicKey(sk);
+    const profilePath = path.join(TEST_DATA_DIR, 'alice', 'profile', 'card.jsonld');
+    const profile = await fs.readJson(profilePath);
+    const absSubject = profile['@id'];           // e.g. http://.../alice/profile/card.jsonld#me
+    const absSubjectNoHash = absSubject.replace('#me', '');
+    profile['@id'] = '#me';                       // relative subject
+    profile.verificationMethod = [{
+      id: `${absSubjectNoHash}#nostr-rel`,        // VM stays absolute
+      type: 'Multikey',
+      controller: absSubject,
+      publicKeyMultibase: fformMultikey(pk),
+    }];
+    profile.authentication = ['#nostr-rel'];      // relative auth ref
+    await fs.writeJson(profilePath, profile, { spaces: 2 });
+
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${pk}.json`);
+    assert.strictEqual(r.status, 200);
+    const doc = await r.json();
+    assert.strictEqual(doc.id, `did:nostr:${pk}`);
+
+    // Restore the profile so the rest of the suite (and any later
+    // re-runs without isolation) sees a well-formed absolute subject.
+    profile['@id'] = absSubject;
+    profile.verificationMethod = [{
+      id: `${absSubjectNoHash}#nostr-key-1`,
+      type: 'Multikey',
+      controller: absSubject,
+      publicKeyMultibase: fformMultikey(alicePk),
+    }];
+    profile.authentication = [`${absSubjectNoHash}#nostr-key-1`];
+    await fs.writeJson(profilePath, profile, { spaces: 2 });
+  });
+
   it('does NOT publish a VM that is in verificationMethod but not in authentication', async () => {
     // Add a key to the profile under verificationMethod but explicitly
     // omit it from `authentication` — the user has decided this key
