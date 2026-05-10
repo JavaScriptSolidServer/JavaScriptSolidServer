@@ -75,7 +75,19 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
       'authentication':     { '@id': 'cid:authentication', '@type': '@id', '@container': '@set' },
       'assertionMethod':    { '@id': 'cid:assertionMethod', '@type': '@id', '@container': '@set' },
       'publicKeyJwk':       { '@id': 'cid:publicKeyJwk', '@type': '@json' },
-      'publicKeyMultibase': { '@id': 'cid:publicKeyMultibase' }
+      'publicKeyMultibase': { '@id': 'cid:publicKeyMultibase' },
+      // CID v1 verificationMethod *class* names (#417). Without these
+      // term mappings, an app PATCHing in a VM with `type: "Multikey"`
+      // (the spec-example shape) emits a bare relative-IRI `<Multikey>`
+      // when JSS conneg-converts the profile to Turtle — which then
+      // resolves against the document's base URL to a fictional class
+      // like `<pod>/profile/Multikey`. Mapping the class names here
+      // means the bare term `"Multikey"` in JSON-LD expands correctly
+      // (cid:Multikey → https://www.w3.org/ns/cid/v1#Multikey) for both
+      // JSON-LD processors AND our Turtle conneg layer. Naive JSON
+      // readers comparing `type === "Multikey"` continue to work.
+      'Multikey':           'cid:Multikey',
+      'JsonWebKey':         'cid:JsonWebKey'
     },
     '@id': webId,
     '@type': ['foaf:Person', 'schema:Person'],
