@@ -182,9 +182,16 @@ export async function fetchWithRedirectGuard(initialUrl, {
  * @returns {Promise<string|null>} WebID URL or null
  */
 export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_RESOLVER) {
-  if (!pubkey || pubkey.length !== 64) {
+  // Pubkey is attacker-controlled (it comes off a NIP-98 event)
+  // and is interpolated into the resolver URL path and cache key.
+  // Length-only validation isn't enough — characters like `/` or
+  // `..` would turn this into an arbitrary-path fetch against the
+  // resolver origin and produce confusing cache entries. Enforce
+  // the documented shape: 64 lowercase hex chars.
+  if (typeof pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(pubkey)) {
     return null;
   }
+  pubkey = pubkey.toLowerCase();
 
   // Cache key includes the resolver URL because different resolvers
   // can legitimately disagree about the same pubkey (one might have
@@ -274,13 +281,25 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     // accept it. The verifier checks the Alice-side profile for
     // a verificationMethod that actually claims this pubkey, so
     // the binding can't be forged from outside Alice's profile.
-    const verified = await verifyWebIdBacklink(webId, pubkey);
-
+    let verified;
+    try {
+      verified = await verifyWebIdBacklink(webId, pubkey);
+    } catch (err) {
+      if (err instanceof TransientBacklinkError) {
+        // Backlink fetch flapped (network / SSRF / redirect / 5xx).
+        // Don't pin a 5-minute null — retry sooner.
+        setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+        return null;
+      }
+      throw err;
+    }
     if (verified) {
       setCacheEntry(cacheKey, { webId, timestamp: Date.now() });
       return webId;
     }
-
+    // Verified absence: the WebID profile responded successfully but
+    // didn't claim the pubkey. Steady-state answer; cache the full
+    // CACHE_TTL so we don't hammer the resolver chain.
     setCacheEntry(cacheKey, { webId: null, timestamp: Date.now() });
     return null;
 
@@ -292,78 +311,97 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
   }
 }
 
+/** Sentinel error class: backlink fetch failed transiently (network,
+ *  SSRF refusal, redirect cap, timeout, etc.). Caller should cache
+ *  with the short failureTtl so a flapping WebID host doesn't pin a
+ *  null answer for the full 5-minute steady-state TTL. */
+class TransientBacklinkError extends Error {
+  constructor(message) { super(message); this.name = 'TransientBacklinkError'; }
+}
+
 /**
- * Verify WebID profile links back to did:nostr
+ * Verify WebID profile links back to did:nostr.
+ *
+ * Returns:
+ *   - `true` — linkage found (CID-VM or owl:sameAs)
+ *   - `false` — fetched and parsed, but no linkage (verified
+ *     absence — caller caches with the steady-state TTL)
+ *   - throws `TransientBacklinkError` — fetch/parse failed
+ *     (caller catches and caches with the short failureTtl)
+ *
  * @param {string} webId - WebID URL
  * @param {string} pubkey - Nostr pubkey
  * @returns {Promise<boolean>}
  */
 async function verifyWebIdBacklink(webId, pubkey) {
+  const expectedDid = `did:nostr:${pubkey.toLowerCase()}`;
+  // The WebID came out of an externally-fetched DID doc, so it's
+  // untrusted until verified. fetchWithRedirectGuard re-runs the
+  // SSRF check on every redirect hop and refuses cross-origin
+  // redirects, so a forged DID doc can't bounce us through an
+  // open-redirect into a private IP.
+  let backlinkRes;
   try {
-    const expectedDid = `did:nostr:${pubkey.toLowerCase()}`;
-    // The WebID came out of an externally-fetched DID doc, so it's
-    // untrusted until verified. fetchWithRedirectGuard re-runs the
-    // SSRF check on every redirect hop and refuses cross-origin
-    // redirects, so a forged DID doc can't bounce us through an
-    // open-redirect into a private IP.
-    let backlinkRes;
-    try {
-      backlinkRes = await fetchWithRedirectGuard(webId, {
-        accept: 'application/ld+json, application/json, text/html',
-      });
-    } catch {
-      return false;
-    }
-    if (backlinkRes.status < 200 || backlinkRes.status >= 300) {
-      return false;
-    }
-    const contentType = (backlinkRes.headers.get('content-type') || '');
-    const text = backlinkRes.body;
+    backlinkRes = await fetchWithRedirectGuard(webId, {
+      accept: 'application/ld+json, application/json, text/html',
+    });
+  } catch (err) {
+    // Network/SSRF/redirect/size/timeout — transient.
+    throw new TransientBacklinkError(`fetch failed: ${err.message}`);
+  }
+  if (backlinkRes.status >= 500 && backlinkRes.status < 600) {
+    // Server error — transient (5xx is "try again", not "no").
+    throw new TransientBacklinkError(`HTTP ${backlinkRes.status}`);
+  }
+  if (backlinkRes.status < 200 || backlinkRes.status >= 300) {
+    // Client error or redirect that didn't resolve — verified absence.
+    return false;
+  }
+  const contentType = (backlinkRes.headers.get('content-type') || '');
+  const text = backlinkRes.body;
 
-    // Two acceptable linkage shapes (either is sufficient):
-    //   1. CID v1: a verificationMethod containing this Nostr pubkey
-    //      that is referenced from `authentication`. This is what
-    //      JSS profiles ship and what the LWS10-CID resource-side
-    //      verifier checks. Stronger than sameAs because the user
-    //      is asserting the key, not merely an identity equivalence.
-    //   2. owl:sameAs / schema:sameAs to did:nostr:<pubkey>. Older
-    //      shape; still accepted for compatibility.
-    // Pass `backlinkRes.url` (the FINAL post-redirect URL) as the
-    // base for absolutizing relative IDs in the profile. Profiles
-    // with a relative subject (`"@id": "#me"`) and absolute VM IDs
-    // can't otherwise be absolutized correctly by checkCidVmBacklink.
-    const checkProfile = (jsonLd) =>
-      checkCidVmBacklink(jsonLd, pubkey, backlinkRes.url) ||
-      checkSameAsLink(jsonLd, expectedDid);
+  // Two acceptable linkage shapes (either is sufficient):
+  //   1. CID v1: a verificationMethod containing this Nostr pubkey
+  //      that is referenced from `authentication`. This is what
+  //      JSS profiles ship and what the LWS10-CID resource-side
+  //      verifier checks. Stronger than sameAs because the user
+  //      is asserting the key, not merely an identity equivalence.
+  //   2. owl:sameAs / schema:sameAs to did:nostr:<pubkey>. Older
+  //      shape; still accepted for compatibility.
+  // Pass `backlinkRes.url` (the FINAL post-redirect URL) as the
+  // base for absolutizing relative IDs in the profile. Profiles
+  // with a relative subject (`"@id": "#me"`) and absolute VM IDs
+  // can't otherwise be absolutized correctly by checkCidVmBacklink.
+  const checkProfile = (jsonLd) =>
+    checkCidVmBacklink(jsonLd, pubkey, backlinkRes.url) ||
+    checkSameAsLink(jsonLd, expectedDid);
 
-    // Handle HTML with JSON-LD data island
-    if (contentType.includes('text/html')) {
-      const jsonLdMatch = text.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
-      if (jsonLdMatch) {
-        try {
-          return checkProfile(JSON.parse(jsonLdMatch[1]));
-        } catch {
-          return false;
-        }
-      }
-      return false;
-    }
-
-    // Handle JSON-LD directly
-    if (contentType.includes('json')) {
+  // Handle HTML with JSON-LD data island
+  if (contentType.includes('text/html')) {
+    const jsonLdMatch = text.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+    if (jsonLdMatch) {
       try {
-        return checkProfile(JSON.parse(text));
+        return checkProfile(JSON.parse(jsonLdMatch[1]));
       } catch {
+        // Parsed bytes but the JSON-LD island was malformed —
+        // verified absence (the host responded; the linkage is
+        // genuinely not there in a usable form).
         return false;
       }
     }
-
-    return false;
-
-  } catch (err) {
-    rateLimitedError(`backlink:${webId}`, `WebID backlink verification error for ${webId}: ${err.message}`);
     return false;
   }
+
+  // Handle JSON-LD directly
+  if (contentType.includes('json')) {
+    try {
+      return checkProfile(JSON.parse(text));
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 /**

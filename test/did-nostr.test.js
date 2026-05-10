@@ -313,6 +313,31 @@ describe('DID:nostr Resolution', () => {
     });
   });
 
+  describe('Pubkey input validation', () => {
+    // Pubkey is attacker-controlled (NIP-98 event) and is
+    // interpolated into the resolver URL path and cache key.
+    // Length-only validation lets a malicious pubkey containing
+    // `/` or other chars rewrite the URL path on the resolver
+    // origin and pollute the cache.
+    it('rejects non-hex pubkeys without making any request', async () => {
+      // 64-character pubkey containing a path separator —
+      // length-only validation would let this through and
+      // cause an arbitrary-path fetch on the resolver origin.
+      const evil = 'a'.repeat(31) + '/' + 'b'.repeat(32);
+      assert.strictEqual(evil.length, 64);
+      const out = await resolveDidNostrToWebId(evil, 'http://nonexistent.invalid:1');
+      assert.strictEqual(out, null);
+    });
+
+    it('rejects too-short and non-string pubkeys', async () => {
+      assert.strictEqual(await resolveDidNostrToWebId('abc'), null);
+      assert.strictEqual(await resolveDidNostrToWebId(null), null);
+      assert.strictEqual(await resolveDidNostrToWebId(42), null);
+      assert.strictEqual(await resolveDidNostrToWebId('a'.repeat(63)), null);
+      assert.strictEqual(await resolveDidNostrToWebId('a'.repeat(65)), null);
+    });
+  });
+
   describe('Cache key includes resolverUrl', () => {
     // Cross-resolver leakage: different resolvers can legitimately
     // disagree about the same pubkey (one might have a DID doc,
