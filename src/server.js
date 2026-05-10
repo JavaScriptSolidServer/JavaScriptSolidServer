@@ -11,6 +11,7 @@ import { authorize, handleUnauthorized } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
+import { buildWellKnownDidNostrHandler } from './idp/well-known-did-nostr.js';
 import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
 import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
@@ -650,6 +651,16 @@ export function createServer(options = {}) {
       }
     }
   };
+
+  // /.well-known/did/nostr/<pubkey>(.json|.jsonld)? — did:nostr HTTP
+  // resolution for accounts on this pod (#407). Registered before the
+  // LDP wildcard so it actually matches; without this the
+  // dynamic-segment + .json suffix gets swallowed by the wildcard
+  // GET /* handler below and never reaches our route.
+  if (idpEnabled) {
+    const wellKnownDidNostr = buildWellKnownDidNostrHandler({ dataRoot: options.root });
+    fastify.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+  }
 
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)

@@ -282,10 +282,13 @@ export async function verifyNostrAuth(request) {
     return { webId: vmWebId, error: null };
   }
 
-  // Second lookup: existing did:nostr DID-document resolver. Fetches
-  // an external DID doc (e.g. nostr.social/.well-known/...) and checks
-  // bidirectional alsoKnownAs ↔ WebID linking.
-  const resolvedWebId = await resolveDidNostrToWebId(event.pubkey);
+  // Second lookup: did:nostr DID-document resolver. Tries the
+  // request's own host first (so a local account's auto-published
+  // DID doc per #407 resolves with no external network hop) before
+  // falling back to the configured external resolver
+  // (nostr.social etc.) for cross-pod identities.
+  const resolvers = buildResolverList(request);
+  const resolvedWebId = await resolveDidNostrToWebId(event.pubkey, resolvers);
   if (resolvedWebId) {
     return { webId: resolvedWebId, error: null };
   }
@@ -494,6 +497,30 @@ async function fetchProfileSafely(docUrl) {
   return fetchCidDocument(docUrl, { maxBytes: MAX_PROFILE_BYTES });
 }
 
+/**
+ * Build the ordered resolver list for did:nostr lookup.
+ *
+ * Local-first: try this pod's own well-known DID-doc endpoint
+ * (#407 — a JSS pod is its own DID resolver for its accounts) before
+ * falling back to the configured external resolver. For same-pod
+ * sign-ins this is a zero-network self-resolve; cross-pod identities
+ * still resolve via nostr.social etc.
+ */
+function buildResolverList(request) {
+  const list = [];
+  const headers = request.headers || {};
+  const proto = firstHeaderValue(headers['x-forwarded-proto']) || request.protocol || 'https';
+  const host  = firstHeaderValue(headers['x-forwarded-host'])
+              || request.hostname
+              || firstHeaderValue(headers.host);
+  if (host && /^[A-Za-z0-9.\-:[\]]+$/.test(host)) {
+    list.push(`${proto.toLowerCase()}://${host}/.well-known/did/nostr`);
+  }
+  // Fallback: keep the existing external resolver as last resort.
+  list.push('https://nostr.social/.well-known/did/nostr');
+  return list;
+}
+
 function firstHeaderValue(v) {
   if (!v) return null;
   // Fastify/Node header values can be string or string[].
@@ -563,6 +590,39 @@ export async function verifyNostrPubkeyAgainstWebId(webId, pubkeyHex) {
   if (!vmCtrls.some((c) => expectedCtrls.includes(c))) return false;
 
   return true;
+}
+
+/**
+ * Enumerate every Nostr pubkey declared in a profile's
+ * verificationMethod entries. Used by the well-known DID-nostr
+ * publisher (#407) to build a `pubkey → account` index.
+ *
+ * Returns an array of `{ pubkey: <64-hex>, vm: <entry> }` — empty if
+ * no Nostr-shaped VMs are present. Matches both encodings:
+ *   - f-form Multikey (publicKeyMultibase)
+ *   - JsonWebKey (kty: EC, crv: secp256k1) — derives x as the pubkey
+ */
+export function extractNostrPubkeysFromProfile(profile) {
+  if (!profile || typeof profile !== 'object') return [];
+  const out = [];
+  const vms = asArray(profile.verificationMethod);
+  for (const vm of vms) {
+    if (!vm || typeof vm !== 'object') continue;
+    if (typeof vm.publicKeyMultibase === 'string') {
+      const xonly = decodeFFormSecp256k1(vm.publicKeyMultibase);
+      if (xonly) out.push({ pubkey: xonly, vm });
+    } else if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
+      const jwk = vm.publicKeyJwk;
+      if (jwk.kty === 'EC' && (jwk.crv === 'secp256k1' || jwk.crv === 'P-256K') && typeof jwk.x === 'string') {
+        try {
+          const hex = Buffer.from(jwk.x.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+            .toString('hex').toLowerCase();
+          if (/^[0-9a-f]{64}$/.test(hex)) out.push({ pubkey: hex, vm });
+        } catch { /* skip */ }
+      }
+    }
+  }
+  return out;
 }
 
 /**
