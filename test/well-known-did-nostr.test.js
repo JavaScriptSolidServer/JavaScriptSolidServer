@@ -11,12 +11,26 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import path from 'path';
 import fs from 'fs-extra';
+import { createServer as createNetServer } from 'net';
 import { generateSecretKey, getPublicKey } from '../src/nostr/event.js';
-import { startTestServer, stopTestServer, getBaseUrl } from './helpers.js';
+import { createServer } from '../src/server.js';
 import { _resetIndexForTests } from '../src/idp/well-known-did-nostr.js';
 import { extractNostrPubkeysFromProfile } from '../src/auth/nostr.js';
 
+const TEST_HOST = '127.0.0.1';
 const TEST_DATA_DIR = './data';
+
+/** Pick an OS-assigned port up front so idpIssuer can include it. */
+async function getAvailablePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer();
+    srv.on('error', reject);
+    srv.listen(0, TEST_HOST, () => {
+      const port = srv.address().port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
 function fformMultikey(xOnlyHex, parity = '02') {
   return 'f' + 'e701' + parity + xOnlyHex.toLowerCase();
@@ -37,6 +51,7 @@ async function patchProfileWithMultikey(podName, pubkey) {
 }
 
 describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
+  let server;
   let baseUrl;
   let alicePk;
 
@@ -44,8 +59,24 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     // IdP must be enabled — pod creation only writes an account
     // record (the index this endpoint reads from) when the IdP is
     // running. Pods without IdP are out of scope for this MVP.
-    await startTestServer({ idp: true, idpIssuer: 'http://127.0.0.1' });
-    baseUrl = getBaseUrl();
+    //
+    // Match the pattern in test/idp.test.js: pick an available port
+    // BEFORE listen so we can pass the real baseUrl as idpIssuer.
+    // (oidc-provider behavior depends on the issuer being accurate;
+    // a static `http://127.0.0.1` with no port would mismatch.)
+    await fs.remove(TEST_DATA_DIR);
+    await fs.ensureDir(TEST_DATA_DIR);
+    const port = await getAvailablePort();
+    baseUrl = `http://${TEST_HOST}:${port}`;
+    server = createServer({
+      logger: false,
+      root: TEST_DATA_DIR,
+      idp: true,
+      idpIssuer: baseUrl,
+      forceCloseConnections: true,
+    });
+    await server.listen({ port, host: TEST_HOST });
+    process.env.DATA_ROOT = path.resolve(TEST_DATA_DIR);
     // IdP-enabled pod creation requires email + password (so the
     // account record is written to _webid_index.json).
     const r = await fetch(`${baseUrl}/.pods`, {
@@ -64,7 +95,8 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
   });
 
   after(async () => {
-    await stopTestServer();
+    await server.close();
+    await fs.remove(TEST_DATA_DIR);
   });
 
   beforeEach(() => {
@@ -119,6 +151,32 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
   it('returns 400 for a wrong-length hex pubkey', async () => {
     const r = await fetch(`${baseUrl}/.well-known/did/nostr/abcdef.json`);
     assert.strictEqual(r.status, 400);
+  });
+
+  it('responds to HEAD with the same headers as GET (no body)', async () => {
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${alicePk}.json`, { method: 'HEAD' });
+    assert.strictEqual(r.status, 200);
+    assert.match(r.headers.get('content-type') || '', /did\+json/);
+    assert.ok(r.headers.get('cache-control'));
+    assert.ok(r.headers.get('last-modified'));
+    // HEAD bodies must be empty.
+    const text = await r.text();
+    assert.strictEqual(text, '');
+  });
+
+  it('rejects writes (PUT/POST/PATCH/DELETE) with 405 Method Not Allowed', async () => {
+    // Without these explicit handlers, the wildcard write routes
+    // would accept unauthenticated writes under /.well-known/* (the
+    // namespace bypasses the WAC preHandler).
+    for (const method of ['PUT', 'POST', 'PATCH', 'DELETE']) {
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr/${alicePk}.json`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: method === 'DELETE' ? undefined : '{}',
+      });
+      assert.strictEqual(r.status, 405, `${method} should be 405`);
+      assert.match(r.headers.get('allow') || '', /GET/);
+    }
   });
 
   it('does NOT publish a VM that is in verificationMethod but not in authentication', async () => {

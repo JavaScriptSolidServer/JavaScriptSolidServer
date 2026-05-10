@@ -660,6 +660,24 @@ export function createServer(options = {}) {
   if (idpEnabled) {
     const wellKnownDidNostr = buildWellKnownDidNostrHandler();
     fastify.get('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+    // HEAD shares the GET implementation so headers (Content-Type,
+    // Cache-Control, Last-Modified, etc.) match. Without this the
+    // request falls through to the wildcard HEAD /* below and the
+    // LDP layer returns 404 because there's no on-disk file.
+    fastify.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
+    // The well-known namespace is read-only — published documents are
+    // generated, not stored. Block writes explicitly so they don't
+    // fall through to the wildcard write handlers (which would
+    // otherwise accept unauthenticated PUT/POST under
+    // /.well-known/* since that path is excluded from the auth
+    // preHandler).
+    const methodNotAllowed = async (request, reply) => reply.code(405)
+      .header('Allow', 'GET, HEAD, OPTIONS')
+      .send({ error: 'Method Not Allowed' });
+    fastify.put('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+    fastify.post('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+    fastify.patch('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+    fastify.delete('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
   }
 
   // LDP routes - using wildcard routing
