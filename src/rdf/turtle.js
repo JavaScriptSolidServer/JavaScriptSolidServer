@@ -165,6 +165,47 @@ function quadsToJsonLd(quads, baseUri, prefixes = {}) {
 }
 
 /**
+ * Read a JSON-LD node's identifier, accepting both the explicit
+ * `@id` form AND the unprefixed `id` alias that JSON-LD 1.1 treats
+ * as equivalent (and that Solid profiles in the wild use). Same
+ * fallback for `@type` / `type`.
+ *
+ * Without this aliasing, nested objects authored with `id`/`type`
+ * (e.g. a CID v1 verificationMethod entry) get silently dropped:
+ *   - the predicate-→-IRI quad isn't emitted (valueToTerm sees
+ *     no `@id` and returns null)
+ *   - the BFS enqueue check (`v['@id']`) is false, so the nested
+ *     object's own triples are never written either
+ *   - net result: the entire `cid:verificationMethod` predicate
+ *     and the `#nostr-key-1` resource block disappear from Turtle.
+ *
+ * #415.
+ */
+function getNodeId(n) {
+  if (!n || typeof n !== 'object') return undefined;
+  const v = n['@id'] !== undefined ? n['@id'] : n.id;
+  // Strict string-only — downstream resolveUri/`.startsWith` would
+  // throw on a number, null, or object. Malformed user content
+  // (a profile that authored `id: 42`) shouldn't crash conneg;
+  // treat non-string identifiers as absent.
+  return typeof v === 'string' ? v : undefined;
+}
+function getNodeType(n) {
+  if (!n || typeof n !== 'object') return undefined;
+  const v = n['@type'] !== undefined ? n['@type'] : n.type;
+  // Accept string OR array — expandUri/`.includes` would throw on
+  // anything else. For arrays, filter to string entries downstream
+  // (handled by Array.isArray + the per-entry expandUri call which
+  // assumes string; we filter here to be safe).
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) {
+    const strs = v.filter(t => typeof t === 'string');
+    return strs.length > 0 ? strs : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Convert JSON-LD to N3.js quads
  */
 function jsonLdToQuads(jsonLd, baseUri) {
@@ -181,8 +222,8 @@ function jsonLdToQuads(jsonLd, baseUri) {
     if (doc['@context']) {
       mergedContext = { ...mergedContext, ...doc['@context'] };
     }
-    // Each document with @id is a node (no @graph needed)
-    if (doc['@id']) {
+    // Each document with @id (or `id` alias) is a node (no @graph needed)
+    if (getNodeId(doc) !== undefined) {
       nodes.push(doc);
     }
   }
@@ -206,16 +247,18 @@ function jsonLdToQuads(jsonLd, baseUri) {
   const queue = [...nodes];
   for (let i = 0; i < queue.length; i++) {
     const node = queue[i];
-    if (!node['@id']) continue;
-    const subjectUri = resolveUri(node['@id'], baseUri);
+    const nodeId = getNodeId(node);
+    if (nodeId === undefined) continue;
+    const subjectUri = resolveUri(nodeId, baseUri);
 
     const subject = subjectUri.startsWith('_:')
       ? blankNode(subjectUri.slice(2))
       : namedNode(subjectUri);
 
-    // Handle @type
-    if (node['@type']) {
-      const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']];
+    // Handle @type (or `type` alias).
+    const nodeType = getNodeType(node);
+    if (nodeType !== undefined) {
+      const types = Array.isArray(nodeType) ? nodeType : [nodeType];
       for (const type of types) {
         const typeUri = expandUri(type, context);
         quads.push(quad(
@@ -226,9 +269,13 @@ function jsonLdToQuads(jsonLd, baseUri) {
       }
     }
 
-    // Handle other properties
+    // Handle other properties. Skip `@`-prefixed keys AND the `id`/
+    // `type` aliases (handled above as @id/@type) — emitting them as
+    // predicates would produce malformed triples like `<id>` and
+    // `<type>` since the names don't expand to URIs via context.
     for (const [key, value] of Object.entries(node)) {
       if (key.startsWith('@')) continue;
+      if (key === 'id' || key === 'type') continue;
 
       const predicateUri = expandUri(key, context);
       const predicate = namedNode(predicateUri);
@@ -243,15 +290,16 @@ function jsonLdToQuads(jsonLd, baseUri) {
         if (object) {
           quads.push(quad(subject, predicate, object));
         }
-        // If v is a nested node (object with @id and at least one non-@value
-        // own property beyond @id), enqueue it so its triples are also
-        // emitted. Object-identity tracking (WeakSet) prevents the same
-        // nested object from being enqueued twice, which would otherwise
-        // loop for graphs that reuse an object reference (cycles).
+        // If v is a nested node (object with @id/id and at least one
+        // own property beyond the identifier), enqueue it so its
+        // triples are also emitted. Object-identity tracking
+        // (WeakSet) prevents the same nested object from being
+        // enqueued twice, which would otherwise loop for graphs
+        // that reuse an object reference (cycles).
         if (v && typeof v === 'object' && !Array.isArray(v) &&
-            v['@id'] && v['@value'] === undefined &&
+            getNodeId(v) !== undefined && v['@value'] === undefined &&
             !enqueuedNested.has(v)) {
-          const hasOwnClaims = Object.keys(v).some(k => k !== '@id');
+          const hasOwnClaims = Object.keys(v).some(k => k !== '@id' && k !== 'id');
           if (hasOwnClaims) {
             enqueuedNested.add(v);
             queue.push(v);
@@ -348,9 +396,18 @@ function valueToTerm(value, baseUri, context, isIdType = false) {
 
   // Object values
   if (typeof value === 'object') {
-    // @id reference
-    if (value['@id']) {
-      const uri = resolveUri(value['@id'], baseUri);
+    // @id reference (or `id` alias — same JSON-LD 1.1 convention).
+    // This is what makes the predicate-→-IRI quad get emitted for
+    // nested objects authored with `id` instead of `@id`. Without
+    // it, an inline verificationMethod with `id`/`type` returned
+    // null here and the parent predicate triple was lost.
+    //
+    // String-only — a numeric or null `@id`/`id` would crash
+    // resolveUri's `.startsWith`. Treat as absent and fall through
+    // to the @value/@language branches below.
+    const rawObjId = value['@id'] !== undefined ? value['@id'] : value.id;
+    if (typeof rawObjId === 'string') {
+      const uri = resolveUri(rawObjId, baseUri);
       return uri.startsWith('_:')
         ? blankNode(uri.slice(2))
         : namedNode(uri);

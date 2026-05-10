@@ -85,6 +85,74 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       `Turtle output must not contain object-stringification, got:\n${content}`);
   });
 
+  it('nested object with `id`/`type` aliases survives the conversion (#415)', async () => {
+    // Solid profiles use the JSON-LD 1.1 `id`/`type` aliases for
+    // nested resources (no `@`). The converter must accept both
+    // forms — without this, a CID v1 verificationMethod object
+    // gets silently dropped:
+    //   - the `cid:verificationMethod` predicate isn't emitted
+    //   - the nested `#nostr-key-1` resource (Multikey, controller,
+    //     publicKeyMultibase) isn't emitted either
+    // Net: third-party Turtle consumers see `cid:authentication
+    // <#nostr-key-1>` with no description of `#nostr-key-1`.
+    const doc = {
+      '@context': {
+        cid: 'https://www.w3.org/ns/cid/v1#',
+        verificationMethod: { '@id': 'cid:verificationMethod', '@container': '@set' },
+        authentication: { '@id': 'cid:authentication', '@type': '@id', '@container': '@set' },
+        controller: { '@id': 'cid:controller', '@type': '@id' },
+        publicKeyMultibase: { '@id': 'cid:publicKeyMultibase' },
+      },
+      '@id': 'https://example.test/profile/card.jsonld#me',
+      verificationMethod: [{
+        // Aliases — `id`/`type`, not `@id`/`@type`.
+        id: 'https://example.test/profile/card.jsonld#k',
+        type: 'Multikey',
+        controller: 'https://example.test/profile/card.jsonld#me',
+        publicKeyMultibase: 'fe70102de7ec',
+      }],
+      authentication: ['https://example.test/profile/card.jsonld#k'],
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+
+    // The cid:verificationMethod predicate must connect #me to the VM.
+    assert.match(content, /cid:verificationMethod|<https:\/\/www\.w3\.org\/ns\/cid\/v1#verificationMethod>/,
+      `cid:verificationMethod predicate missing from Turtle:\n${content}`);
+    // The VM resource must be described — its type, controller, key.
+    assert.ok(content.includes('https://example.test/profile/card.jsonld#k'),
+      `VM #k must appear in Turtle:\n${content}`);
+    assert.match(content, /Multikey|<https:\/\/www\.w3\.org\/ns\/cid\/v1#Multikey>/,
+      `Multikey type missing from Turtle:\n${content}`);
+    assert.ok(content.includes('fe70102de7ec'),
+      `publicKeyMultibase value missing from Turtle:\n${content}`);
+    assert.match(content, /cid:controller|<https:\/\/www\.w3\.org\/ns\/cid\/v1#controller>/,
+      `cid:controller predicate missing on the VM:\n${content}`);
+  });
+
+  it('malformed `id`/`type` values are silently dropped, not crashed on (#415 review)', async () => {
+    // Profiles in the wild can have malformed user-authored content
+    // — e.g. `id: 42` or `type: null`. The converter must NOT throw
+    // (downstream `resolveUri.startsWith` and `expandUri.includes`
+    // assume strings); it should treat the malformed value as absent
+    // and skip the affected resource cleanly.
+    const doc = {
+      '@context': { 'cid': 'https://www.w3.org/ns/cid/v1#' },
+      '@id': 'https://example.test/s',
+      // Nested object with a non-string `id` — must not crash.
+      'cid:bad1': { id: 42, 'cid:foo': 'x' },
+      // Nested object with a null `type` — must not crash.
+      'cid:bad2': { id: 'https://example.test/n2', type: null, 'cid:foo': 'x' },
+      // Array `type` with mixed string/non-string entries — string
+      // entries should still emit.
+      'cid:mixed': { id: 'https://example.test/n3', type: ['Multikey', 42, null], 'cid:foo': 'x' },
+    };
+    const { content } = await fromJsonLd(doc, 'text/turtle', 'https://example.test/', true);
+    assert.ok(typeof content === 'string', 'must produce a string output, not throw');
+    // The valid string type entry should survive in the mixed-type case.
+    assert.ok(content.includes('https://example.test/n3'),
+      `node n3 should appear:\n${content}`);
+  });
+
   it('cyclical nested node reference does not hang', async () => {
     // Two nested nodes reference each other. BFS must not loop.
     const a = { '@id': 'https://example.test/a', 'ex:knows': null };
