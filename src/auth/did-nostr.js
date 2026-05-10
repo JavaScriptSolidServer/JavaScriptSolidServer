@@ -8,6 +8,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { extractNostrPubkeysFromProfile } from './nostr-keys.js';
 
 // Default DID resolver endpoint
 const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
@@ -56,20 +57,6 @@ function rateLimitedError(key, message) {
   const suffix = suppressed > 0 ? ` (${suppressed} similar suppressed)` : '';
   console.error(`${message}${suffix}`);
   errorLogTracker.set(key, { count: 0, lastLogged: now });
-}
-
-/**
- * Are two URLs same-origin? Used as a shortcut in the resolver: a DID
- * doc served from the same origin as the WebID it claims is
- * authoritative and doesn't need a bidirectional sameAs check.
- */
-function sameOrigin(urlA, urlB) {
-  if (typeof urlA !== 'string' || typeof urlB !== 'string') return false;
-  try {
-    return new URL(urlA).origin === new URL(urlB).origin;
-  } catch {
-    return false;
-  }
 }
 
 // Redirect/SSRF/size limits, mirroring src/auth/cid-doc-fetch.js so
@@ -248,11 +235,6 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
       setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
-    // Use the FINAL post-redirect URL as the same-origin reference,
-    // not the initially-requested didUrl — otherwise a same-origin
-    // redirect would still compare against the wrong origin below.
-    const foundAtUrl = didFetch.url;
-
     // Extract WebID from alsoKnownAs (array) or profile.webid or profile.sameAs
     let webId = null;
 
@@ -272,17 +254,15 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
       return null;
     }
 
-    // Verify bidirectional link - WebID must link back to did:nostr.
-    // Same-origin shortcut: if the DID doc came from the SAME origin
-    // as the WebID (e.g. alice.pod serving alice's DID doc finding
-    // alice's WebID on alice.pod), the doc is authoritative for that
-    // origin — there's no risk of an attacker hosting a forged DID
-    // doc that points at a WebID they don't control. Skip the
-    // bidirectional fetch in that case (zero-network self-resolution).
-    if (sameOrigin(foundAtUrl, webId)) {
-      setCacheEntry(cacheKey, { webId, timestamp: Date.now() });
-      return webId;
-    }
+    // Always verify the WebID actually claims this pubkey. The
+    // earlier same-origin shortcut was unsafe on multi-tenant
+    // pods: same-origin doesn't equal same-control. Mallory who
+    // owns `<host>/.well-known/did/nostr/<MallorysPubkey>.json`
+    // could publish a DID doc with `alsoKnownAs` pointing at
+    // Alice's WebID on the same host, and "same origin" would
+    // accept it. The verifier checks the Alice-side profile for
+    // a verificationMethod that actually claims this pubkey, so
+    // the binding can't be forged from outside Alice's profile.
     const verified = await verifyWebIdBacklink(webId, pubkey);
 
     if (verified) {
@@ -329,13 +309,24 @@ async function verifyWebIdBacklink(webId, pubkey) {
     const contentType = (backlinkRes.headers.get('content-type') || '');
     const text = backlinkRes.body;
 
+    // Two acceptable linkage shapes (either is sufficient):
+    //   1. CID v1: a verificationMethod containing this Nostr pubkey
+    //      that is referenced from `authentication`. This is what
+    //      JSS profiles ship and what the LWS10-CID resource-side
+    //      verifier checks. Stronger than sameAs because the user
+    //      is asserting the key, not merely an identity equivalence.
+    //   2. owl:sameAs / schema:sameAs to did:nostr:<pubkey>. Older
+    //      shape; still accepted for compatibility.
+    const checkProfile = (jsonLd) =>
+      checkCidVmBacklink(jsonLd, pubkey) ||
+      checkSameAsLink(jsonLd, expectedDid);
+
     // Handle HTML with JSON-LD data island
     if (contentType.includes('text/html')) {
       const jsonLdMatch = text.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
       if (jsonLdMatch) {
         try {
-          const jsonLd = JSON.parse(jsonLdMatch[1]);
-          return checkSameAsLink(jsonLd, expectedDid);
+          return checkProfile(JSON.parse(jsonLdMatch[1]));
         } catch {
           return false;
         }
@@ -346,8 +337,7 @@ async function verifyWebIdBacklink(webId, pubkey) {
     // Handle JSON-LD directly
     if (contentType.includes('json')) {
       try {
-        const jsonLd = JSON.parse(text);
-        return checkSameAsLink(jsonLd, expectedDid);
+        return checkProfile(JSON.parse(text));
       } catch {
         return false;
       }
@@ -359,6 +349,53 @@ async function verifyWebIdBacklink(webId, pubkey) {
     rateLimitedError(`backlink:${webId}`, `WebID backlink verification error for ${webId}: ${err.message}`);
     return false;
   }
+}
+
+/**
+ * Does the WebID profile contain a CID v1 `verificationMethod` for
+ * the given Nostr pubkey, referenced from `authentication`?
+ *
+ * Mirrors the resource-side verifier's check: a key in
+ * `verificationMethod` alone (no `authentication` membership) is
+ * NOT a valid auth binding — the user has to explicitly designate
+ * it for authentication. JWK entries also have to satisfy the
+ * BIP-340 even-y check (handled inside extractNostrPubkeysFromProfile).
+ */
+function checkCidVmBacklink(jsonLd, pubkey) {
+  const target = pubkey.toLowerCase();
+  const vms = extractNostrPubkeysFromProfile(jsonLd);
+  if (vms.length === 0) return false;
+
+  // Build the absolute set of authentication-referenced IDs. The
+  // base for absolutization is the profile's subject (its `@id`).
+  // Profiles in the wild can have a relative subject ("@id":"#me"),
+  // so we strip the hash and use it as the URL base for resolving
+  // any relative entries.
+  const subject = jsonLd?.['@id'] || jsonLd?.id || '';
+  let base = '';
+  try { const u = new URL(subject); u.hash = ''; base = u.toString(); }
+  catch { base = ''; }
+  const authIds = new Set();
+  const auth = jsonLd?.authentication;
+  const authList = Array.isArray(auth) ? auth : (auth ? [auth] : []);
+  for (const ent of authList) {
+    let id;
+    if (typeof ent === 'string') id = ent;
+    else if (ent && typeof ent === 'object') id = ent['@id'] || ent.id;
+    if (!id) continue;
+    try { authIds.add(new URL(id, base).toString()); }
+    catch { authIds.add(id); }
+  }
+
+  for (const { pubkey: vmPubkey, vm } of vms) {
+    if (vmPubkey !== target) continue;
+    const vmIdRaw = vm.id || vm['@id'];
+    if (typeof vmIdRaw !== 'string') continue;
+    let vmId = vmIdRaw;
+    try { vmId = new URL(vmIdRaw, base).toString(); } catch { /* fall through */ }
+    if (authIds.has(vmId)) return true;
+  }
+  return false;
 }
 
 /**
@@ -415,6 +452,11 @@ export function clearCache() {
 /** @internal — exposed for tests; current cache size after evictions. */
 export function _cacheSizeForTests() {
   return cache.size;
+}
+
+/** @internal — exposed for tests; thin wrapper over checkCidVmBacklink. */
+export function _checkCidVmBacklinkForTests(profile, pubkey) {
+  return checkCidVmBacklink(profile, pubkey);
 }
 
 /** @internal — exposed for tests; LRU max for assertions. */
