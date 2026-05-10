@@ -28,6 +28,14 @@ const LIVE_RELOAD_SCRIPT = `<script>(function(){var ws=new WebSocket((location.p
 // where a cached data variant was served on top-level navigation (#315).
 const RDF_CACHE_CONTROL = 'private, no-cache, must-revalidate';
 
+// Detects when the request's Accept header explicitly names a JSON
+// media type. Used by the container/index.html branches of GET and HEAD
+// to decide whether to surface the embedded JSON-LD data island —
+// without this guard, selectContentType's `*/*` arm would divert plain
+// browser requests into the RDF branch (#409). Hoisted so GET and HEAD
+// can't drift apart silently.
+const EXPLICIT_JSON_RE = /\b(application\/ld\+json|application\/json)\b/i;
+
 /**
  * Inject live reload script into HTML content
  */
@@ -169,7 +177,7 @@ export async function handleGet(request, reply) {
       // returns JSON-LD — diverting plain browser GETs into the RDF
       // branch and serving the embedded data island instead of the
       // index.html body. Mirrors the HEAD-handler logic below (#409).
-      const explicitJson = /\b(application\/ld\+json|application\/json)\b/i.test(acceptHeader);
+      const explicitJson = EXPLICIT_JSON_RE.test(acceptHeader);
       const wantsJsonLd = negotiated === RDF_TYPES.JSON_LD && explicitJson;
 
       if (wantsTurtle || wantsJsonLd) {
@@ -610,7 +618,7 @@ export async function handleHead(request, reply) {
         // For an index.html container, only override to JSON-LD if the
         // Accept header explicitly asked for JSON; otherwise fall back
         // to text/html so HEAD matches the index.html that GET serves.
-        const explicitJson = /\b(application\/ld\+json|application\/json)\b/i.test(acceptHeader);
+        const explicitJson = EXPLICIT_JSON_RE.test(acceptHeader);
         contentType = (indexExists && !explicitJson) ? 'text/html' : 'application/ld+json';
       } else {
         contentType = indexExists ? 'text/html' : 'application/ld+json';

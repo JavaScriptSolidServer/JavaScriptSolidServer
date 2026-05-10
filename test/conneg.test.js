@@ -738,5 +738,25 @@ describe('Content Negotiation — q-weights and HEAD/GET parity (#325)', () => {
       const body = await res.text();
       assert.ok(body.includes('Carol'), 'turtle output should contain the data island content');
     });
+
+    // The original bug was specifically GET vs HEAD divergence — the HEAD
+    // handler already had the explicitJson guard, GET didn't. Pin the
+    // parity here so any future drift between the two branches fails.
+    const parityCases = [
+      ['browser Accept',  { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' }],
+      ['Accept: text/html', { Accept: 'text/html' }],
+      ['Accept: application/ld+json', { Accept: 'application/ld+json' }],
+      ['Accept: text/turtle', { Accept: 'text/turtle' }]
+    ];
+    for (const [label, headers] of parityCases) {
+      it(`HEAD === GET content-type — ${label}`, async () => {
+        const get = await request('/qwtest/public/page/', { headers });
+        const head = await request('/qwtest/public/page/', { method: 'HEAD', headers });
+        assert.strictEqual(get.status, 200);
+        assert.strictEqual(head.status, 200);
+        assert.strictEqual(ct(head), ct(get),
+          `HEAD ct (${ct(head)}) must equal GET ct (${ct(get)}) for ${label}`);
+      });
+    }
   });
 });
