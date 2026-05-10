@@ -332,81 +332,91 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const decoyPk = getPublicKey(generateSecretKey()); // unrelated key
     const decoyProfilePath = path.join(TEST_DATA_DIR, 'profile', 'card.jsonld');
     const decoyWebId = `${baseUrl}/profile/card.jsonld#decoy`;
-    let decoySnapshot = null;
-    try {
-      decoySnapshot = await fs.readFile(decoyProfilePath, 'utf8');
-    } catch (e) {
-      if (e.code !== 'ENOENT') throw e;
-      // didn't exist — nothing to restore
-    }
-    await fs.ensureDir(path.dirname(decoyProfilePath));
-    await fs.writeJson(decoyProfilePath, {
-      '@context': 'https://www.w3.org/ns/solid/v1',
-      '@id': decoyWebId,
-      verificationMethod: [{
-        id: `${decoyWebId.replace('#decoy', '')}#k`,
-        type: 'Multikey',
-        controller: decoyWebId,
-        publicKeyMultibase: fformMultikey(decoyPk),
-      }],
-      authentication: [`${decoyWebId.replace('#decoy', '')}#k`],
-    }, { spaces: 2 });
-
     const sk = generateSecretKey();
     const subPk = getPublicKey(sk);
     const subWebId = 'http://sub.example.test/profile/card.jsonld#me';
     const subProfilePath = path.join(TEST_DATA_DIR, 'sub', 'profile', 'card.jsonld');
     const VM_ID = 'http://sub.example.test/profile/card.jsonld#k';
-    await fs.ensureDir(path.dirname(subProfilePath));
-    await fs.writeJson(subProfilePath, {
-      '@context': 'https://www.w3.org/ns/solid/v1',
-      '@id': subWebId,
-      verificationMethod: [{
-        id: VM_ID,
-        type: 'Multikey',
-        controller: subWebId,
-        publicKeyMultibase: fformMultikey(subPk),
-      }],
-      authentication: [VM_ID],
-    }, { spaces: 2 });
-
     const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
     const indexPath = path.join(accountsDir, '_webid_index.json');
-    const idx = await fs.readJson(indexPath);
     const accountId = 'subdomain-pod-test-account';
-    idx[subWebId] = accountId;
-    await fs.writeJson(indexPath, idx, { spaces: 2 });
-    await fs.writeJson(path.join(accountsDir, `${accountId}.json`), {
-      id: accountId,
-      podName: 'sub',
-      webId: subWebId,
-      email: 'sub@example.test',
-    }, { spaces: 2 });
 
-    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${subPk}.json`);
-    assert.strictEqual(r.status, 200, 'subdomain-mode pod must be findable');
-    const doc = await r.json();
-    assert.strictEqual(doc.id, `did:nostr:${subPk}`);
-    assert.strictEqual(doc.alsoKnownAs[0], subWebId);
-
-    // Cleanup: leave neither the decoy nor the subdomain
-    // fixture behind. Restore (or delete) the decoy file so
-    // any prior fixture state at that path is preserved.
-    if (decoySnapshot !== null) {
-      await fs.writeFile(decoyProfilePath, decoySnapshot, 'utf8');
-    } else {
-      await fs.remove(decoyProfilePath);
-    }
-    await fs.remove(subProfilePath);
-    // Also remove the parent `<TEST_DATA_DIR>/sub` dir if empty
-    // (won't be if other tests added siblings — that's fine).
+    // Snapshot any pre-existing file at the decoy path so a prior
+    // fixture (e.g. the "indexes root-level pods" test's profile
+    // at the same location) can be restored at cleanup. ENOENT
+    // means "didn't exist; remove on cleanup."
+    let decoySnapshot = null;
     try {
-      await fs.rmdir(path.dirname(subProfilePath));
-      await fs.rmdir(path.dirname(path.dirname(subProfilePath)));
-    } catch { /* not empty / already gone — fine */ }
-    delete idx[subWebId];
-    await fs.writeJson(indexPath, idx, { spaces: 2 });
-    await fs.remove(path.join(accountsDir, `${accountId}.json`));
+      decoySnapshot = await fs.readFile(decoyProfilePath, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+
+    // Mutate fixtures inside try; cleanup runs regardless of
+    // whether assertions throw, so a future regression doesn't
+    // leak filesystem state and turn the suite order-dependent.
+    try {
+      await fs.ensureDir(path.dirname(decoyProfilePath));
+      await fs.writeJson(decoyProfilePath, {
+        '@context': 'https://www.w3.org/ns/solid/v1',
+        '@id': decoyWebId,
+        verificationMethod: [{
+          id: `${decoyWebId.replace('#decoy', '')}#k`,
+          type: 'Multikey',
+          controller: decoyWebId,
+          publicKeyMultibase: fformMultikey(decoyPk),
+        }],
+        authentication: [`${decoyWebId.replace('#decoy', '')}#k`],
+      }, { spaces: 2 });
+
+      await fs.ensureDir(path.dirname(subProfilePath));
+      await fs.writeJson(subProfilePath, {
+        '@context': 'https://www.w3.org/ns/solid/v1',
+        '@id': subWebId,
+        verificationMethod: [{
+          id: VM_ID,
+          type: 'Multikey',
+          controller: subWebId,
+          publicKeyMultibase: fformMultikey(subPk),
+        }],
+        authentication: [VM_ID],
+      }, { spaces: 2 });
+
+      const idx = await fs.readJson(indexPath);
+      idx[subWebId] = accountId;
+      await fs.writeJson(indexPath, idx, { spaces: 2 });
+      await fs.writeJson(path.join(accountsDir, `${accountId}.json`), {
+        id: accountId,
+        podName: 'sub',
+        webId: subWebId,
+        email: 'sub@example.test',
+      }, { spaces: 2 });
+
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr/${subPk}.json`);
+      assert.strictEqual(r.status, 200, 'subdomain-mode pod must be findable');
+      const doc = await r.json();
+      assert.strictEqual(doc.id, `did:nostr:${subPk}`);
+      assert.strictEqual(doc.alsoKnownAs[0], subWebId);
+    } finally {
+      // Restore decoy (or delete if it was created by this test).
+      if (decoySnapshot !== null) {
+        try { await fs.writeFile(decoyProfilePath, decoySnapshot, 'utf8'); }
+        catch { /* best effort */ }
+      } else {
+        try { await fs.remove(decoyProfilePath); } catch { /* best effort */ }
+      }
+      // Subdomain fixture file + empty parent dirs.
+      try { await fs.remove(subProfilePath); } catch { /* best effort */ }
+      try { await fs.rmdir(path.dirname(subProfilePath)); } catch { /* not empty / gone */ }
+      try { await fs.rmdir(path.dirname(path.dirname(subProfilePath))); } catch { /* not empty / gone */ }
+      // Index entry + account record.
+      try {
+        const idx = await fs.readJson(indexPath);
+        delete idx[subWebId];
+        await fs.writeJson(indexPath, idx, { spaces: 2 });
+      } catch { /* best effort */ }
+      try { await fs.remove(path.join(accountsDir, `${accountId}.json`)); } catch { /* best effort */ }
+    }
   });
 
   // No `it()` here — path containment is now exercised directly
