@@ -52,20 +52,101 @@ function sameOrigin(urlA, urlB) {
   }
 }
 
+// Redirect/SSRF/size limits, mirroring src/auth/cid-doc-fetch.js so
+// both the DID-doc resolver and the WebID-backlink verifier apply
+// the same hardening:
+//   - manual redirect handling (5 hops max)
+//   - SSRF re-validation on EVERY hop (an allowed origin could 30x
+//     to a private IP / cloud metadata; default fetch redirect would
+//     bypass the initial validateExternalUrl check)
+//   - cross-origin redirects refused (open-redirect → arbitrary host)
+//   - response size cap before reading the body
+const MAX_REDIRECTS = 5;
+const DEFAULT_FETCH_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles are tiny
+
 /**
- * Fetch with a timeout via AbortController.
+ * Fetch with a timeout, manual redirect following, SSRF re-validation
+ * per hop, and a body-size cap. Returns `{ url, status, headers, body }`
+ * — `body` is a string (caller decides whether to JSON-parse).
+ *
+ * Throws on validation, network, redirect, or size failures so the
+ * resolver can swallow them uniformly into a null/false return.
  */
-async function fetchWithTimeout(url, options = {}, timeout = 5000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(id);
-    return response;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+async function fetchWithRedirectGuard(initialUrl, {
+  accept,
+  timeout = DEFAULT_FETCH_TIMEOUT_MS,
+  maxBytes = DEFAULT_MAX_BYTES,
+} = {}) {
+  const originalOrigin = new URL(initialUrl).origin;
+  let currentUrl = initialUrl;
+
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const isLastAllowedHop = hop === MAX_REDIRECTS;
+    const validation = await validateExternalUrl(currentUrl, {
+      requireHttps: process.env.NODE_ENV === 'production',
+      blockPrivateIPs: true,
+      resolveDNS: true,
+    });
+    if (!validation.valid) {
+      throw new Error(`SSRF protection: ${validation.error}`);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    let res;
+    try {
+      res = await fetch(currentUrl, {
+        headers: accept ? { Accept: accept } : {},
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      if (isLastAllowedHop) throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+      const loc = res.headers.get('location');
+      if (!loc) throw new Error(`redirect ${res.status} without Location`);
+      const nextUrl = new URL(loc, currentUrl).toString();
+      const nextOrigin = new URL(nextUrl).origin;
+      if (nextOrigin !== originalOrigin) {
+        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+    // Cap the body before reading. Content-Length pre-check rejects
+    // a server that advertises an oversized response; the streaming
+    // cap rejects servers that lie about Content-Length.
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(`response too large (Content-Length=${declared} > ${maxBytes})`);
+    }
+    const reader = res.body?.getReader?.();
+    let body = '';
+    if (!reader) {
+      body = await res.text();
+      if (Buffer.byteLength(body, 'utf8') > maxBytes) {
+        throw new Error(`response too large (>${maxBytes} bytes)`);
+      }
+    } else {
+      const chunks = [];
+      let total = 0;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          try { await reader.cancel(); } catch { /* noop */ }
+          throw new Error(`response too large (>${maxBytes} bytes)`);
+        }
+        chunks.push(value);
+      }
+      body = Buffer.concat(chunks).toString('utf8');
+    }
+    return { url: currentUrl, status: res.status, headers: res.headers, body };
   }
+  throw new Error('fetch loop exited unexpectedly');
 }
 
 /**
@@ -99,28 +180,35 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
   }
 
   try {
-    // SSRF guard: the resolver URL is configurable (an operator could
-    // point at a private resolver) but better safe — match the same
-    // policy the LWS-CID verifier and CORS proxy apply.
+    // SSRF guard runs inside fetchWithRedirectGuard on EVERY hop —
+    // not just the initial URL — so an allowed resolver origin can't
+    // 30x-redirect to a private IP / cloud metadata endpoint and
+    // bypass the check. Same policy the LWS-CID verifier applies.
     const didUrl = `${resolverUrl}/${pubkey}.json`;
-    const validation = await validateExternalUrl(didUrl, {
-      requireHttps: process.env.NODE_ENV === 'production',
-      blockPrivateIPs: true,
-      resolveDNS: true,
-    });
-    if (!validation.valid) {
+    let didFetch;
+    try {
+      didFetch = await fetchWithRedirectGuard(didUrl, {
+        accept: 'application/did+json, application/json',
+      });
+    } catch {
       cache.set(cacheKey, { webId: null, timestamp: Date.now() });
       return null;
     }
-    const didRes = await fetchWithTimeout(didUrl, {
-      headers: { 'Accept': 'application/did+json, application/json' }
-    }).catch(() => null);
-    if (!didRes || !didRes.ok) {
+    if (didFetch.status < 200 || didFetch.status >= 300) {
       cache.set(cacheKey, { webId: null, timestamp: Date.now() });
       return null;
     }
-    const didDoc = await didRes.json();
-    const foundAtUrl = didUrl;
+    let didDoc;
+    try {
+      didDoc = JSON.parse(didFetch.body);
+    } catch {
+      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      return null;
+    }
+    // Use the FINAL post-redirect URL as the same-origin reference,
+    // not the initially-requested didUrl — otherwise a same-origin
+    // redirect would still compare against the wrong origin below.
+    const foundAtUrl = didFetch.url;
 
     // Extract WebID from alsoKnownAs (array) or profile.webid or profile.sameAs
     let webId = null;
@@ -179,26 +267,24 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
 async function verifyWebIdBacklink(webId, pubkey) {
   try {
     const expectedDid = `did:nostr:${pubkey.toLowerCase()}`;
-    // SSRF guard: the WebID came out of an externally-fetched DID doc,
-    // so it's untrusted until verified.
-    const validation = await validateExternalUrl(webId, {
-      requireHttps: process.env.NODE_ENV === 'production',
-      blockPrivateIPs: true,
-      resolveDNS: true,
-    });
-    if (!validation.valid) return false;
-
-    // Fetch WebID profile
-    const res = await fetchWithTimeout(webId, {
-      headers: { 'Accept': 'application/ld+json, application/json, text/html' }
-    });
-
-    if (!res.ok) {
+    // The WebID came out of an externally-fetched DID doc, so it's
+    // untrusted until verified. fetchWithRedirectGuard re-runs the
+    // SSRF check on every redirect hop and refuses cross-origin
+    // redirects, so a forged DID doc can't bounce us through an
+    // open-redirect into a private IP.
+    let backlinkRes;
+    try {
+      backlinkRes = await fetchWithRedirectGuard(webId, {
+        accept: 'application/ld+json, application/json, text/html',
+      });
+    } catch {
       return false;
     }
-
-    const contentType = res.headers.get('content-type') || '';
-    const text = await res.text();
+    if (backlinkRes.status < 200 || backlinkRes.status >= 300) {
+      return false;
+    }
+    const contentType = (backlinkRes.headers.get('content-type') || '');
+    const text = backlinkRes.body;
 
     // Handle HTML with JSON-LD data island
     if (contentType.includes('text/html')) {

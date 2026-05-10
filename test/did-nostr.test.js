@@ -141,6 +141,67 @@ describe('DID:nostr Resolution', () => {
     });
   });
 
+  describe('SSRF / redirect hardening', () => {
+    // Spin up a tiny HTTP server to drive the redirect cases. We
+    // can't reach real private IPs from a unit test, but we CAN
+    // assert the resolver:
+    //   - refuses a cross-origin redirect (returns null cleanly)
+    //   - refuses a redirect chain longer than the cap
+    //   - re-validates SSRF on every hop (validation is per-hop in
+    //     fetchWithRedirectGuard; cross-origin refusal is the
+    //     observable consequence we can test without a private IP)
+    let http;
+    let server;
+    let port;
+    let mode = 'cross-origin';
+
+    before(async () => {
+      http = await import('node:http');
+      clearCache();
+      server = http.createServer((req, res) => {
+        if (mode === 'cross-origin') {
+          // Redirect to a different origin (different host).
+          res.writeHead(302, { Location: 'http://other.invalid:1/foo.json' });
+          res.end();
+          return;
+        }
+        if (mode === 'loop') {
+          // Self-redirect — count hops by checking the URL path.
+          res.writeHead(302, { Location: req.url + '/r' });
+          res.end();
+          return;
+        }
+        res.writeHead(404).end();
+      });
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      port = server.address().port;
+    });
+
+    after(async () => {
+      await new Promise((resolve) => server.close(resolve));
+    });
+
+    it('refuses cross-origin redirects', async () => {
+      mode = 'cross-origin';
+      const pubkey = 'a'.repeat(64);
+      // Resolver URL points at our local server's base; it'll 302
+      // to a foreign origin which fetchWithRedirectGuard refuses.
+      // NODE_ENV defaults to non-production in tests, so HTTP is
+      // allowed by validateExternalUrl — the redirect refusal must
+      // come from the cross-origin check, not the SSRF guard.
+      const result = await resolveDidNostrToWebId(pubkey, `http://127.0.0.1:${port}`);
+      assert.strictEqual(result, null);
+    });
+
+    it('refuses redirect chains exceeding the hop cap', async () => {
+      mode = 'loop';
+      clearCache();
+      const pubkey = 'b'.repeat(64);
+      const result = await resolveDidNostrToWebId(pubkey, `http://127.0.0.1:${port}`);
+      assert.strictEqual(result, null);
+    });
+  });
+
   describe('Real DID Document Fetch', () => {
     before(() => {
       clearCache();
