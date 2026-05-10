@@ -145,7 +145,7 @@ async function rebuildPubkeyIndex() {
     // path-mode pod). The path-mode candidate may exist but belong
     // to a different account — keep going until we find one whose
     // declared `@id` matches account.webId.
-    const candidates = profilePathCandidates(dataRoot, account.webId);
+    const candidates = profilePathCandidates(dataRoot, account.webId, account.podName);
     let profile = null;
     let profilePath = null;
     let mtimeMs = 0;
@@ -298,20 +298,25 @@ export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
  *   3. Subdomain-mode pod   (host=`alice.example.com`, path=`/profile/card.jsonld`)
  *      → `<dataRoot>/alice/profile/card.jsonld`
  *
- * Cases (1) and (2) both fall out of `profilePathFromWebId` (path mode
- * and root pod share the same derivation rule). Case (3) needs an
- * extra "host first label as pod dir" candidate, which the original
- * implementation didn't have — that's #411.
+ * Cases (1) and (2) share the same derivation rule (just join
+ * pathname under dataRoot). Case (3) needs an extra "host first
+ * label as pod dir" candidate, which the original implementation
+ * didn't have — that's #411.
+ *
+ * The subdomain candidate is gated on the optional `podName` arg:
+ * we only emit it when `<podName>.` is the host's actual first
+ * label. Without that gate, a root-pod WebID (`example.com`) would
+ * also emit `<dataRoot>/example/profile/...`, which could be a
+ * different account's pod dir — wasted probes plus noisier failure
+ * logs. The `@id` check downstream rejects mis-indexing either way,
+ * but precision here keeps logs clean.
  *
  * Containment-checked. All candidates resolve to absolute paths that
- * are at-or-under `dataRootAbs`. Caller fs.stats each in order and
- * uses the first that exists; the @id-vs-account.webId check
- * downstream rejects any false positive (reading the wrong file
- * gets a profile whose `@id` won't match `account.webId`).
+ * are at-or-under `dataRootAbs`.
  *
  * @internal exported for tests
  */
-export function profilePathCandidates(dataRoot, webId) {
+export function profilePathCandidates(dataRoot, webId, podName = null) {
   if (typeof webId !== 'string') return [];
   let url;
   try { url = new URL(webId); } catch { return []; }
@@ -325,13 +330,15 @@ export function profilePathCandidates(dataRoot, webId) {
   };
   // Path-mode named pod OR root pod.
   add(pathnameRel);
-  // Subdomain mode: take the first DNS label of the host as the pod
-  // directory under dataRoot. Only meaningful for hosts with at
-  // least two labels (`alice.example.com`); a bare host like
-  // `example.com` falls back to candidate #1 above (root/path mode).
-  const hostLabels = url.hostname.split('.');
-  if (hostLabels.length >= 2 && hostLabels[0]) {
-    add(hostLabels[0], pathnameRel);
+  // Subdomain mode: only when the WebID host's first DNS label
+  // ACTUALLY matches the account's podName. Case-insensitive
+  // because DNS is case-insensitive.
+  if (typeof podName === 'string' && podName.length > 0) {
+    const host = url.hostname.toLowerCase();
+    const expected = podName.toLowerCase() + '.';
+    if (host.startsWith(expected)) {
+      add(podName, pathnameRel);
+    }
   }
   return out;
 }

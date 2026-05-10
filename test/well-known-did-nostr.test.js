@@ -715,8 +715,8 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
       `expected root-pod candidate; got ${cands.join(', ')}`);
   });
 
-  it('subdomain-mode pod: emits <dataRoot>/<host-first-label>/profile/...', () => {
-    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
+  it('subdomain-mode pod: emits <dataRoot>/<podName>/profile/... when host first label matches podName', () => {
+    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me', 'test');
     // BOTH should be there — the path-mode candidate (which won't
     // exist on disk for a subdomain-mode pod) and the subdomain
     // candidate. The caller fs.stats each in order.
@@ -726,11 +726,29 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
       `expected subdomain candidate; got ${cands.join(', ')}`);
   });
 
+  it('does NOT emit a subdomain candidate when podName is omitted', () => {
+    // Without podName, we can't tell whether the host's first
+    // label is actually this pod's subdomain — could be a totally
+    // unrelated user's pod dir on a different account. Skip the
+    // subdomain candidate and rely on the path-mode/root candidate.
+    const cands = profilePathCandidates(DATA_ROOT, 'https://test.solid.social/profile/card.jsonld#me');
+    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+  });
+
+  it('does NOT emit a subdomain candidate when podName does not match the host first label', () => {
+    // Important: a root-pod WebID `https://example.com/profile/...`
+    // with podName='me' must NOT produce `<dataRoot>/example/...`
+    // — that'd be a different account's pod dir and only
+    // accidentally rejected by the @id check.
+    const cands = profilePathCandidates(DATA_ROOT, 'https://example.com/profile/card.jsonld#me', 'me');
+    assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
+  });
+
   it('does NOT emit a subdomain candidate for a single-label host', () => {
     // `localhost` has only one label — there's no "host first label
     // as pod dir" candidate to add (it would just duplicate the
     // path-mode one).
-    const cands = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me');
+    const cands = profilePathCandidates(DATA_ROOT, 'http://localhost/profile/card.jsonld#me', 'localhost');
     assert.deepStrictEqual(cands, ['/srv/jss/data/profile/card.jsonld']);
   });
 
@@ -741,16 +759,18 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
 
   it('every candidate stays inside dataRootAbs', () => {
     // The same containment invariant that profilePathFromWebId
-    // enforces — extended to ALL emitted candidates.
-    for (const w of [
-      'https://example.com/alice/profile/card.jsonld#me',
-      'https://alice.example.com/profile/card.jsonld#me',
-      'https://h/../../../etc/passwd',
-      'https://h.com/../../../etc/passwd',
-    ]) {
-      for (const c of profilePathCandidates(DATA_ROOT, w)) {
+    // enforces — extended to ALL emitted candidates, including
+    // the subdomain candidate (when a matching podName is passed).
+    const cases = [
+      ['https://example.com/alice/profile/card.jsonld#me', 'alice'],
+      ['https://alice.example.com/profile/card.jsonld#me', 'alice'],
+      ['https://h/../../../etc/passwd', null],
+      ['https://h.com/../../../etc/passwd', 'h'],
+    ];
+    for (const [w, podName] of cases) {
+      for (const c of profilePathCandidates(DATA_ROOT, w, podName)) {
         assert.ok(c === DATA_ROOT || c.startsWith(DATA_ROOT + path.sep),
-          `${w} → ${c} escaped DATA_ROOT`);
+          `${w} (podName=${podName}) → ${c} escaped DATA_ROOT`);
       }
     }
   });
