@@ -25,10 +25,17 @@ import fs from 'fs-extra';
 import { findById } from './accounts.js';
 import { extractNostrPubkeysFromProfile } from '../auth/nostr-keys.js';
 
-// In-memory pubkey → accountId index. Built lazily from disk; rebuilt
-// when the TTL expires. Real production wants a write-path hook on
-// LDP PUT/PATCH so updates are immediate; that's filed as a follow-up.
-let pubkeyIndex = null; // Map<pubkeyHex, accountId>
+// In-memory pubkey → resolved-account-record index. Built lazily
+// from disk; rebuilt when the TTL expires. Real production wants
+// a write-path hook on LDP PUT/PATCH so updates are immediate;
+// that's filed as a follow-up.
+//
+// Each entry stores `{ accountId, webId, mtimeMs }` so the hot
+// path (NIP-98 auth via resolveDidNostrLocally + every DID-doc
+// request) can answer without re-reading the account JSON from
+// disk. accountId is kept for log diagnostics; webId is what
+// the resolver actually needs.
+let pubkeyIndex = null; // Map<pubkeyHex, { accountId, webId, mtimeMs }>
 let indexBuiltAt = 0;
 let rebuildInFlight = null; // Promise — in-flight rebuild dedup
 const INDEX_TTL_MS = 5 * 60 * 1000;
@@ -194,7 +201,9 @@ async function rebuildPubkeyIndex() {
       // it; resolve at the end of the scan.
       if (!seenAccounts.has(pubkey)) seenAccounts.set(pubkey, new Set());
       seenAccounts.get(pubkey).add(accountId);
-      if (!idx.has(pubkey)) idx.set(pubkey, { accountId, mtimeMs });
+      // Cache the resolved webId in the index so the lookup hot
+      // path doesn't have to re-read the account JSON.
+      if (!idx.has(pubkey)) idx.set(pubkey, { accountId, webId: account.webId, mtimeMs });
     }
   }
   // Drop ambiguous pubkeys and warn loudly.
@@ -316,22 +325,11 @@ async function findAccountByNostrPubkey(pubkeyHex) {
   }
   const entry = pubkeyIndex.get(lower);
   if (!entry) return null;
-  // findById can throw on parse/permission errors. Treating it as a
-  // cache miss keeps DID-doc requests AND the in-process
-  // resolveDidNostrLocally call in src/auth/nostr.js from turning
-  // into 500s when a single account file is corrupt.
-  let account;
-  try {
-    account = await findById(entry.accountId);
-  } catch (err) {
-    console.error(
-      `well-known-did-nostr: findById(${entry.accountId}) threw — ` +
-      `treating as cache miss: ${err.message}`,
-    );
-    return null;
-  }
-  if (!account) return null;
-  return { account, mtimeMs: entry.mtimeMs };
+  // The webId is now stored on the index entry — no per-request
+  // findById disk read needed. NIP-98 auth (via
+  // resolveDidNostrLocally) and DID-doc generation hit this on
+  // every request, so dropping the I/O matters.
+  return { account: { webId: entry.webId }, mtimeMs: entry.mtimeMs };
 }
 
 /**

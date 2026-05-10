@@ -349,12 +349,24 @@ async function verifyWebIdBacklink(webId, pubkey) {
     // Network/SSRF/redirect/size/timeout — transient.
     throw new TransientBacklinkError(`fetch failed: ${err.message}`);
   }
-  if (backlinkRes.status >= 500 && backlinkRes.status < 600) {
-    // Server error — transient (5xx is "try again", not "no").
+  // Status classification:
+  //   - 5xx: transient ("try again later")
+  //   - 408 (request timeout) and 429 (too many requests): also
+  //     transient — the host couldn't / wouldn't answer right now,
+  //     not "the linkage is permanently absent"
+  //   - other 4xx (404, 410, etc.): verified absence — the host
+  //     answered authoritatively that this resource doesn't exist
+  //     or is gone, cache as steady-state
+  //   - 3xx (would only reach here as redirect that resolved):
+  //     also verified absence (no redirect-to-content arrived)
+  if (
+    (backlinkRes.status >= 500 && backlinkRes.status < 600) ||
+    backlinkRes.status === 408 ||
+    backlinkRes.status === 429
+  ) {
     throw new TransientBacklinkError(`HTTP ${backlinkRes.status}`);
   }
   if (backlinkRes.status < 200 || backlinkRes.status >= 300) {
-    // Client error or redirect that didn't resolve — verified absence.
     return false;
   }
   const contentType = (backlinkRes.headers.get('content-type') || '');
