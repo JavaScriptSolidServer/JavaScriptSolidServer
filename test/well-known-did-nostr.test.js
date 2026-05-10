@@ -344,6 +344,51 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     await fs.writeJson(profilePath, profile, { spaces: 2 });
   });
 
+  it('logs a diagnostic when an account profile is unreadable (not silent)', async () => {
+    // Operators need to be able to debug "why isn't my pubkey
+    // publishing?" without grepping silence. Pre-fix, the
+    // rebuildPubkeyIndex catch was `catch { continue; }` and a
+    // broken profile produced a 404 with zero log output.
+    const sk = generateSecretKey();
+    const orphanPk = getPublicKey(sk);
+    const accountsDir = path.join(TEST_DATA_DIR, '.idp', 'accounts');
+    const indexPath = path.join(accountsDir, '_webid_index.json');
+    const idx = await fs.readJson(indexPath);
+    const orphanId = 'orphan-broken-profile';
+    const orphanWebId = `${baseUrl}/orphan/profile/card.jsonld#me`;
+    idx[orphanWebId] = orphanId;
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.writeJson(path.join(accountsDir, `${orphanId}.json`), {
+      id: orphanId,
+      podName: 'orphan',
+      webId: orphanWebId,
+    }, { spaces: 2 });
+    // Write a malformed profile so JSON.parse will throw.
+    const profilePath = path.join(TEST_DATA_DIR, 'orphan', 'profile', 'card.jsonld');
+    await fs.ensureDir(path.dirname(profilePath));
+    await fs.writeFile(profilePath, '{ this is not valid json', 'utf8');
+
+    // Capture console.error.
+    const errors = [];
+    const origError = console.error;
+    console.error = (...args) => errors.push(args.map(String).join(' '));
+    try {
+      _resetIndexForTests();
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr/${orphanPk}.json`);
+      assert.strictEqual(r.status, 404);
+    } finally {
+      console.error = origError;
+    }
+    const matched = errors.find((m) => m.includes(orphanId) && m.includes('orphan/profile/card.jsonld'));
+    assert.ok(matched, `expected a log entry mentioning ${orphanId} and the profile path; got: ${errors.join('\n')}`);
+
+    // Cleanup.
+    delete idx[orphanWebId];
+    await fs.writeJson(indexPath, idx, { spaces: 2 });
+    await fs.remove(path.join(accountsDir, `${orphanId}.json`));
+    await fs.remove(path.dirname(path.dirname(profilePath)));
+  });
+
   it('does NOT publish a VM that is in verificationMethod but not in authentication', async () => {
     // Add a key to the profile under verificationMethod but explicitly
     // omit it from `authentication` — the user has decided this key

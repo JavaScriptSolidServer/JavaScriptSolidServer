@@ -311,6 +311,29 @@ describe('DID:nostr Resolution', () => {
       };
       assert.strictEqual(_checkCidVmBacklinkForTests(profile, legitPubkey), false);
     });
+
+    it('checkCidVmBacklink: rejects a VM with NO explicit controller (matches resource-side strictness)', async () => {
+      // Earlier passes had a permissive branch that accepted a
+      // controller-less VM if the VM ID and the profile subject
+      // shared an origin. That made backlink looser than the
+      // resource-side verifier, opening a binding-rule mismatch
+      // (DID resolution would say "yes" for keys the LWS10-CID
+      // verifier would later reject). Both layers now require
+      // an explicit controller.
+      const { _checkCidVmBacklinkForTests } = await import('../src/auth/did-nostr.js');
+      const subj = 'http://example.test/profile/card#me';
+      const profile = {
+        '@id': subj,
+        verificationMethod: [{
+          id: `${subj.replace('#me','')}#k`,
+          type: 'JsonWebKey',
+          // controller intentionally absent
+          publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x: legitX, y: legitY },
+        }],
+        authentication: [`${subj.replace('#me','')}#k`],
+      };
+      assert.strictEqual(_checkCidVmBacklinkForTests(profile, legitPubkey), false);
+    });
   });
 
   describe('Pubkey input validation', () => {

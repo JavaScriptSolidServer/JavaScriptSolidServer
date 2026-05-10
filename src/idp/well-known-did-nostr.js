@@ -32,6 +32,28 @@ let pubkeyIndex = null; // Map<pubkeyHex, accountId>
 let indexBuiltAt = 0;
 let rebuildInFlight = null; // Promise — in-flight rebuild dedup
 const INDEX_TTL_MS = 5 * 60 * 1000;
+
+// Rate-limit "profile unreadable" log spam. A single broken profile
+// shouldn't flood logs every 5 minutes (every TTL rebuild) — but the
+// first occurrence per rebuild cycle MUST be logged so operators can
+// debug "why isn't my pubkey publishing?" without grepping silence.
+const PROFILE_LOG_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const profileLogTracker = new Map(); // accountId -> last logged ms
+function logProfileFailure(accountId, profilePath, err) {
+  const now = Date.now();
+  const last = profileLogTracker.get(accountId) || 0;
+  if (now - last < PROFILE_LOG_INTERVAL_MS) return;
+  profileLogTracker.set(accountId, now);
+  // Trim the tracker so it can't grow without bound.
+  if (profileLogTracker.size > 10_000) {
+    const oldest = profileLogTracker.keys().next().value;
+    if (oldest !== undefined) profileLogTracker.delete(oldest);
+  }
+  console.error(
+    `well-known-did-nostr: skipping account ${accountId} ` +
+    `(profile=${profilePath}): ${err.code || err.name || 'error'} ${err.message}`,
+  );
+}
 // Size cap on per-account profile reads. WebID profiles are tiny —
 // 64 KB is generous and matches the bound the LDP layer would impose
 // for any sane profile. A user shouldn't be able to make the indexer
@@ -45,6 +67,7 @@ export function _resetIndexForTests() {
   pubkeyIndex = null;
   indexBuiltAt = 0;
   rebuildInFlight = null;
+  profileLogTracker.clear();
 }
 
 // Match the layout in src/idp/accounts.js — accounts live under
@@ -129,8 +152,12 @@ async function rebuildPubkeyIndex() {
       }
       const text = await fs.readFile(profilePath, 'utf8');
       profile = JSON.parse(text);
-    } catch {
-      continue; // unreadable / non-existent — skip
+    } catch (err) {
+      // Log so operators can debug "why isn't my pubkey publishing?".
+      // Rate-limited per account so a single perpetually-broken
+      // profile can't flood logs every TTL cycle.
+      logProfileFailure(accountId, profilePath, err);
+      continue; // unreadable / malformed — skip
     }
     // CID semantics — match the resource-side checks:
     // (1) profile's @id MUST match the account's webId (no fragment-

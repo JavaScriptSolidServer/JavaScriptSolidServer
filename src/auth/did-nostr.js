@@ -483,25 +483,15 @@ function checkCidVmBacklink(jsonLd, pubkey, docUrl) {
     if (typeof vmIdRaw !== 'string') continue;
     const vmId = absolutize(vmIdRaw);
     if (!authIds.has(vmId)) continue;
-    // Check (3): VM's controller must be in expectedControllers.
-    // Defaults to the VM ID's "self" base if the VM has no
-    // explicit controller — same as the resource-side verifier.
+    // Check (3): VM MUST declare an explicit `controller`, AND
+    // that controller must be in expectedControllers. Match the
+    // resource-side verifier (src/auth/nostr.js + the well-known
+    // indexer) — neither falls back to "origin match means
+    // controller match" for a controller-less VM. A VM with no
+    // controller is ambiguous and should not authenticate; if
+    // the user wanted self-control, they can declare it.
     const vmCtrls = collectIds(vm.controller);
-    if (vmCtrls.length === 0) {
-      // No explicit controller: per CID v1 the VM's controller
-      // defaults to the VM's own `id` base. We accept that only
-      // if the profile subject is itself in expectedControllers
-      // (which it is by the fallback above) AND the VM ID
-      // shares an origin with the subject — otherwise an
-      // attacker could plant a VM at a fragment of someone
-      // else's profile.
-      try {
-        const vmOrigin = new URL(vmId).origin;
-        const subjOrigin = profileSubject ? new URL(profileSubject).origin : '';
-        if (subjOrigin && vmOrigin === subjOrigin) return true;
-      } catch { /* fall through */ }
-      continue;
-    }
+    if (vmCtrls.length === 0) continue;
     for (const c of vmCtrls) {
       if (expectedControllers.has(c)) return true;
     }
