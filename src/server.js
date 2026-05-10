@@ -677,10 +677,18 @@ export function createServer(options = {}) {
   // an explicit handler the request falls through to the wildcard
   // `OPTIONS /*` which advertises GET, HEAD, PUT, DELETE, PATCH,
   // POST — wrong for this namespace and confusing to CORS
-  // preflights.
-  const optionsForReadOnlyNamespace = async (request, reply) => reply.code(204)
-    .header('Allow', 'GET, HEAD, OPTIONS')
-    .send();
+  // preflights. We also set the full CORS header set (origin,
+  // allowed-methods restricted to read-only, allowed-headers,
+  // credentials, max-age) so browser preflights to this endpoint
+  // succeed; bare 204 with only `Allow` would fail CORS.
+  const optionsForReadOnlyNamespace = async (request, reply) => {
+    const cors = getCorsHeaders(request.headers.origin);
+    cors['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS';
+    return reply.code(204)
+      .header('Allow', 'GET, HEAD, OPTIONS')
+      .headers(cors)
+      .send();
+  };
   for (const pat of [
     '/.well-known/did/nostr',
     '/.well-known/did/nostr/',

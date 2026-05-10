@@ -200,13 +200,17 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     }
   });
 
-  it('OPTIONS advertises only safe methods (Allow consistent with 405)', async () => {
+  it('OPTIONS advertises only safe methods (Allow consistent with 405) AND sets CORS headers', async () => {
     // The wildcard `OPTIONS /*` advertises GET/HEAD/PUT/DELETE/PATCH/POST,
     // which is wrong for the read-only well-known namespace and
     // confusing to CORS preflights. Explicit OPTIONS handlers must
-    // return the same Allow set as the 405 responses.
+    // return the same Allow set as the 405 responses AND the full
+    // CORS header set so browser preflights work cross-origin.
     for (const subpath of ['', '/', '/x', '/a/b']) {
-      const r = await fetch(`${baseUrl}/.well-known/did/nostr${subpath}`, { method: 'OPTIONS' });
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr${subpath}`, {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://other.example' },
+      });
       assert.strictEqual(r.status, 204, `OPTIONS ${subpath} should be 204`);
       const allow = (r.headers.get('allow') || '').toUpperCase();
       assert.match(allow, /GET/, `Allow should include GET (got "${allow}")`);
@@ -215,6 +219,15 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
       assert.doesNotMatch(allow, /\bPOST\b/);
       assert.doesNotMatch(allow, /\bDELETE\b/);
       assert.doesNotMatch(allow, /\bPATCH\b/);
+      // CORS preflights need these. Without them, browsers refuse
+      // to follow up with the actual request.
+      const acAllowMethods = (r.headers.get('access-control-allow-methods') || '').toUpperCase();
+      assert.match(acAllowMethods, /GET/, `ACAM missing GET (got "${acAllowMethods}")`);
+      assert.match(acAllowMethods, /HEAD/);
+      assert.match(acAllowMethods, /OPTIONS/);
+      assert.doesNotMatch(acAllowMethods, /\bPUT\b/, `ACAM should not advertise PUT`);
+      assert.ok(r.headers.get('access-control-allow-origin'), 'ACAO must be set');
+      assert.ok(r.headers.get('access-control-allow-headers'), 'ACAH must be set');
     }
   });
 
@@ -422,6 +435,11 @@ describe('Non-IdP /.well-known/did/nostr write blocking', () => {
   // disk under this namespace.
   let server;
   let baseUrl;
+  // createServer mutates process.env.DATA_ROOT — capture and
+  // restore so we don't leak the test value into anything that
+  // runs after this describe (mirrors the pattern in the first
+  // describe block).
+  const originalDataRoot = process.env.DATA_ROOT;
 
   before(async () => {
     const port = await getAvailablePort();
@@ -438,6 +456,8 @@ describe('Non-IdP /.well-known/did/nostr write blocking', () => {
   after(async () => {
     await server.close();
     await fs.remove(TEST_DATA_DIR + '-noidp');
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
   });
 
   it('returns 405 for PUT/POST/PATCH/DELETE under the namespace', async () => {

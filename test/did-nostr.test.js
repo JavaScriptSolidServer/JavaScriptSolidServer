@@ -343,21 +343,13 @@ describe('DID:nostr Resolution', () => {
     // CACHE_MAX_ENTRIES.
     before(() => clearCache());
 
-    it('evicts oldest entries past the LRU cap', async () => {
-      // Use an unreachable resolver so every lookup fails fast and
-      // gets cached. Don't actually populate CACHE_MAX_ENTRIES (10k)
-      // entries — that's a slow test. Instead drive +50 past the cap
-      // by using a very low CACHE_MAX_ENTRIES would be ideal, but
-      // we can't mutate the const from the test. Compromise: do a
-      // bounded check that the cache size never exceeds the cap,
-      // using an unreachable URL so each call resolves quickly.
-      // Skip this on CI where it'd be too slow — the LRU logic
-      // itself is mechanical (set + check size + delete oldest)
-      // and proven by the smaller-scale assertion below.
+    it('cache stays at-or-under CACHE_MAX_ENTRIES after a burst of misses', async () => {
+      // Use an unreachable resolver so every lookup fast-fails
+      // and gets cached as `failureTtl: true`. The LRU code is
+      // mechanical (set + while size > cap → delete oldest),
+      // so a small N is enough to assert the invariant
+      // `size <= cap`.
       assert.ok(_CACHE_MAX_FOR_TESTS >= 1, 'cap must be positive');
-      // Smaller-scale: confirm size monotonically increases up to
-      // the cap and then stays at the cap. Add 5 unique pubkeys.
-      // Each one will fail-fast against an unresolvable resolver.
       const N = 5;
       const before = _cacheSizeForTests();
       for (let i = 0; i < N; i++) {
