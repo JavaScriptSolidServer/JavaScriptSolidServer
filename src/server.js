@@ -679,13 +679,27 @@ export function createServer(options = {}) {
       // otherwise accept unauthenticated PUT/POST under
       // /.well-known/* since that path is excluded from the auth
       // preHandler).
+      //
+      // Two route shapes are required because the dynamic-segment
+      // route (`/.well-known/did/nostr/:pubkeyAndExt`) only matches
+      // a single path segment. A request like
+      // `PUT /.well-known/did/nostr/a/b` would otherwise fall
+      // through to the wildcard write routes — also block the
+      // `/*` subtree under this namespace.
       const methodNotAllowed = async (request, reply) => reply.code(405)
         .header('Allow', 'GET, HEAD, OPTIONS')
         .send({ error: 'Method Not Allowed' });
-      instance.put('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-      instance.post('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-      instance.patch('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
-      instance.delete('/.well-known/did/nostr/:pubkeyAndExt', methodNotAllowed);
+      for (const pat of [
+        '/.well-known/did/nostr',
+        '/.well-known/did/nostr/',
+        '/.well-known/did/nostr/:pubkeyAndExt',
+        '/.well-known/did/nostr/*',
+      ]) {
+        instance.put(pat, methodNotAllowed);
+        instance.post(pat, methodNotAllowed);
+        instance.patch(pat, methodNotAllowed);
+        instance.delete(pat, methodNotAllowed);
+      }
     });
   }
 

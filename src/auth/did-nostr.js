@@ -12,10 +12,30 @@ import { validateExternalUrl } from '../utils/ssrf.js';
 // Default DID resolver endpoint
 const DEFAULT_DID_RESOLVER = 'https://nostr.social/.well-known/did/nostr';
 
-// Cache for resolved DIDs (pubkey -> webId or null)
+// Cache for resolved DIDs (pubkey -> { webId, timestamp, failureTtl? }).
+//
+// Bounded LRU: pubkeys come from external NIP-98 events, so an
+// attacker can flood the resolver with unique pubkeys and grow the
+// cache without limit if it's an unbounded Map. The Map iteration
+// order IS insertion order, so evicting `cache.keys().next().value`
+// drops the oldest entry — same pattern as src/auth/cid-doc-fetch.js.
+// On every set: re-insert (delete + set) bumps the entry to "newest"
+// so the LRU semantics are preserved across cache hits.
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const FAILURE_CACHE_TTL = 60 * 1000; // 1 minute for failed lookups
+const CACHE_MAX_ENTRIES = 10_000; // bound at ~few MB worst case
+
+function setCacheEntry(key, entry) {
+  // Re-insert to mark as MRU (Map preserves insertion order).
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, entry);
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 // Rate-limit repeated error logs (key -> { count, lastLogged })
 const errorLogTracker = new Map();
@@ -210,18 +230,18 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
         accept: 'application/did+json, application/json',
       });
     } catch {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+      setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     if (didFetch.status < 200 || didFetch.status >= 300) {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+      setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     let didDoc;
     try {
       didDoc = JSON.parse(didFetch.body);
     } catch {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+      setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
       return null;
     }
     // Use the FINAL post-redirect URL as the same-origin reference,
@@ -244,7 +264,7 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     }
 
     if (!webId) {
-      cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+      setCacheEntry(cacheKey, { webId: null, timestamp: Date.now() });
       return null;
     }
 
@@ -256,22 +276,22 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     // doc that points at a WebID they don't control. Skip the
     // bidirectional fetch in that case (zero-network self-resolution).
     if (sameOrigin(foundAtUrl, webId)) {
-      cache.set(cacheKey, { webId, timestamp: Date.now() });
+      setCacheEntry(cacheKey, { webId, timestamp: Date.now() });
       return webId;
     }
     const verified = await verifyWebIdBacklink(webId, pubkey);
 
     if (verified) {
-      cache.set(cacheKey, { webId, timestamp: Date.now() });
+      setCacheEntry(cacheKey, { webId, timestamp: Date.now() });
       return webId;
     }
 
-    cache.set(cacheKey, { webId: null, timestamp: Date.now() });
+    setCacheEntry(cacheKey, { webId: null, timestamp: Date.now() });
     return null;
 
   } catch (err) {
     // Cache failures with short TTL to avoid hammering a down service
-    cache.set(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
+    setCacheEntry(cacheKey, { webId: null, timestamp: Date.now(), failureTtl: true });
     rateLimitedError(`did:${pubkey.substring(0, 8)}`, `DID resolution error for ${pubkey}: ${err.message}`);
     return null;
   }
@@ -387,3 +407,11 @@ function checkSameAsLink(jsonLd, expectedDid) {
 export function clearCache() {
   cache.clear();
 }
+
+/** @internal — exposed for tests; current cache size after evictions. */
+export function _cacheSizeForTests() {
+  return cache.size;
+}
+
+/** @internal — exposed for tests; LRU max for assertions. */
+export const _CACHE_MAX_FOR_TESTS = CACHE_MAX_ENTRIES;

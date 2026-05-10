@@ -200,6 +200,26 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     }
   });
 
+  it('blocks writes to multi-segment paths under the namespace', async () => {
+    // The single-segment `:pubkeyAndExt` route only matches one
+    // path component — `PUT /.well-known/did/nostr/a/b` would
+    // otherwise fall through to the wildcard `PUT /*` and accept
+    // an unauthenticated write since `/.well-known/*` bypasses
+    // WAC. The wildcard 405 handler closes that.
+    for (const subpath of ['', '/', '/a/b', '/foo/bar/baz.json']) {
+      const url = `${baseUrl}/.well-known/did/nostr${subpath}`;
+      for (const method of ['PUT', 'POST', 'PATCH', 'DELETE']) {
+        const r = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: method === 'DELETE' ? undefined : '{}',
+        });
+        assert.strictEqual(r.status, 405,
+          `${method} ${url} should be 405 (got ${r.status})`);
+      }
+    }
+  });
+
   it('indexes root-level pods (profile at /profile/card.jsonld, no podName prefix)', async () => {
     // Single-user / root-pod layout: the profile lives directly at
     // <DATA_ROOT>/profile/card.jsonld with no podName subdirectory,
