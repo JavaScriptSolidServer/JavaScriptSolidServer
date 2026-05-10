@@ -200,6 +200,24 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     }
   });
 
+  it('OPTIONS advertises only safe methods (Allow consistent with 405)', async () => {
+    // The wildcard `OPTIONS /*` advertises GET/HEAD/PUT/DELETE/PATCH/POST,
+    // which is wrong for the read-only well-known namespace and
+    // confusing to CORS preflights. Explicit OPTIONS handlers must
+    // return the same Allow set as the 405 responses.
+    for (const subpath of ['', '/', '/x', '/a/b']) {
+      const r = await fetch(`${baseUrl}/.well-known/did/nostr${subpath}`, { method: 'OPTIONS' });
+      assert.strictEqual(r.status, 204, `OPTIONS ${subpath} should be 204`);
+      const allow = (r.headers.get('allow') || '').toUpperCase();
+      assert.match(allow, /GET/, `Allow should include GET (got "${allow}")`);
+      assert.match(allow, /HEAD/);
+      assert.doesNotMatch(allow, /\bPUT\b/, `Allow should not advertise PUT (got "${allow}")`);
+      assert.doesNotMatch(allow, /\bPOST\b/);
+      assert.doesNotMatch(allow, /\bDELETE\b/);
+      assert.doesNotMatch(allow, /\bPATCH\b/);
+    }
+  });
+
   it('blocks writes to multi-segment paths under the namespace', async () => {
     // The single-segment `:pubkeyAndExt` route only matches one
     // path component — `PUT /.well-known/did/nostr/a/b` would
@@ -508,38 +526,30 @@ describe('profilePathFromWebId — DATA_ROOT containment', () => {
       `expected containment, got ${p}`);
   });
 
-  it('refuses an unparseable-then-resolved-outside path (defense-in-depth)', () => {
-    // Simulate the future scenario where a caller bypasses URL
-    // parsing and feeds the helper a raw pathname that resolves
-    // outside dataRoot. We do that by constructing a webId where
-    // path-resolution outpaces URL normalization. Easiest way:
-    // call the helper with a dataRoot and a webId whose pathname
-    // we KNOW resolves elsewhere (single-segment + dataRoot
-    // chosen to escape).
-    //
-    // `/some/profile/card.jsonld` joined to a *relative* dataRoot
-    // (`./inner`) makes the resolved path `/some/profile/card.jsonld`
-    // — outside `<cwd>/inner`. The containment check must catch it.
+  it('keeps a relative dataRoot + plausible webId inside the absolute dataRoot', () => {
+    // Sanity test for the relative-dataRoot case. With dataRoot
+    // `./inner` and a normal-looking webId pathname, the resolved
+    // path lives at `<cwd>/inner/some/profile/card.jsonld` —
+    // INSIDE the resolved-absolute innerRoot. (URL normalization
+    // already strips `..` segments before path-resolution sees
+    // them, so a "real" outside-dataRoot result isn't reachable
+    // through URL-parsed webIds in practice. The containment
+    // check stays as defense-in-depth for any future caller that
+    // bypasses URL parsing.)
     const innerRoot = './nonexistent-inner-root';
     const p = profilePathFromWebId(innerRoot, 'http://example/some/profile/card.jsonld');
-    // Resolved path is `<cwd>/nonexistent-inner-root/some/profile/card.jsonld`,
-    // which IS under the absolute innerRoot. So this case stays inside.
-    // Verify so:
-    assert.ok(p && p.startsWith(path.resolve(innerRoot)));
+    assert.ok(p && p.startsWith(path.resolve(innerRoot)),
+      `expected ${p} to be under ${path.resolve(innerRoot)}`);
   });
 
-  it('rejects a path that resolves outside an absolute dataRoot', () => {
-    // The only way to actually trigger the "outside" branch via
-    // public API is by constructing a webId pathname that, after
-    // URL normalization, still escapes — which WHATWG URL parsing
-    // prevents. So we test the containment branch via a degenerate
-    // dataRoot/webId pair: dataRoot is a leaf path under /tmp, webId
-    // pathname names an absolute-feeling sibling. URL normalization
-    // pins it to `/sibling/...`, then path.resolve from the leaf
-    // dataRoot gives `<dataRoot>/sibling/...` — INSIDE dataRoot.
-    // So the production code-path can't trigger "outside" through
-    // a URL-parsed webId. We confirm this property: every URL-
-    // parseable webId resolves at-or-under dataRootAbs.
+  it('every URL-parseable webId with `..` segments still resolves inside dataRoot', () => {
+    // The production path is unreachable via URL-parsed input —
+    // WHATWG URL parsing strips `..` before our path-resolution
+    // sees it. This test asserts the resulting INVARIANT (every
+    // URL-parseable webId stays inside dataRoot) across a few
+    // traversal-shaped inputs, so any future regression where
+    // someone bypasses URL parsing or breaks the leading-slash
+    // strip would surface here.
     for (const evil of [
       'http://h/../../../etc/passwd',
       'http://h//../etc/passwd',

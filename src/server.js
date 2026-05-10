@@ -673,6 +673,14 @@ export function createServer(options = {}) {
   const methodNotAllowed = async (request, reply) => reply.code(405)
     .header('Allow', 'GET, HEAD, OPTIONS')
     .send({ error: 'Method Not Allowed' });
+  // OPTIONS must report the SAME `Allow` set as the 405s. Without
+  // an explicit handler the request falls through to the wildcard
+  // `OPTIONS /*` which advertises GET, HEAD, PUT, DELETE, PATCH,
+  // POST — wrong for this namespace and confusing to CORS
+  // preflights.
+  const optionsForReadOnlyNamespace = async (request, reply) => reply.code(204)
+    .header('Allow', 'GET, HEAD, OPTIONS')
+    .send();
   for (const pat of [
     '/.well-known/did/nostr',
     '/.well-known/did/nostr/',
@@ -683,6 +691,7 @@ export function createServer(options = {}) {
     fastify.post(pat, methodNotAllowed);
     fastify.patch(pat, methodNotAllowed);
     fastify.delete(pat, methodNotAllowed);
+    fastify.options(pat, optionsForReadOnlyNamespace);
   }
   if (idpEnabled) {
     // Async plugin registration so the dynamic import lives in here,
