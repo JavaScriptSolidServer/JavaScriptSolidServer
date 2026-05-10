@@ -274,6 +274,27 @@ describe('DID:nostr Resolution', () => {
     });
   });
 
+  describe('Cache key includes resolverUrl', () => {
+    // Cross-resolver leakage: different resolvers can legitimately
+    // disagree about the same pubkey (one might have a DID doc,
+    // another not). Keying the cache only on pubkey would let a
+    // hit from one resolver suppress a real lookup against another.
+    before(() => clearCache());
+
+    it('does NOT share cache entries across resolvers', async () => {
+      // Both calls hit unresolvable hosts → both cache as
+      // failureTtl. Crucially, they cache under DIFFERENT keys, so
+      // the cache size grows by 2 (not 1).
+      const pk = 'a'.repeat(64);
+      const sizeBefore = _cacheSizeForTests();
+      await resolveDidNostrToWebId(pk, 'http://nonexistent-a.invalid:1');
+      await resolveDidNostrToWebId(pk, 'http://nonexistent-b.invalid:1');
+      const sizeAfter = _cacheSizeForTests();
+      assert.strictEqual(sizeAfter - sizeBefore, 2,
+        'each resolver+pubkey pair should cache independently');
+    });
+  });
+
   describe('Cache bounding', () => {
     // The cache is keyed by attacker-controlled NIP-98 pubkeys.
     // Without an LRU cap a stream of unique pubkeys would grow

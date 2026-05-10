@@ -186,8 +186,13 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
   }
 
-  // Check cache (lazy eviction of expired entries)
-  const cacheKey = pubkey.toLowerCase();
+  // Cache key includes the resolver URL because different resolvers
+  // can legitimately disagree about the same pubkey (one might have
+  // a DID doc, another not; alsoKnownAs values can differ across
+  // operator-run resolvers). Keying only on pubkey would let a hit
+  // from one resolver leak into a query against another, including
+  // a cached `null` mistakenly suppressing a real result.
+  const cacheKey = `${resolverUrl}::${pubkey.toLowerCase()}`;
   const cached = cache.get(cacheKey);
   if (cached) {
     const ttl = cached.failureTtl ? FAILURE_CACHE_TTL : CACHE_TTL;
