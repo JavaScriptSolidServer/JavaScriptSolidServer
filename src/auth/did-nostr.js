@@ -244,9 +244,15 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     let webId = null;
 
     if (Array.isArray(didDoc.alsoKnownAs) && didDoc.alsoKnownAs.length > 0) {
-      // Find first HTTP(S) URL that looks like a WebID
+      // Accept BOTH http and https here; the SSRF guard on the
+      // backlink fetch will refuse http in production via
+      // `requireHttps: NODE_ENV === 'production'`. Filtering to
+      // https-only at this layer would mean non-production
+      // resolvers can never validate against http WebIDs (test
+      // pods, dev fixtures), even when the SSRF layer would have
+      // permitted them.
       webId = didDoc.alsoKnownAs.find(aka =>
-        typeof aka === 'string' && aka.startsWith('https://'));
+        typeof aka === 'string' && /^https?:\/\//.test(aka));
     }
 
     // Fallback to profile fields
@@ -322,8 +328,12 @@ async function verifyWebIdBacklink(webId, pubkey) {
     //      is asserting the key, not merely an identity equivalence.
     //   2. owl:sameAs / schema:sameAs to did:nostr:<pubkey>. Older
     //      shape; still accepted for compatibility.
+    // Pass `backlinkRes.url` (the FINAL post-redirect URL) as the
+    // base for absolutizing relative IDs in the profile. Profiles
+    // with a relative subject (`"@id": "#me"`) and absolute VM IDs
+    // can't otherwise be absolutized correctly by checkCidVmBacklink.
     const checkProfile = (jsonLd) =>
-      checkCidVmBacklink(jsonLd, pubkey) ||
+      checkCidVmBacklink(jsonLd, pubkey, backlinkRes.url) ||
       checkSameAsLink(jsonLd, expectedDid);
 
     // Handle HTML with JSON-LD data island
@@ -358,47 +368,105 @@ async function verifyWebIdBacklink(webId, pubkey) {
 
 /**
  * Does the WebID profile contain a CID v1 `verificationMethod` for
- * the given Nostr pubkey, referenced from `authentication`?
+ * the given Nostr pubkey, referenced from `authentication`, with a
+ * `controller` consistent with the profile's expected controller set?
  *
- * Mirrors the resource-side verifier's check: a key in
- * `verificationMethod` alone (no `authentication` membership) is
- * NOT a valid auth binding — the user has to explicitly designate
- * it for authentication. JWK entries also have to satisfy the
- * BIP-340 even-y check (handled inside extractNostrPubkeysFromProfile).
+ * Mirrors the resource-side verifier's three checks:
+ *   (1) profile contains a Nostr-shaped VM matching `pubkey` (with
+ *       BIP-340 even-y validation handled inside
+ *       extractNostrPubkeysFromProfile)
+ *   (2) the VM is referenced from `authentication` — a key in
+ *       `verificationMethod` alone is NOT an auth binding
+ *   (3) the VM's `controller` is in the profile's expected
+ *       controller set (the profile-level `controller` field, or
+ *       the profile subject as the CID-v1 self-control fallback)
+ *
+ * @param {object} jsonLd - parsed WebID profile
+ * @param {string} pubkey - target Nostr x-only pubkey hex
+ * @param {string} [docUrl] - URL the profile was fetched from. Used
+ *   as the base for absolutizing relative IDs when the profile's
+ *   subject `@id` is itself relative (e.g. `"@id": "#me"`). Without
+ *   this fallback, mixed-shape profiles (relative subject + absolute
+ *   VM IDs) would absolutize against an empty base and the
+ *   authentication-membership check would silently fail.
  */
-function checkCidVmBacklink(jsonLd, pubkey) {
+function checkCidVmBacklink(jsonLd, pubkey, docUrl) {
   const target = pubkey.toLowerCase();
   const vms = extractNostrPubkeysFromProfile(jsonLd);
   if (vms.length === 0) return false;
 
-  // Build the absolute set of authentication-referenced IDs. The
-  // base for absolutization is the profile's subject (its `@id`).
-  // Profiles in the wild can have a relative subject ("@id":"#me"),
-  // so we strip the hash and use it as the URL base for resolving
-  // any relative entries.
-  const subject = jsonLd?.['@id'] || jsonLd?.id || '';
-  let base = '';
-  try { const u = new URL(subject); u.hash = ''; base = u.toString(); }
-  catch { base = ''; }
-  const authIds = new Set();
-  const auth = jsonLd?.authentication;
-  const authList = Array.isArray(auth) ? auth : (auth ? [auth] : []);
-  for (const ent of authList) {
-    let id;
-    if (typeof ent === 'string') id = ent;
-    else if (ent && typeof ent === 'object') id = ent['@id'] || ent.id;
-    if (!id) continue;
-    try { authIds.add(new URL(id, base).toString()); }
-    catch { authIds.add(id); }
+  // Compute the URL base used for absolutizing relative IDs.
+  // Preference order:
+  //   1. profile['@id']/id when it's an absolute URL
+  //   2. the document URL the profile was fetched from
+  //   3. empty string (last resort — falls back to raw IDs)
+  const subjectRaw = jsonLd?.['@id'] || jsonLd?.id || '';
+  const stripHash = (u) => { try { const x = new URL(u); x.hash = ''; return x.toString(); } catch { return ''; } };
+  let base = stripHash(subjectRaw);
+  if (!base && docUrl) base = stripHash(docUrl);
+  // The absolute subject — used for the CID-v1 self-control
+  // fallback (controller defaults to the profile subject if no
+  // explicit controller is declared).
+  const profileSubject = base ? (() => {
+    try { const u = new URL(subjectRaw, base); return u.toString(); }
+    catch { return base; }
+  })() : '';
+
+  const absolutize = (s) => {
+    try { return new URL(s, base).toString(); }
+    catch { return s; }
+  };
+  const collectIds = (val) => {
+    const out = [];
+    const list = Array.isArray(val) ? val : (val ? [val] : []);
+    for (const ent of list) {
+      let id;
+      if (typeof ent === 'string') id = ent;
+      else if (ent && typeof ent === 'object') id = ent['@id'] || ent.id;
+      if (id) out.push(absolutize(id));
+    }
+    return out;
+  };
+
+  // Authentication-referenced IDs.
+  const authIds = new Set(collectIds(jsonLd?.authentication));
+
+  // Expected controller set. Match the resource-side verifier:
+  // declared controllers if any, otherwise fall back to the
+  // profile subject (CID v1 self-control).
+  const expectedControllers = new Set(collectIds(jsonLd?.controller));
+  if (expectedControllers.size === 0 && profileSubject) {
+    expectedControllers.add(profileSubject);
   }
 
   for (const { pubkey: vmPubkey, vm } of vms) {
     if (vmPubkey !== target) continue;
     const vmIdRaw = vm.id || vm['@id'];
     if (typeof vmIdRaw !== 'string') continue;
-    let vmId = vmIdRaw;
-    try { vmId = new URL(vmIdRaw, base).toString(); } catch { /* fall through */ }
-    if (authIds.has(vmId)) return true;
+    const vmId = absolutize(vmIdRaw);
+    if (!authIds.has(vmId)) continue;
+    // Check (3): VM's controller must be in expectedControllers.
+    // Defaults to the VM ID's "self" base if the VM has no
+    // explicit controller — same as the resource-side verifier.
+    const vmCtrls = collectIds(vm.controller);
+    if (vmCtrls.length === 0) {
+      // No explicit controller: per CID v1 the VM's controller
+      // defaults to the VM's own `id` base. We accept that only
+      // if the profile subject is itself in expectedControllers
+      // (which it is by the fallback above) AND the VM ID
+      // shares an origin with the subject — otherwise an
+      // attacker could plant a VM at a fragment of someone
+      // else's profile.
+      try {
+        const vmOrigin = new URL(vmId).origin;
+        const subjOrigin = profileSubject ? new URL(profileSubject).origin : '';
+        if (subjOrigin && vmOrigin === subjOrigin) return true;
+      } catch { /* fall through */ }
+      continue;
+    }
+    for (const c of vmCtrls) {
+      if (expectedControllers.has(c)) return true;
+    }
   }
   return false;
 }
@@ -460,8 +528,8 @@ export function _cacheSizeForTests() {
 }
 
 /** @internal — exposed for tests; thin wrapper over checkCidVmBacklink. */
-export function _checkCidVmBacklinkForTests(profile, pubkey) {
-  return checkCidVmBacklink(profile, pubkey);
+export function _checkCidVmBacklinkForTests(profile, pubkey, docUrl) {
+  return checkCidVmBacklink(profile, pubkey, docUrl);
 }
 
 /** @internal — exposed for tests; LRU max for assertions. */

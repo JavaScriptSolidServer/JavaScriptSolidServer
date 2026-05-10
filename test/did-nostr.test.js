@@ -272,6 +272,45 @@ describe('DID:nostr Resolution', () => {
       };
       assert.strictEqual(_checkCidVmBacklinkForTests(profile, legitPubkey), false);
     });
+
+    it('checkCidVmBacklink: handles relative @id when docUrl is supplied', async () => {
+      const { _checkCidVmBacklinkForTests } = await import('../src/auth/did-nostr.js');
+      const docUrl = 'http://example.test/profile/card.jsonld';
+      // Relative subject AND absolute VM IDs (a common mixed shape).
+      // Without the docUrl fallback, base would be empty and the
+      // authentication-membership check would silently fail.
+      const profile = {
+        '@id': '#me',
+        verificationMethod: [{
+          id: `${docUrl}#k`,
+          type: 'JsonWebKey',
+          controller: `${docUrl}#me`,
+          publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x: legitX, y: legitY },
+        }],
+        authentication: [`${docUrl}#k`],
+      };
+      assert.strictEqual(_checkCidVmBacklinkForTests(profile, legitPubkey, docUrl), true);
+    });
+
+    it('checkCidVmBacklink: rejects when VM controller is not in expected set', async () => {
+      const { _checkCidVmBacklinkForTests } = await import('../src/auth/did-nostr.js');
+      const subj = 'http://example.test/profile/card#me';
+      // VM controller points at a totally different origin — would
+      // be a planted-key attack. Resource-side verifier rejects this;
+      // CID-VM backlink must agree.
+      const profile = {
+        '@id': subj,
+        // No top-level controller — defaults to subject.
+        verificationMethod: [{
+          id: `${subj.replace('#me','')}#k`,
+          type: 'JsonWebKey',
+          controller: 'http://attacker.example/me',
+          publicKeyJwk: { kty: 'EC', crv: 'secp256k1', x: legitX, y: legitY },
+        }],
+        authentication: [`${subj.replace('#me','')}#k`],
+      };
+      assert.strictEqual(_checkCidVmBacklinkForTests(profile, legitPubkey), false);
+    });
   });
 
   describe('Cache key includes resolverUrl', () => {
