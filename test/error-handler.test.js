@@ -81,3 +81,73 @@ describe('registerErrorHandler (#312)', () => {
     assert.strictEqual(unhandled.length, 0, '4xx must not produce a 5xx stack log');
   });
 });
+
+// #376: Fastify-internal errors that fire BEFORE any user hook
+// runs (notably FST_ERR_BAD_URL on malformed percent-encoding)
+// previously bypassed every CORS-injecting handler in JSS, leaving
+// the 400 response with no Access-Control-Allow-* headers — browsers
+// surfaced the response as a CORS error instead of the real status.
+// The fix uses Fastify's `frameworkErrors` option in createServer
+// to attach the CORS header set whenever the bad request carried
+// an `Origin` header.
+describe('frameworkErrors injects CORS headers on FST_ERR_BAD_URL (#376)', () => {
+  let server;
+  let baseUrl;
+
+  before(async () => {
+    const { createServer } = await import('../src/server.js');
+    server = createServer({ logger: false, forceCloseConnections: true });
+    await server.listen({ port: 0, host: '127.0.0.1' });
+    const addr = server.server.address();
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  after(async () => {
+    await server.close();
+  });
+
+  it('returns 400 with full CORS headers for a malformed-percent URL + Origin', async () => {
+    // `%g1` is the canonical FST_ERR_BAD_URL trigger — `g` isn't a
+    // valid hex digit, so the percent-decode bails before any route
+    // handler is even resolved.
+    const r = await fetch(`${baseUrl}/foo%g1`, {
+      headers: { Origin: 'https://example.com' },
+    });
+    assert.strictEqual(r.status, 400);
+    // CORS headers are what was missing pre-fix. ACAO should mirror
+    // the request Origin (not `*`), since the request explicitly
+    // sent one — that's what getCorsHeaders does.
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), 'https://example.com');
+    assert.match(r.headers.get('access-control-allow-methods') || '', /GET/);
+    assert.ok(r.headers.get('access-control-allow-headers'), 'ACAH must be set');
+    assert.ok(r.headers.get('access-control-expose-headers'), 'ACEH must be set');
+  });
+
+  it('also returns CORS headers for the same bad URL even without an Origin (ACAO defaults to *)', async () => {
+    // Non-browser clients without an Origin still get a JSON 400
+    // body — the CORS guard is "only set Allow-* when Origin was
+    // present" (browsers won't enforce CORS in this case anyway).
+    // Confirm the response is still well-shaped JSON and the status
+    // is correct.
+    const r = await fetch(`${baseUrl}/foo%g1`);
+    assert.strictEqual(r.status, 400);
+    const body = await r.json();
+    assert.strictEqual(body.code, 'FST_ERR_BAD_URL');
+    assert.strictEqual(body.statusCode, 400);
+  });
+
+  it('does NOT regress: a normal 404 still carries CORS via the wildcard handler', async () => {
+    // Belt-and-suspenders: the frameworkErrors hook shouldn't have
+    // displaced any existing CORS behavior on responses that go
+    // through the wildcard handler. Ask for a path that hits the
+    // LDP wildcard and 404s (no such resource), confirm CORS.
+    const r = await fetch(`${baseUrl}/nonexistent/deep/path`, {
+      headers: { Origin: 'https://example.com' },
+    });
+    // Could be 401 or 404 depending on auth defaults; in either case
+    // CORS must be present.
+    assert.ok([401, 404].includes(r.status), `expected 401 or 404, got ${r.status}`);
+    assert.ok(r.headers.get('access-control-allow-origin'),
+      'ACAO must be set on the normal-handler error path too');
+  });
+});

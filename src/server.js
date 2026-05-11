@@ -169,6 +169,31 @@ export function createServer(options = {}) {
       }
       // Default Fastify behavior for other client errors
       socket.destroy(err);
+    },
+    // Catch Fastify-internal errors that fire BEFORE any user hook
+    // runs — notably FST_ERR_BAD_URL on malformed percent-encoding
+    // (`%g1`, truncated `%E0%`, invalid UTF-8). Without this, Fastify
+    // writes the 400 response directly via `res.writeHead` and the
+    // browser sees a CORS error (no Access-Control-Allow-*) instead
+    // of the real status. #376.
+    frameworkErrors: (err, request, reply) => {
+      const origin = request.headers?.origin;
+      if (origin) {
+        // getCorsHeaders sets Access-Control-Allow-Origin to the
+        // request's Origin (or `*` when absent). Allow-Methods /
+        // Headers / Expose-Headers / Credentials / Max-Age are the
+        // standard JSS set from src/ldp/headers.js, so this error
+        // path advertises the same surface as a happy-path response.
+        const cors = getCorsHeaders(origin);
+        for (const [k, v] of Object.entries(cors)) reply.header(k, v);
+      }
+      const statusCode = err.statusCode ?? 400;
+      reply.code(statusCode).type('application/json').send({
+        error: err.name || 'Bad Request',
+        code: err.code,
+        message: err.message,
+        statusCode,
+      });
     }
   };
 
