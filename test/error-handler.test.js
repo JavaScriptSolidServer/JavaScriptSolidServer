@@ -121,17 +121,27 @@ describe('frameworkErrors injects CORS headers on FST_ERR_BAD_URL (#376)', () =>
     assert.match(r.headers.get('access-control-allow-methods') || '', /GET/);
     assert.ok(r.headers.get('access-control-allow-headers'), 'ACAH must be set');
     assert.ok(r.headers.get('access-control-expose-headers'), 'ACEH must be set');
+    // Body uses HTTP status text ("Bad Request"), not err.name
+    // ("FastifyError") — matches Fastify's default body shape so
+    // any pre-fix client parsing `error` keeps working.
+    const body = await r.json();
+    assert.strictEqual(body.error, 'Bad Request');
+    assert.strictEqual(body.code, 'FST_ERR_BAD_URL');
+    assert.strictEqual(body.statusCode, 400);
   });
 
-  it('also returns CORS headers for the same bad URL even without an Origin (ACAO defaults to *)', async () => {
-    // Non-browser clients without an Origin still get a JSON 400
-    // body — the CORS guard is "only set Allow-* when Origin was
-    // present" (browsers won't enforce CORS in this case anyway).
-    // Confirm the response is still well-shaped JSON and the status
-    // is correct.
+  it('returns CORS headers (ACAO=*) and well-shaped JSON for the same bad URL without an Origin', async () => {
+    // Non-browser clients without an Origin still receive the full
+    // CORS header set — consistent with the rest of the server,
+    // where the global onRequest hook always sets CORS. ACAO
+    // defaults to `*` when no Origin was sent (per getCorsHeaders).
     const r = await fetch(`${baseUrl}/foo%g1`);
     assert.strictEqual(r.status, 400);
+    assert.strictEqual(r.headers.get('access-control-allow-origin'), '*');
+    assert.match(r.headers.get('access-control-allow-methods') || '', /GET/);
+    assert.ok(r.headers.get('access-control-allow-headers'), 'ACAH must be set');
     const body = await r.json();
+    assert.strictEqual(body.error, 'Bad Request');
     assert.strictEqual(body.code, 'FST_ERR_BAD_URL');
     assert.strictEqual(body.statusCode, 400);
   });
