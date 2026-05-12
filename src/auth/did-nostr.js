@@ -2,9 +2,12 @@
  * DID:nostr Resolution
  *
  * Resolves did:nostr:<pubkey> to a Solid WebID by:
- * 1. Fetching DID document from nostr.social
- * 2. Extracting alsoKnownAs WebID
- * 3. Verifying bidirectional link (WebID links back to did:nostr)
+ * 1. Trying the in-process local well-known index first (the pod is
+ *    its own authoritative resolver for its accounts — no HTTP)
+ * 2. Falling back to the configured external resolver:
+ *    a. Fetching the DID document
+ *    b. Extracting alsoKnownAs WebID
+ *    c. Verifying bidirectional link (WebID links back to did:nostr)
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
@@ -168,12 +171,21 @@ export async function fetchWithRedirectGuard(initialUrl, {
 }
 
 /**
- * Resolve did:nostr pubkey to WebID via DID document.
+ * Resolve did:nostr pubkey to WebID.
  *
- * Local users are resolved by `resolveDidNostrLocally` in the auth
- * caller (well-known-did-nostr.js exports an in-process function) —
- * this resolver is the cross-pod fallback that fetches an external
- * DID doc, so all fetches run through the SSRF guard.
+ * Tries the in-process local well-known index first (the pod is its
+ * own authoritative resolver for its accounts — no HTTP fetch, no
+ * external dependency, no SSRF surface). Falls back to the configured
+ * external resolver (`nostr.social` by default) only for cross-pod
+ * pubkeys that no local account claims.
+ *
+ * This local-first ordering is also enforced in the `verifyNostrAuth`
+ * resolver chain (src/auth/nostr.js). Duplicating it inside the
+ * resolver itself is defense-in-depth: callers from other code paths
+ * (and any future caller that forgets to consult the local index)
+ * still get the cheap, reliable answer for the dominant SSO case
+ * — user signing in to their own pod — even when the external
+ * resolver is unavailable (network down, SSL cert expired, etc.).
  *
  * @param {string} pubkey - 64-char hex Nostr pubkey
  * @param {string} [resolverUrl] - DID resolver base URL (without the
@@ -192,6 +204,24 @@ export async function resolveDidNostrToWebId(pubkey, resolverUrl = DEFAULT_DID_R
     return null;
   }
   pubkey = pubkey.toLowerCase();
+
+  // Local-first: consult the in-process well-known index before any
+  // HTTP fetch. The index is built from local WebID profiles whose
+  // `verificationMethod` declares this Nostr pubkey AND is referenced
+  // from `authentication` (see src/idp/well-known-did-nostr.js) — so
+  // the binding is already verified by construction and we skip the
+  // backlink round-trip required for external answers.
+  //
+  // Dynamic import keeps the IdP module optional: pods built/run
+  // without the IdP layer don't pull it in. Any import or lookup
+  // error falls through to the external resolver.
+  try {
+    const { resolveDidNostrLocally } = await import('../idp/well-known-did-nostr.js');
+    const localWebId = await resolveDidNostrLocally(pubkey);
+    if (localWebId) return localWebId;
+  } catch {
+    // IdP module unavailable or local lookup threw — fall through.
+  }
 
   // Cache key includes the resolver URL because different resolvers
   // can legitimately disagree about the same pubkey (one might have
