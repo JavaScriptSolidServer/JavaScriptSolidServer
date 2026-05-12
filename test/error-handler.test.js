@@ -88,8 +88,10 @@ describe('registerErrorHandler (#312)', () => {
 // the 400 response with no Access-Control-Allow-* headers — browsers
 // surfaced the response as a CORS error instead of the real status.
 // The fix uses Fastify's `frameworkErrors` option in createServer
-// to attach the CORS header set whenever the bad request carried
-// an `Origin` header.
+// to attach the full CORS header set on EVERY framework-error
+// response (matching the rest of the server, where the global
+// onRequest hook sets CORS unconditionally). Allow-Origin mirrors
+// the request's `Origin` if present, otherwise defaults to `*`.
 describe('frameworkErrors injects CORS headers on FST_ERR_BAD_URL (#376)', () => {
   let server;
   let baseUrl;
