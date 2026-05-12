@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { readFile } from 'fs/promises';
+import { STATUS_CODES } from 'node:http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
@@ -169,6 +170,32 @@ export function createServer(options = {}) {
       }
       // Default Fastify behavior for other client errors
       socket.destroy(err);
+    },
+    // Catch Fastify-internal errors that fire BEFORE any user hook
+    // runs — notably FST_ERR_BAD_URL on malformed percent-encoding
+    // (`%g1`, truncated `%E0%`, invalid UTF-8). Without this, Fastify
+    // writes the 400 response directly via `res.writeHead` and the
+    // browser sees a CORS error (no Access-Control-Allow-*) instead
+    // of the real status. #376.
+    frameworkErrors: (err, request, reply) => {
+      // ALWAYS apply CORS headers — matches the rest of the server's
+      // behavior (every successful response sets CORS via the global
+      // onRequest hook). getCorsHeaders defaults Allow-Origin to `*`
+      // when the request didn't send an Origin header.
+      const cors = getCorsHeaders(request.headers?.origin);
+      for (const [k, v] of Object.entries(cors)) reply.header(k, v);
+      const statusCode = err.statusCode ?? 400;
+      reply.code(statusCode).type('application/json').send({
+        // Use the HTTP status text (e.g. "Bad Request" for 400)
+        // rather than err.name (which for FastifyError is the
+        // unhelpful string "FastifyError"). Matches Fastify's
+        // default error-body shape that pre-fix clients were
+        // parsing.
+        error: STATUS_CODES[statusCode] || 'Error',
+        code: err.code,
+        message: err.message,
+        statusCode,
+      });
     }
   };
 
