@@ -1,0 +1,27 @@
+# CODEOWNERS — paths that auto-request review from the listed owners.
+#
+# GitHub matches paths in order. The most specific match for a given
+# file wins. The catch-all `*` pattern at the top covers everything
+# else; the path-specific entries below document review responsibility
+# for security-sensitive surfaces explicitly.
+#
+# Format reference:
+# https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default — all files
+*                       @melvincarvalho
+
+# Auth / security-sensitive paths
+/src/auth/              @melvincarvalho
+/src/idp/               @melvincarvalho
+/src/utils/ssrf.js      @melvincarvalho
+
+# CLI and release surface
+/bin/                   @melvincarvalho
+/package.json           @melvincarvalho
+/package-lock.json      @melvincarvalho
+
+# Legal / policy substrate
+/LICENSE                @melvincarvalho
+/CONTRIBUTING.md        @melvincarvalho
+/.github/               @melvincarvalho
