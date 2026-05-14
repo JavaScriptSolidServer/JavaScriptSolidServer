@@ -126,8 +126,8 @@ function parseRangeHeader(rangeHeader, fileSize) {
  * JSON-LD with the HTML variant despite Vary: Accept (#456).
  */
 function getMashlibEtag(request, stats, storagePath) {
-  const storedType = stats.isDirectory ? null : getContentType(storagePath);
-  const willServeMashlib = !stats.isDirectory &&
+  const storedType = stats.isDirectory ? 'application/ld+json' : getContentType(storagePath);
+  const willServeMashlib =
     shouldServeMashlib(request, request.mashlibEnabled, storedType);
   const effectiveEtag = willServeMashlib
     ? stats.etag.replace(/"$/, '-html"')
