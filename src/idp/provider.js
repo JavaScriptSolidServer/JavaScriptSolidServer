@@ -413,7 +413,10 @@ export async function createProvider(issuer) {
       const reqUrl = ctx.req?.originalUrl || ctx.request?.url || ctx.url || '';
       const alreadyRetried = reqUrl.includes('_stale_retry=1');
 
-      if (isStaleSessionCrash && !alreadyRetried) {
+      // Only redirect browser GETs (authorization endpoint). POST/token/
+      // userinfo are programmatic — clients won't follow redirects or
+      // honor Set-Cookie, so just fall through to the error page.
+      if (isStaleSessionCrash && !alreadyRetried && ctx.method === 'GET') {
         expireSessionCookiesKoa(ctx);
         const separator = reqUrl.includes('?') ? '&' : '?';
         ctx.redirect(`${reqUrl}${separator}_stale_retry=1`);
