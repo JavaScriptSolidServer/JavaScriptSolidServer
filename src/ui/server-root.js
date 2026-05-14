@@ -18,37 +18,25 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(__dirname, 'server-root.html');
 
 /**
- * Render the landing page as an HTML string.
+ * Read the landing page template and return it as an HTML string.
  *
- * The page is mode-agnostic — same HTML for single-user and multi-user.
- * Sign up / Sign in are revealed at load time by an inline HEAD probe
- * against /idp/register, so the seeded file keeps working across mode
- * changes without regeneration. See #435.
+ * The seeded HTML is fully static — no template substitution. Anything
+ * we used to render in (mode, enabled features, version) would have
+ * gone stale on the next mode change or upgrade because the seed is
+ * skip-if-exists. They've been dropped from the template; the CLI
+ * banner lists them at startup, and Sign up / Sign in adapt at load
+ * time via the inline HEAD probe (see decideRevealForRegisterStatus
+ * below for the matrix that the inline script implements).
  *
- * Only `version` is rendered into the seeded HTML — anything else that
- * varies with server state (mode, enabled features) would go stale on
- * the next mode change because of skip-if-exists.
+ * The function still takes (and ignores) a `_ctx` arg for forward
+ * compatibility — callers (seedServerRoot, server.js) pass one.
  *
- * @param {object} ctx
- * @param {string} [ctx.version] - JSS version (shown in the info box)
+ * @param {object} [_ctx] - Reserved; currently unused.
  * @returns {string} HTML
  */
-export function renderServerRoot(ctx = {}) {
-  const { version = 'unknown' } = ctx;
-  const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
-
-  // Single-pass token substitution. Each {{token}} is matched once
-  // against the original template and replaced from `values`;
-  // substituted text isn't re-scanned (a `$` or stray `{{…}}` in a
-  // value can't cause re-substitution or hit String.prototype.replace's
-  // `$&` substitution patterns). See #433 review thread.
-  const values = {
-    title: 'JSS Solid pod',
-    version: escape(version)
-  };
-  return tpl.replace(/{{(\w+)}}/g, (match, key) =>
-    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
-  );
+// eslint-disable-next-line no-unused-vars
+export function renderServerRoot(_ctx = {}) {
+  return readFileSync(TEMPLATE_PATH, 'utf8');
 }
 
 /**
@@ -72,15 +60,6 @@ export function decideRevealForRegisterStatus(status) {
   if (status === 403) return { register: false, login: true };
   return { register: false, login: false };
 }
-
-function escape(s = '') {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 
 /**
  * Seed DATA_ROOT/index.html, DATA_ROOT/.acl and DATA_ROOT/index.html.acl

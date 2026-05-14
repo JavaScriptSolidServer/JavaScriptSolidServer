@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{title}}</title>
+  <title>JSS Solid pod</title>
   <meta name="description" content="A Solid pod server powered by JSS">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -45,10 +45,6 @@
     .btn-primary:hover { background: #000; }
     .btn-secondary { background: #fff; color: #2c2c2c; border-color: #ccc; }
     .btn-secondary:hover { background: #f0efeb; }
-    .info { background: #f5f4f0; border-radius: 4px; padding: 1rem; font-size: 0.85rem; color: #666; margin-top: 1.5rem; }
-    .info .row { display: flex; justify-content: space-between; padding: 0.2rem 0; }
-    .info .label { color: #999; }
-    .info code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.9em; color: #555; }
     footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd; color: #999; font-size: 0.8rem; text-align: center; }
     footer a { color: #888; }
     footer small { display: block; margin-top: 0.5rem; }
@@ -58,7 +54,11 @@
 <body>
   <div class="container">
     <h1>Welcome</h1>
-    <p class="lede">Your JSS Solid pod is running at <a id="server-url" href="/">this server</a>.</p>
+    <!-- The fallback href="./" is page-relative so it stays inside any
+         reverse-proxy mount even if the script below doesn't run
+         (CSP, JS disabled). The script will replace it with the
+         absolute URL of the document base on load. -->
+    <p class="lede">Your JSS Solid pod is running at <a id="server-url" href="./">this server</a>.</p>
     <p class="explainer">This is a Solid pod server. Solid is an open standard for personal data — your data lives in pods you own, and apps connect to it.</p>
 
     <div class="actions">
@@ -72,13 +72,11 @@
       <a href="./idp" class="btn btn-secondary" data-cond="login" hidden>Sign in</a>
     </div>
 
-    <div class="info">
-      <div class="row"><span class="label">Version</span><code>{{version}}</code></div>
-    </div>
-    <!-- Mode and enabled-feature pills used to live here, but the seeded
-         HTML can't reflect mode changes after first start (skip-if-exists).
-         The CLI banner already lists both at startup; surface them via a
-         runtime probe in a follow-up if needed. See #435. -->
+    <!-- Version, mode, and enabled-feature pills used to live here.
+         All three would go stale on the next mode change or upgrade
+         because the seed is skip-if-exists. The CLI banner already
+         lists them at startup. Surface them via a runtime probe in
+         a follow-up if needed. See #435. -->
 
 
     <footer>

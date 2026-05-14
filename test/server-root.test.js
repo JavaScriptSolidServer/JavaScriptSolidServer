@@ -104,30 +104,32 @@ describe('Server-root landing — operator override', () => {
 });
 
 describe('renderServerRoot', () => {
-  // Mode-agnostic copy: the same page is served regardless of single-user
-  // vs multi-user. There's no mode pill or features list in the seeded
-  // HTML — those would go stale on the next mode change because of
-  // skip-if-exists. Mode/feature differences land in the buttons, which
-  // adapt at load time via the HEAD probe (covered below).
-  it('renders the same copy regardless of any context flags', () => {
-    const a = renderServerRoot({ version: '1.0.0', singleUser: true });
-    const b = renderServerRoot({ version: '1.0.0', singleUser: false });
-    // Drop the only varying value (the version, identical here) and
-    // assert byte-equality across the two renders.
+  // The seeded HTML is fully static — no template substitution, no
+  // values vary by request. This is deliberate: anything dynamic
+  // (mode, features, version) goes stale on the next mode change or
+  // upgrade because the seed is skip-if-exists. Static = honest.
+  it('renders byte-identical HTML regardless of the ctx passed', () => {
+    const a = renderServerRoot({ version: '1.0.0', singleUser: true, enabled: { idp: true } });
+    const b = renderServerRoot({ version: '99.0.0', singleUser: false, enabled: {} });
+    const c = renderServerRoot();
     assert.strictEqual(a, b);
+    assert.strictEqual(b, c);
     assert.match(a, /<h1>Welcome<\/h1>/);
     assert.match(a, /Your JSS Solid pod is running/);
     assert.match(a, /open standard for personal data/);
   });
 
-  it('does not bake mode or feature pills into the seeded HTML', () => {
-    // These would go stale: the seed is skip-if-exists, so a mode
-    // change after first start wouldn't re-render them. Excluded
-    // from the seed; the CLI banner already lists them at startup.
-    const html = renderServerRoot({ version: '1.0.0', singleUser: true, enabled: { idp: true, nostr: true } });
+  it('does not bake mode, feature, or version pills into the seeded HTML', () => {
+    // All three would go stale across mode changes / upgrades because
+    // the seed is skip-if-exists. The CLI banner already lists them
+    // at startup. Excluded from the seed entirely.
+    const html = renderServerRoot({ version: '1.2.3', singleUser: true, enabled: { idp: true, nostr: true } });
     assert.doesNotMatch(html, /<code>single-user<\/code>/);
     assert.doesNotMatch(html, /<span>idp<\/span>/);
     assert.doesNotMatch(html, /<span>nostr<\/span>/);
+    assert.doesNotMatch(html, /<code>1\.2\.3<\/code>/);
+    // No info box at all — there's nothing left to put in it.
+    assert.doesNotMatch(html, /class="info"/);
   });
 
   it('always emits the Get started button pointing at the docs introduction', () => {
@@ -185,15 +187,15 @@ describe('renderServerRoot', () => {
       'live-URL must not display origin-only — it would drop the path prefix on reverse-proxy mounts');
   });
 
-  it('interpolates version into the info box', () => {
-    const html = renderServerRoot({ version: '9.9.9' });
-    assert.match(html, /<code>9\.9\.9<\/code>/);
-  });
-
-  it('escapes version to prevent injection', () => {
-    const html = renderServerRoot({ version: '<script>alert(1)</script>' });
-    assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
-    assert.match(html, /&lt;script&gt;/);
+  it('uses a page-relative fallback href on the live-URL anchor', () => {
+    // Before the script runs (or if scripts are blocked / blocked by CSP),
+    // the anchor is still clickable. A href="/" fallback would escape
+    // any reverse-proxy path prefix; use href="./" so the link stays
+    // inside the mount.
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /<a id="server-url" href="\.\/"/);
+    assert.doesNotMatch(html, /<a id="server-url" href="\/"/,
+      'fallback href must be page-relative for path-prefix portability');
   });
 
   it('points the footer at the GitHub repo and the customise hint', () => {
