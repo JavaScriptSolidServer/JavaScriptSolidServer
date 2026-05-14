@@ -92,6 +92,12 @@ export const defaults = {
   // is not yet loggable until a password is set).
   singleUserPassword: null,
 
+  // Provision a Schnorr secp256k1 owner key on pod creation, written
+  // to <pod>/private/privkey.jsonld in W3C CID v1.0 Multikey format
+  // (Phase 1 of #437). Off by default — keys-on-disk is a security
+  // tradeoff and we want operators to opt in deliberately.
+  provisionKeys: false,
+
   // WebID-TLS client certificate authentication
   webidTls: false,
 
@@ -175,6 +181,7 @@ const envMap = {
   JSS_SINGLE_USER: 'singleUser',
   JSS_SINGLE_USER_NAME: 'singleUserName',
   JSS_SINGLE_USER_PASSWORD: 'singleUserPassword',
+  JSS_PROVISION_KEYS: 'provisionKeys',
   JSS_WEBID_TLS: 'webidTls',
   JSS_DEFAULT_QUOTA: 'defaultQuota',
   JSS_PUBLIC: 'public',
@@ -228,6 +235,7 @@ const BOOLEAN_KEYS = new Set([
   'inviteOnly',
   'multiuser',
   'singleUser',
+  'provisionKeys',
   'webidTls',
   'public',
   'readOnly',

@@ -137,6 +137,11 @@ export function createServer(options = {}) {
   const liveReloadEnabled = options.liveReload ?? false;
   // MongoDB-backed /db/ route is OFF by default
   const mongoEnabled = options.mongo ?? false;
+  // Provision a Schnorr secp256k1 owner key in /private/privkey.jsonld
+  // when a single-user pod is first created. Phase 1 of #437. Off by
+  // default: keys-on-disk is a real security tradeoff, opt-in keeps
+  // the choice visible to the operator.
+  const provisionKeysEnabled = options.provisionKeys ?? false;
   const mongoUrl = options.mongoUrl ?? 'mongodb://localhost:27017';
   const mongoDatabase = options.mongoDatabase ?? 'solid';
   // HTTP 402 paid /pay/ routes are OFF by default
@@ -840,14 +845,36 @@ export function createServer(options = {}) {
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
 
+        let creation;
         if (isRootPod) {
           // Root-level pod - create structure directly at /
-          await createRootPodStructure(webId, podUri, issuer, displayName);
+          creation = await createRootPodStructure(webId, podUri, issuer, displayName);
         } else {
           // Named pod at /{name}/
-          await createPodStructure(singleUserName, webId, podUri, issuer, defaultQuota);
+          creation = await createPodStructure(
+            singleUserName, webId, podUri, issuer, defaultQuota,
+            { provisionKeys: provisionKeysEnabled }
+          );
         }
         fastify.log.info(`Single-user pod created at ${podUri}`);
+
+        // Surface the public side of any provisioned owner key, plus
+        // a prominent backup reminder. The secret is NOT logged — it
+        // lives on disk only, under /private/privkey.jsonld with
+        // owner-only WAC and file mode 0600.
+        if (creation?.ownerKey) {
+          const keyPath = isRootPod
+            ? `${podUri}private/privkey.jsonld`
+            : `${podUri}private/privkey.jsonld`;
+          fastify.log.info(`Provisioned Schnorr secp256k1 owner key`);
+          fastify.log.info(`  Public key file: ${keyPath}`);
+          fastify.log.info(`  publicKeyMultibase: ${creation.ownerKey.publicMultibase}`);
+          fastify.log.warn(
+            `BACK UP ${keyPath} — losing this file means losing this identity. ` +
+            'Filesystem reads bypass WAC; use FDE / OS keyring / restrictive umask ' +
+            'for any pod that matters. See docs/provision-keys.md.'
+          );
+        }
       }
 
       // Seed an IDP account so the operator can actually log in. Without
@@ -980,11 +1007,15 @@ export function createServer(options = {}) {
   }
 
   /**
-   * Create root-level pod structure (for single-user mode with pod at /)
+   * Create root-level pod structure (for single-user mode with pod at /).
+   * Returns `{ ownerKey }` when --provision-keys is set so the caller can
+   * surface the public side in the startup banner. The secret is never
+   * returned (it's only on disk under /private/, mode 0600).
    */
   async function createRootPodStructure(webId, podUri, issuer, displayName) {
     const { generateProfile, generatePreferences, generateTypeIndex, serialize } = await import('./webid/profile.js');
     const { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } = await import('./wac/parser.js');
+    const { provisionOwnerKey } = await import('./keys/provision.js');
 
     // Create directories at root
     await storage.createContainer('/inbox/');
@@ -1038,7 +1069,20 @@ export function createServer(options = {}) {
     const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
+    // Optional: provision a Schnorr secp256k1 owner key in /private/.
+    // Phase 1 of #437. See src/keys/provision.js for the design notes.
+    let ownerKey;
+    if (provisionKeysEnabled) {
+      ownerKey = provisionOwnerKey({ controllerWebId: webId });
+      await storage.write(
+        '/private/privkey.jsonld',
+        JSON.stringify(ownerKey.document, null, 2),
+        { mode: 0o600 }
+      );
+    }
+
     // Note: Quota not initialized for root-level pods (no user directory)
+    return { ownerKey };
   }
 
   // Start file watcher for live reload (watches filesystem for external changes)

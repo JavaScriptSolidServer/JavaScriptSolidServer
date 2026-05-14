@@ -4,6 +4,7 @@ import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } from '../wac/parser.js';
+import { provisionOwnerKey } from '../keys/provision.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
@@ -165,8 +166,19 @@ export async function handlePost(request, reply) {
  * @param {string} podUri - Pod root URI (e.g., https://alice.example.com/ or https://example.com/alice/)
  * @param {string} issuer - OIDC issuer URI
  * @param {number} defaultQuota - Default storage quota in bytes (optional)
+ * @param {object} [options]
+ * @param {boolean} [options.provisionKeys=false] - When true, generate a
+ *   Schnorr secp256k1 keypair and write it to `<pod>/private/privkey.jsonld`
+ *   in W3C CID v1.0 Multikey format. Phase 1 of #437. The secret lands on
+ *   disk in plaintext under owner-only WAC + file mode 0600 — operators
+ *   should add filesystem-level protection (FDE / OS keyring) for any pod
+ *   that matters.
+ * @returns {Promise<{ podPath, podUri, ownerKey?: { document, publicHex, secretHex, publicMultibase } }>}
+ *   When `provisionKeys` is true, the return value includes the freshly
+ *   minted key material so the caller can surface the public side in CLI
+ *   output (the secret should NOT be displayed or logged).
  */
-export async function createPodStructure(name, webId, podUri, issuer, defaultQuota = 0) {
+export async function createPodStructure(name, webId, podUri, issuer, defaultQuota = 0, options = {}) {
   const podPath = `/${name}/`;
 
   // Create pod directory structure
@@ -236,7 +248,19 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     await initializeQuota(name, defaultQuota);
   }
 
-  return { podPath, podUri };
+  // Optional: provision a Schnorr secp256k1 owner key in /private/.
+  // Phase 1 of #437. See src/keys/provision.js for the design notes.
+  let ownerKey;
+  if (options.provisionKeys) {
+    ownerKey = provisionOwnerKey({ controllerWebId: webId });
+    await storage.write(
+      `${podPath}private/privkey.jsonld`,
+      JSON.stringify(ownerKey.document, null, 2),
+      { mode: 0o600 }
+    );
+  }
+
+  return { podPath, podUri, ownerKey };
 }
 
 /**
@@ -260,7 +284,7 @@ export async function handleCreatePod(request, reply) {
     return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
   }
 
-  const { name, email, password } = request.body || {};
+  const { name, email, password, provisionKeys } = request.body || {};
   const idpEnabled = request.idpEnabled;
 
   if (!name || typeof name !== 'string') {
@@ -310,9 +334,14 @@ export async function handleCreatePod(request, reply) {
   // Issuer needs trailing slash for CTH compatibility
   const issuer = baseUri + '/';
 
+  let podCreation;
   try {
-    // Use shared pod creation function
-    await createPodStructure(name, webId, podUri, issuer);
+    // Use shared pod creation function. Coerce provisionKeys to a
+    // strict boolean so a JSON `null` / missing value defaults to off.
+    podCreation = await createPodStructure(
+      name, webId, podUri, issuer, 0,
+      { provisionKeys: provisionKeys === true }
+    );
   } catch (err) {
     console.error('Pod creation error:', err);
     // Cleanup on failure
@@ -325,6 +354,16 @@ export async function handleCreatePod(request, reply) {
   headers['Location'] = podUri;
 
   Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
+
+  // Surface a summary of any provisioned key so callers can display
+  // the public side. The secret is NEVER echoed in the response —
+  // it lives only on disk under the pod's owner-only ACL.
+  const keyInfo = podCreation?.ownerKey
+    ? {
+        keyDocument: `${podUri}private/privkey.jsonld`,
+        publicKeyMultibase: podCreation.ownerKey.publicMultibase
+      }
+    : null;
 
   // If IdP is enabled, create account and return token + login URL
   if (idpEnabled) {
@@ -340,6 +379,7 @@ export async function handleCreatePod(request, reply) {
         token,
         idpIssuer: issuer,
         loginUrl: `${baseUri}/idp/auth`,
+        ...(keyInfo && { ownerKey: keyInfo })
       });
     } catch (err) {
       console.error('Account creation error:', err);
@@ -356,6 +396,7 @@ export async function handleCreatePod(request, reply) {
     name,
     webId,
     podUri,
-    token
+    token,
+    ...(keyInfo && { ownerKey: keyInfo })
   });
 }

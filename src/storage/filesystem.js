@@ -79,13 +79,27 @@ export function createReadStream(urlPath, options = {}) {
  * @param {Buffer | string} content
  * @returns {Promise<boolean>}
  */
-export async function write(urlPath, content) {
+export async function write(urlPath, content, options = {}) {
   const filePath = urlToPath(urlPath);
 
   try {
     // Ensure parent directory exists
     await fs.ensureDir(path.dirname(filePath));
     await fs.writeFile(filePath, content);
+    // Optional file-mode tightening (e.g. 0o600 for secret material).
+    // No-op on Windows, where chmod permissions are coarse — callers
+    // should not rely on POSIX modes for cross-platform security.
+    if (typeof options.mode === 'number') {
+      try {
+        await fs.chmod(filePath, options.mode);
+      } catch (chmodErr) {
+        // Don't fail the write because the chmod didn't take — log and
+        // continue. Callers that care about strict permissions (secret
+        // material) should additionally rely on filesystem-level
+        // protection (FDE, OS keyring, container user namespacing).
+        console.warn(`chmod ${options.mode.toString(8)} on ${filePath} failed:`, chmodErr.message);
+      }
+    }
     return true;
   } catch (err) {
     console.error('Write error:', err);
