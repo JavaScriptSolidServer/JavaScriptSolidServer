@@ -148,6 +148,28 @@ describe('renderServerRoot — mode-specific output', () => {
     assert.match(html, /&lt;script&gt;/);
   });
 
+  // Regression for token re-scanning (#433 review thread): if the
+  // renderer ran a chain of sequential .replace() calls, a value
+  // containing a literal `{{actions}}` would land inside the subtitle
+  // and then get expanded by the later `.replace(/{{actions}}/g, ...)`,
+  // letting any pod owner inject other template fragments via their
+  // singleUserName. The single-pass substitution prevents that.
+  it('does not re-scan substituted values for further template tokens', () => {
+    const html = renderServerRoot({
+      version: '1.0.0',
+      singleUser: true,
+      idp: false,
+      // The HTML escape only touches & < > " — { } pass through, so the
+      // token would land in the output verbatim if the substitution were
+      // multi-pass.
+      singleUserName: 'evil{{actions}}name'
+    });
+    assert.match(html, /Personal pod for evil\{\{actions\}\}name/,
+      'singleUserName containing a template token should appear as plain text, not be re-templated');
+    // Sanity: the real {{actions}} slot is still resolved (Docs link is always present).
+    assert.match(html, /href="https:\/\/javascriptsolidserver\.github\.io\/docs/);
+  });
+
   // Regression for the `$&` substitution gotcha (#433): a string used as
   // the second argument of String.prototype.replace interprets `$&`,
   // `$1`, etc. as substitution patterns. Interpolated values can contain

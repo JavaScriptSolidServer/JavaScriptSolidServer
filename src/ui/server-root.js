@@ -79,20 +79,28 @@ export function renderServerRoot(ctx = {}) {
     ? 'This server hosts a personal data pod. Apps come to the data rather than the other way around.'
     : 'This server hosts personal data pods on the web. Each pod is a space you own, with your own identity and access control.';
 
-  // Replacements use the function form, not the string form: a string
-  // replacement interprets `$&`, `$1`, etc. as substitution patterns,
-  // which would corrupt any interpolated value containing a `$` (e.g.
-  // a single-user name). The function form skips that interpretation
-  // entirely. See #433.
-  return tpl
-    .replace(/{{title}}/g, () => heading)
-    .replace(/{{heading}}/g, () => heading)
-    .replace(/{{subtitle}}/g, () => subtitle)
-    .replace(/{{description}}/g, () => description)
-    .replace(/{{actions}}/g, () => renderActions({ singleUser, idp }))
-    .replace(/{{version}}/g, () => escape(version))
-    .replace(/{{mode}}/g, () => mode)
-    .replace(/{{features}}/g, () => features);
+  // Single-pass token substitution. Sequential .replace() calls would
+  // re-scan already-substituted values, so a `singleUserName` of e.g.
+  // `{{actions}}` would land inside `subtitle`, then get expanded by
+  // the later `.replace(/{{actions}}/g, …)` — letting a pod owner
+  // inject other template fragments via their name. With a single
+  // pass over the original template, each {{token}} is matched once
+  // and replaced with its value; `$` inside any value is also harmless
+  // because the function form of replace skips substitution patterns.
+  // See #433 review thread.
+  const values = {
+    title: heading,
+    heading,
+    subtitle,
+    description,
+    actions: renderActions({ singleUser, idp }),
+    version: escape(version),
+    mode,
+    features
+  };
+  return tpl.replace(/{{(\w+)}}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
+  );
 }
 
 function escape(s = '') {
