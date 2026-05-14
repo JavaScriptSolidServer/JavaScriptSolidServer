@@ -249,10 +249,14 @@ export function provisionOwnerKey({ webId, documentController }) {
     throw new Error('provisionOwnerKey: webId required');
   }
   const { publicHex, secretHex } = generateOwnerKeypair();
+  // Pass `documentController` through verbatim — buildOwnerKeyDocument
+  // already defaults to `did:nostr:<publicHex>` when none is given, so
+  // duplicating the fallback here would just create two sources of
+  // truth for the default controller.
   const document = buildOwnerKeyDocument({
     publicHex,
     secretHex,
-    controller: documentController ?? didNostrFromPublicHex(publicHex)
+    controller: documentController
   });
   const vm = buildOwnerVerificationMethod({ webId, publicHex });
   return {
