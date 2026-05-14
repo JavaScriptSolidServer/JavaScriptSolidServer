@@ -603,6 +603,22 @@ export async function handleHead(request, reply) {
     return reply.code(404).send();
   }
 
+  // Conditional HEAD: check If-None-Match before doing content negotiation
+  // work, using the same content-type-aware ETag as GET (#456).
+  const headStoredType0 = stats.isDirectory ? null : getContentType(storagePath);
+  const headMashlib0 = !stats.isDirectory &&
+    shouldServeMashlib(request, request.mashlibEnabled, headStoredType0);
+  const headEtag0 = headMashlib0
+    ? stats.etag.replace(/"$/, '-html"')
+    : stats.etag;
+  const ifNoneMatch = request.headers['if-none-match'];
+  if (ifNoneMatch) {
+    const check = checkIfNoneMatchForGet(ifNoneMatch, headEtag0);
+    if (!check.ok && check.notModified) {
+      return reply.code(304).send();
+    }
+  }
+
   const origin = request.headers.origin;
   const connegEnabled = request.connegEnabled || false;
   let contentType;
@@ -643,22 +659,14 @@ export async function handleHead(request, reply) {
     contentType = getContentType(storagePath);
   }
 
-  // Match GET's ETag logic: mashlib HTML responses get a suffixed ETag
-  // so HEAD and GET return consistent validators (#456).
-  const headStoredType = stats.isDirectory ? null : getContentType(storagePath);
-  const headWillServeMashlib = !stats.isDirectory &&
-    shouldServeMashlib(request, request.mashlibEnabled, headStoredType);
-  const headEtag = headWillServeMashlib
-    ? stats.etag.replace(/"$/, '-html"')
-    : stats.etag;
-
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
-    etag: headEtag,
+    etag: headEtag0,
     contentType,
     origin,
     resourceUrl,
-    connegEnabled
+    connegEnabled,
+    mashlibEnabled: request.mashlibEnabled
   });
 
   if (!stats.isDirectory) {
