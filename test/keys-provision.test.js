@@ -4,7 +4,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { schnorr } from '@noble/curves/secp256k1';
+import { schnorr, secp256k1 } from '@noble/curves/secp256k1';
 import {
   generateOwnerKeypair,
   publicKeyMultibase,
@@ -38,6 +38,21 @@ describe('generateOwnerKeypair', () => {
     const b = generateOwnerKeypair();
     assert.notStrictEqual(a.publicHex, b.publicHex);
     assert.notStrictEqual(a.secretHex, b.secretHex);
+  });
+
+  it('always normalizes the secret so G*secret has even y (BIP-340)', () => {
+    // Without normalization, ECDSA signatures made with the raw secret
+    // would verify against the natural y of G*secret — even/odd ~50/50
+    // — while the JWK we publish in the WebID profile is derived from
+    // the even-y x-only Schnorr pubkey. Phase 2's LWS-CID round-trip
+    // would flake non-deterministically. Generate many keypairs and
+    // assert every secret's natural public point is even-y.
+    for (let i = 0; i < 64; i++) {
+      const { secretHex } = generateOwnerKeypair();
+      const compressed = secp256k1.getPublicKey(hexToBytes(secretHex), /*compressed=*/true);
+      assert.strictEqual(compressed[0], 0x02,
+        `secret #${i} produced odd-y point; normalization is broken`);
+    }
   });
 });
 
@@ -91,11 +106,27 @@ describe('buildOwnerKeyDocument', () => {
     assert.strictEqual(doc.type, 'Multikey');
   });
 
-  it('uses the WebID as controller in Phase 1 (not did:nostr)', () => {
-    // Phase 1 keeps the document self-consistent. did:nostr controllers
-    // require the Phase 2 resolver to be useful; until then a CID
-    // consumer would dereference an unresolvable URI.
-    const doc = buildOwnerKeyDocument(args);
+  it('defaults the controller to did:nostr:<hex> in Phase 2', () => {
+    // Phase 2 of #437 (#443) flipped the default controller to
+    // `did:nostr:<publicHex>` now that jss's resolver round-trips
+    // it. Phase 1 had used the WebID; the swap was anticipated in
+    // the Phase 1 design log and ships here.
+    const doc = buildOwnerKeyDocument({
+      publicHex: args.publicHex,
+      secretHex: args.secretHex
+    });
+    assert.strictEqual(doc.controller, `did:nostr:${args.publicHex}`);
+  });
+
+  it('accepts an explicit controller override (Phase 1 backward-compat)', () => {
+    // Tests / fixtures that need the legacy WebID-controller shape can
+    // pass `controller` explicitly. Phase 1-style call sites and any
+    // future caller wanting a non-default controller stay supported.
+    const doc = buildOwnerKeyDocument({
+      publicHex: args.publicHex,
+      secretHex: args.secretHex,
+      controller: args.controllerWebId
+    });
     assert.strictEqual(doc.controller, args.controllerWebId);
     assert.doesNotMatch(doc.controller, /^did:nostr:/);
   });
@@ -115,20 +146,60 @@ describe('buildOwnerKeyDocument', () => {
     assert.strictEqual(doc.nostr, undefined);
   });
 
-  it('rejects a missing or empty controller WebID', () => {
-    assert.throws(() => buildOwnerKeyDocument({ ...args, controllerWebId: '' }), /controllerWebId required/);
-    assert.throws(() => buildOwnerKeyDocument({ ...args, controllerWebId: undefined }), /controllerWebId required/);
+  it('rejects an explicit empty controller override', () => {
+    // The default did:nostr controller is computed from publicHex, so
+    // missing inputs are caught upstream (see publicKeyMultibase
+    // validation tests). When a caller *explicitly* passes an empty
+    // string, that's a misconfiguration we surface loudly.
+    assert.throws(
+      () => buildOwnerKeyDocument({
+        publicHex: args.publicHex,
+        secretHex: args.secretHex,
+        controller: ''
+      }),
+      /controller required/
+    );
   });
 });
 
 describe('provisionOwnerKey', () => {
+  const webId = 'https://alice.example/profile/card.jsonld#me';
+
   it('returns the document together with raw key material for CLI display', () => {
-    const out = provisionOwnerKey({ controllerWebId: 'https://alice.example/profile/card.jsonld#me' });
+    const out = provisionOwnerKey({ webId });
     assert.match(out.publicHex, /^[0-9a-f]{64}$/);
     assert.match(out.secretHex, /^[0-9a-f]{64}$/);
     assert.strictEqual(out.publicMultibase, out.document.publicKeyMultibase);
     assert.strictEqual(out.document.type, 'Multikey');
-    assert.strictEqual(out.document.controller, 'https://alice.example/profile/card.jsonld#me');
+    // Phase 2 of #437 (#443): controller defaults to did:nostr:<hex>.
+    assert.strictEqual(out.document.controller, `did:nostr:${out.publicHex}`);
+    assert.strictEqual(out.didNostr, `did:nostr:${out.publicHex}`);
+  });
+
+  it('returns a verificationMethod entry suitable for the WebID profile', () => {
+    // Phase 2 wires the public side into the profile's
+    // verificationMethod array so the existing LWS-CID verifier
+    // (src/auth/lws-cid.js) can authenticate JWTs signed with the
+    // matching secret. Both Multikey and JWK forms ship — Multikey
+    // for CID v1.0 conformance, JWK for LWS-CID compat.
+    const out = provisionOwnerKey({ webId });
+    assert.strictEqual(out.vm['@type'], 'Multikey');
+    assert.strictEqual(out.vm.controller, webId);
+    assert.strictEqual(out.vm['@id'], 'https://alice.example/profile/card.jsonld#owner-key');
+    assert.strictEqual(out.vm.publicKeyMultibase, out.publicMultibase);
+    assert.strictEqual(out.vm.publicKeyJwk.kty, 'EC');
+    assert.strictEqual(out.vm.publicKeyJwk.crv, 'secp256k1');
+    assert.match(out.vm.publicKeyJwk.x, /^[A-Za-z0-9_-]+$/);
+    assert.match(out.vm.publicKeyJwk.y, /^[A-Za-z0-9_-]+$/);
+  });
+
+  it('still accepts the legacy controllerWebId arg (Phase 1 callers)', () => {
+    // Phase 1 callers passed controllerWebId; honour it so an old
+    // call site doesn't silently break and so test fixtures targeting
+    // the WebID-controller shape stay terse.
+    const out = provisionOwnerKey({ controllerWebId: webId });
+    assert.strictEqual(out.document.controller, webId);
+    assert.strictEqual(out.vm.controller, webId);
   });
 });
 

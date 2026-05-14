@@ -190,8 +190,24 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.createContainer(`${podPath}settings/`);
   await storage.createContainer(`${podPath}profile/`);
 
-  // Generate and write WebID profile at /profile/card.jsonld
-  const profile = generateProfile({ webId, name, podUri, issuer });
+  // Optional: provision a Schnorr secp256k1 owner key. The keypair is
+  // generated up-front so the public side can be injected into the
+  // WebID profile's verificationMethod array before the profile is
+  // written. Phase 2 of #437 (#443) — see src/keys/provision.js for
+  // the design notes. The on-disk secret file is written last so a
+  // failure during ACL setup doesn't leave a key without protection.
+  // Strict `=== true` (not just truthy) so a misconfigured caller
+  // passing `'true'` / `1` / etc. doesn't silently activate; matches
+  // handleCreatePod's HTTP-side check on the body field.
+  const ownerKey = options.provisionKeys === true
+    ? provisionOwnerKey({ webId })
+    : null;
+
+  // Generate and write WebID profile at /profile/card.jsonld. When
+  // an owner key was provisioned, its VM lands in the profile so the
+  // existing LWS-CID verifier (src/auth/lws-cid.js) can authenticate
+  // JWTs signed with the matching secret.
+  const profile = generateProfile({ webId, name, podUri, issuer, ownerVm: ownerKey?.vm });
   await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
 
   // Generate and write preferences
@@ -248,18 +264,14 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     await initializeQuota(name, defaultQuota);
   }
 
-  // Optional: provision a Schnorr secp256k1 owner key in /private/.
-  // Phase 1 of #437. See src/keys/provision.js for the design notes.
+  // Owner-key file is written last (after the rest of the pod
+  // structure exists) so a failure during ACL setup doesn't leave a
+  // secret on disk without proper protection. The keypair itself was
+  // generated up-front for profile injection; this step persists it.
   // Throw on write failure so the caller's cleanup path runs and the
   // pod isn't left with a phantom `ownerKey` in the response that
   // doesn't correspond to any on-disk file.
-  //
-  // Strict `=== true` (not just truthy) so a misconfigured caller
-  // passing `'true'` / `1` / etc. doesn't silently activate. Matches
-  // handleCreatePod's HTTP-side check on the body field.
-  let ownerKey;
-  if (options.provisionKeys === true) {
-    ownerKey = provisionOwnerKey({ controllerWebId: webId });
+  if (ownerKey) {
     const ok = await storage.write(
       `${podPath}private/privkey.jsonld`,
       JSON.stringify(ownerKey.document, null, 2),
@@ -272,7 +284,11 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     }
   }
 
-  return { podPath, podUri, ownerKey };
+  // Spread `ownerKey` only when set so the field is genuinely absent
+  // (not `null`) on the no-provisioning path — matches the existing
+  // test expectation that `result.ownerKey === undefined` when the
+  // flag was omitted.
+  return { podPath, podUri, ...(ownerKey && { ownerKey }) };
 }
 
 /**

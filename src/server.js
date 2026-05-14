@@ -1045,8 +1045,18 @@ export function createServer(options = {}) {
     await storage.createContainer('/settings/');
     await storage.createContainer('/profile/');
 
-    // Generate profile
-    const profile = generateProfile({ webId, name: displayName, podUri, issuer });
+    // Generate the owner key up-front (when --provision-keys is set)
+    // so its public side can be injected into the WebID profile's
+    // verificationMethod array before the profile is written. Phase 2
+    // of #437 (#443). The on-disk secret file is written last, after
+    // the rest of the structure exists.
+    const ownerKey = provisionKeysEnabled
+      ? provisionOwnerKey({ webId })
+      : null;
+
+    // Generate profile (with the owner key's VM landed in
+    // verificationMethod when --provision-keys is on).
+    const profile = generateProfile({ webId, name: displayName, podUri, issuer, ownerVm: ownerKey?.vm });
     await storage.write('/profile/card.jsonld', serialize(profile));
 
     // Preferences and type indexes
@@ -1090,13 +1100,11 @@ export function createServer(options = {}) {
     const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
-    // Optional: provision a Schnorr secp256k1 owner key in /private/.
-    // Phase 1 of #437. See src/keys/provision.js for the design notes.
-    // Throw on write failure so single-user startup fails loud rather
-    // than logging "Provisioned …" against a missing on-disk file.
-    let ownerKey;
-    if (provisionKeysEnabled) {
-      ownerKey = provisionOwnerKey({ controllerWebId: webId });
+    // Owner-key file is written last. The keypair itself was generated
+    // up-front for profile injection; this step persists it. Throw on
+    // write failure so single-user startup fails loud rather than
+    // logging "Provisioned …" against a missing on-disk file.
+    if (ownerKey) {
       const ok = await storage.write(
         '/private/privkey.jsonld',
         JSON.stringify(ownerKey.document, null, 2),
@@ -1109,8 +1117,10 @@ export function createServer(options = {}) {
       }
     }
 
-    // Note: Quota not initialized for root-level pods (no user directory)
-    return { ownerKey };
+    // Note: Quota not initialized for root-level pods (no user directory).
+    // Spread `ownerKey` only when set so the field is genuinely absent
+    // (not `null`) on the no-provisioning path.
+    return { ...(ownerKey && { ownerKey }) };
   }
 
   // Start file watcher for live reload (watches filesystem for external changes)
