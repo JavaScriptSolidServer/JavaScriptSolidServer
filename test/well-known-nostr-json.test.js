@@ -19,15 +19,17 @@ import assert from 'node:assert';
 import fs from 'fs-extra';
 import { createServer } from '../src/server.js';
 
-const DATA_DIR = './test-data-nip05';
-
-async function startServer(options = {}) {
-  await fs.remove(DATA_DIR);
-  await fs.ensureDir(DATA_DIR);
+// Per-describe DATA_DIR suffixes so the three suites in this file
+// don't collide if --test-concurrency is ever raised above 1.
+// Currently 1 per the npm test script, but the latent risk was
+// flagged in the #447 review.
+async function startServer(dataDir, options = {}) {
+  await fs.remove(dataDir);
+  await fs.ensureDir(dataDir);
   const server = createServer({
     logger: false,
     forceCloseConnections: true,
-    root: DATA_DIR,
+    root: dataDir,
     ...options
   });
   await server.listen({ port: 0, host: '127.0.0.1' });
@@ -35,25 +37,26 @@ async function startServer(options = {}) {
   return { server, baseUrl };
 }
 
-async function stopServer(server) {
+async function stopServer(server, dataDir) {
   await server.close();
-  await fs.remove(DATA_DIR);
+  await fs.remove(dataDir);
 }
 
 describe('NIP-05 MVP — single-user with provisioned key', () => {
+  const DATA_DIR = './test-data-nip05-with-key';
   let server, baseUrl;
   let savedDataRoot;
 
   before(async () => {
     savedDataRoot = process.env.DATA_ROOT;
-    ({ server, baseUrl } = await startServer({
+    ({ server, baseUrl } = await startServer(DATA_DIR, {
       singleUser: true,
       provisionKeys: true
     }));
   });
 
   after(async () => {
-    await stopServer(server);
+    await stopServer(server, DATA_DIR);
     if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
     else process.env.DATA_ROOT = savedDataRoot;
   });
@@ -94,16 +97,17 @@ describe('NIP-05 MVP — single-user with provisioned key', () => {
 });
 
 describe('NIP-05 MVP — single-user without a provisioned key', () => {
+  const DATA_DIR = './test-data-nip05-no-key';
   let server;
   let savedDataRoot;
 
   before(async () => {
     savedDataRoot = process.env.DATA_ROOT;
-    ({ server } = await startServer({ singleUser: true }));
+    ({ server } = await startServer(DATA_DIR, { singleUser: true }));
   });
 
   after(async () => {
-    await stopServer(server);
+    await stopServer(server, DATA_DIR);
     if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
     else process.env.DATA_ROOT = savedDataRoot;
   });
@@ -118,6 +122,7 @@ describe('NIP-05 MVP — single-user without a provisioned key', () => {
 });
 
 describe('NIP-05 MVP — multi-user mode', () => {
+  const DATA_DIR = './test-data-nip05-multiuser';
   let server, baseUrl;
   let savedDataRoot;
 
@@ -126,11 +131,11 @@ describe('NIP-05 MVP — multi-user mode', () => {
     // No singleUser → multi-user. The MVP only writes the NIP-05
     // file in single-user mode; aggregation across multi-user pods
     // is the next slice of #445.
-    ({ server, baseUrl } = await startServer({}));
+    ({ server, baseUrl } = await startServer(DATA_DIR, {}));
   });
 
   after(async () => {
-    await stopServer(server);
+    await stopServer(server, DATA_DIR);
     if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
     else process.env.DATA_ROOT = savedDataRoot;
   });

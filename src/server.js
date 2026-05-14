@@ -1159,12 +1159,11 @@ export function createServer(options = {}) {
           'Failed to write owner key file at /private/privkey.jsonld'
         );
       }
-
     }
     // NIP-05 mapping is written outside this function (in the
     // single-user onReady block) so it covers both root pods and
     // named single-user pods (which take the createPodStructure
-    // path), not just the root case. See #447 review.
+    // path), not just the root case. See #446.
 
     // Generate profile (with the owner key's VM landed in
     // verificationMethod when --provision-keys is on). Written last —
