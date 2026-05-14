@@ -766,6 +766,7 @@ export function createServer(options = {}) {
     });
   }
 
+
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)
   fastify.get('/*', handleGet);
@@ -1126,6 +1127,23 @@ export function createServer(options = {}) {
         throw new Error(
           'Failed to write owner key file at /private/privkey.jsonld'
         );
+      }
+
+      // NIP-05 mapping for the bare domain (#446). NIP-05 §3 reserves
+      // `_` as the "naked domain" identifier — a single-user pod IS
+      // the domain, so the owner's Nostr identity is just `<host>`
+      // with no `name@` prefix. The file is a plain JSON resource
+      // under the spec-mandated `.well-known/` namespace; jss already
+      // bypasses WAC for /.well-known/* and lets the LDP GET handler
+      // serve it as a static file. No new route needed.
+      await storage.createContainer('/.well-known/');
+      const nip05 = { names: { _: ownerKey.publicHex } };
+      const nip05Ok = await storage.write(
+        '/.well-known/nostr.json',
+        JSON.stringify(nip05, null, 2)
+      );
+      if (!nip05Ok) {
+        throw new Error('Failed to write /.well-known/nostr.json');
       }
     }
 
