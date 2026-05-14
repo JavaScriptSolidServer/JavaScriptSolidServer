@@ -28,6 +28,7 @@ import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
 import { registerErrorHandler } from './utils/error-handler.js';
+import { seedServerRoot } from './ui/server-root.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -761,6 +762,48 @@ export function createServer(options = {}) {
   fastify.head('/', handleHead);
   fastify.options('/', handleOptions);
   fastify.post('/', writeRateLimit, handlePost);
+
+  // Server-root landing page: seed /index.html and a public-read /.acl
+  // on first start (skip-if-exists, so operator-provided files are
+  // preserved). See #433 / #276. Skipped in read-only deployments so
+  // startup never mutates DATA_ROOT.
+  if (!options.readOnly) {
+    fastify.addHook('onReady', async () => {
+      // A missing or unreadable package.json (some production bundles
+      // omit it) shouldn't block seeding; fall back to "unknown".
+      let version = 'unknown';
+      try {
+        const pkg = await readFile(join(__dirname, '..', 'package.json'), 'utf8');
+        ({ version } = JSON.parse(pkg));
+      } catch (err) {
+        fastify.log.warn({ err }, 'Failed to read package.json version; seeding server root with version=unknown');
+      }
+
+      try {
+        await seedServerRoot({
+          version,
+          singleUser,
+          idp: idpEnabled,
+          singleUserName,
+          enabled: {
+            idp: idpEnabled,
+            nostr: nostrEnabled,
+            webrtc: webrtcEnabled,
+            activitypub: activitypubEnabled,
+            git: gitEnabled,
+            pay: payEnabled,
+            notifications: notificationsEnabled,
+            mashlib: mashlibEnabled,
+            mongo: mongoEnabled,
+            tunnel: tunnelEnabled,
+            terminal: terminalEnabled
+          }
+        });
+      } catch (err) {
+        fastify.log.warn({ err }, 'Failed to seed server root');
+      }
+    });
+  }
 
   // Single-user mode: create pod on startup if it doesn't exist
   if (singleUser) {
