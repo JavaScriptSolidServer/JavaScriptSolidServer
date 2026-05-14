@@ -543,7 +543,8 @@ export async function handleRegisterPost(request, reply, issuer, inviteOnly = fa
     }
 
     // Create pod structure
-    await createPodStructure(username, webId, podUri, issuer);
+    await createPodStructure(username, webId, podUri, issuer, 0,
+      { provisionKeys: request.provisionKeys === true });
 
     // Create account
     await createAccount({
