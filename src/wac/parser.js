@@ -211,6 +211,38 @@ function normalizeMode(mode) {
 }
 
 /**
+ * Express an absolute owner WebID as a path relative to a given .acl
+ * file's container, so the in-ACL `acl:agent` reference is host-portable.
+ * The parser resolves the relative IRI against the .acl URL at check
+ * time. See #430.
+ *
+ * If the WebID isn't hosted under this pod (foreign owner), the absolute
+ * URI is returned unchanged — there's no in-pod path to resolve to. This
+ * also means the helper degrades gracefully for any current or future
+ * profile layout (modern `profile/card.jsonld#me`, legacy `profile/card#me`,
+ * single-file `me#me`, etc.) — whatever path the WebID actually has under
+ * the pod is what gets emitted.
+ *
+ * @param {string} webId - Owner WebID, typically absolute.
+ * @param {string} podUri - Pod root URI (must end with `/`).
+ * @param {string} aclBaseInPod - The .acl file's container, expressed
+ *   relative to the pod root, e.g. `''` for `<pod>/.acl`, `'private/'`
+ *   for `<pod>/private/.acl`, `'settings/'` for the resource ACL
+ *   `<pod>/settings/publicTypeIndex.jsonld.acl`.
+ * @returns {string} Relative IRI for use as `acl:agent`, or the original
+ *   absolute WebID if it isn't hosted under `podUri`.
+ */
+export function relativizeOwnerWebId(webId, podUri, aclBaseInPod = '') {
+  if (typeof webId !== 'string' || !webId) return webId;
+  if (typeof podUri !== 'string' || !podUri) return webId;
+  if (!webId.startsWith(podUri)) return webId;
+  const tail = webId.slice(podUri.length);
+  const depth = aclBaseInPod ? aclBaseInPod.split('/').filter(Boolean).length : 0;
+  const ups = depth === 0 ? './' : '../'.repeat(depth);
+  return ups + tail;
+}
+
+/**
  * Generate a default public read ACL
  * @param {string} resourceUrl - URL of the resource. May be relative (e.g.
  *   './' for the .acl's own container) — the parser resolves it against
@@ -242,8 +274,10 @@ export function generatePublicReadAcl(resourceUrl) {
  * Generate a full owner ACL (owner has full control, public read)
  * @param {string} resourceUrl - URL of the resource. May be relative (see
  *   `generatePublicReadAcl`).
- * @param {string} ownerWebId - WebID of the owner. Currently absolute;
- *   relative agent WebIDs are tracked in #427 Phase 2.
+ * @param {string} ownerWebId - WebID of the owner. May also be relative
+ *   (e.g. './profile/card.jsonld#me' for an in-pod owner) — the parser
+ *   resolves it against the .acl URL at check time. The profile document
+ *   itself still publishes the absolute WebID. See #430.
  * @param {boolean} isContainer - Whether this is a container
  * @returns {object} JSON-LD ACL document
  */
@@ -290,8 +324,10 @@ export function generateOwnerAcl(resourceUrl, ownerWebId, isContainer = false) {
 
 /**
  * Generate a private ACL (owner only, no public access)
- * @param {string} resourceUrl - URL of the resource
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the resource (may be relative — see
+ *   `generatePublicReadAcl`).
+ * @param {string} ownerWebId - WebID of the owner (may be relative — see
+ *   `generateOwnerAcl`).
  * @param {boolean} isContainer - Whether this is a container
  * @returns {object} JSON-LD ACL document
  */
@@ -323,8 +359,8 @@ export function generatePrivateAcl(resourceUrl, ownerWebId, isContainer = true) 
 
 /**
  * Generate an inbox ACL (owner full control, public append)
- * @param {string} resourceUrl - URL of the inbox
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the inbox (may be relative).
+ * @param {string} ownerWebId - WebID of the owner (may be relative).
  * @returns {object} JSON-LD ACL document
  */
 export function generateInboxAcl(resourceUrl, ownerWebId) {
@@ -363,8 +399,8 @@ export function generateInboxAcl(resourceUrl, ownerWebId) {
 /**
  * Generate a public folder ACL (owner full control, public read with inheritance)
  * Used for /public/ folders where content should be publicly readable
- * @param {string} resourceUrl - URL of the folder
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the folder (may be relative).
+ * @param {string} ownerWebId - WebID of the owner (may be relative).
  * @returns {object} JSON-LD ACL document
  */
 export function generatePublicFolderAcl(resourceUrl, ownerWebId) {
