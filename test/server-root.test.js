@@ -123,9 +123,12 @@ describe('renderServerRoot', () => {
     assert.match(multi, /<code>multi-user<\/code>/);
   });
 
-  it('always emits the Get started button pointing at the docs', () => {
+  it('always emits the Get started button pointing at the docs introduction', () => {
     const html = renderServerRoot({ version: '1.0.0' });
-    assert.match(html, /href="https:\/\/jss\.live\/docs\/getting-started\/"/);
+    // The canonical URL is the introduction page, not the category.
+    // Docusaurus 3 doesn't auto-generate a category index page, so
+    // /docs/getting-started/ would 404. Link to the real document.
+    assert.match(html, /href="https:\/\/jss\.live\/docs\/getting-started\/introduction"/);
     assert.match(html, /Get started/);
   });
 
