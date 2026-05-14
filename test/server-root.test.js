@@ -174,10 +174,15 @@ describe('renderServerRoot', () => {
     assert.match(html, /res\.status === 403/);
   });
 
-  it('includes the live-URL script that fills in window.location.origin', () => {
+  it('includes the live-URL script that resolves the document base, not just origin', () => {
     const html = renderServerRoot({ version: '1.0.0' });
     assert.match(html, /id="server-url"/);
-    assert.match(html, /window\.location\.origin/);
+    // Must use new URL('./', window.location.href) so a reverse-proxy
+    // mount at a path prefix is preserved. window.location.origin alone
+    // would drop the prefix and display the proxy origin instead.
+    assert.match(html, /new URL\(['"]\.\/['"],\s*window\.location\.href\)/);
+    assert.doesNotMatch(html, /textContent\s*=\s*window\.location\.origin/,
+      'live-URL must not display origin-only — it would drop the path prefix on reverse-proxy mounts');
   });
 
   it('interpolates version into the info box', () => {

@@ -88,15 +88,19 @@
   </div>
 
   <script>
-    // Render the live server URL the visitor actually used (adapts to
-    // whichever hostname/port they hit — works behind reverse proxies
-    // and across localhost / 127.0.0.1 / LAN-IP without re-rendering
-    // the file).
+    // Render the live server URL the visitor actually used. Adapts to
+    // whichever hostname/port they hit (localhost / 127.0.0.1 / LAN-IP
+    // / public domain) and — importantly — preserves any reverse-proxy
+    // path prefix the server is mounted under. `window.location.origin`
+    // alone would drop a /jss/ mount and display the proxy origin
+    // instead. `new URL('./', window.location.href)` resolves to the
+    // current document's directory, which is the JSS server root.
     (function () {
       var el = document.getElementById('server-url');
       if (!el) return;
-      el.textContent = window.location.origin;
-      el.href = window.location.origin + '/';
+      var base = new URL('./', window.location.href).href;
+      el.textContent = base;
+      el.href = base;
     })();
 
     // HEAD-adaptive Sign up / Sign in. Reveals each button based on what
