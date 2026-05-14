@@ -1,5 +1,11 @@
 /**
- * Server-root landing page seed (#276).
+ * Server-root landing page seed (#276 / #433 / #435).
+ *
+ * Phase 3 (#433) seeded a mode-specific landing page that went stale on
+ * mode change. Phase 3 refinement (#435) replaced the mode-specific copy
+ * with a single mode-agnostic page that adapts at load time via a HEAD
+ * probe against /idp/register, so the same seeded HTML keeps working
+ * across modes without regenerating the file.
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -22,8 +28,8 @@ describe('Server-root landing page', () => {
     const res = await request('/', { headers: { Accept: 'text/html' } });
     assertStatus(res, 200);
     const body = await res.text();
-    assert.match(body, /<title>JSS<\/title>/);
-    assert.match(body, /A personal data server/);
+    assert.match(body, /<title>JSS Solid pod<\/title>/);
+    assert.match(body, /Your JSS Solid pod is running/);
   });
 
   it('landing page is publicly readable (no auth required)', async () => {
@@ -97,38 +103,61 @@ describe('Server-root landing — operator override', () => {
   });
 });
 
-describe('renderServerRoot — mode-specific output', () => {
-  it('multi-user + IDP shows Create a pod + Sign in', () => {
-    const html = renderServerRoot({ version: '1.0.0', singleUser: false, idp: true });
-    assert.match(html, /Create a pod/);
-    assert.match(html, /href="\/idp\/register"/);
-    assert.match(html, /href="\/idp"/);
+describe('renderServerRoot', () => {
+  // Mode-agnostic copy: the same page is served regardless of single-user
+  // vs multi-user. The status pill carries the mode label; the buttons
+  // adapt at load time via the HEAD probe (verified separately below).
+  it('renders the same mode-agnostic copy regardless of singleUser flag', () => {
+    const single = renderServerRoot({ version: '1.0.0', singleUser: true });
+    const multi = renderServerRoot({ version: '1.0.0', singleUser: false });
+
+    // Same welcome copy, same primary CTA, same explainer.
+    for (const html of [single, multi]) {
+      assert.match(html, /<h1>Welcome<\/h1>/);
+      assert.match(html, /Your JSS Solid pod is running/);
+      assert.match(html, /open standard for personal data/);
+    }
+
+    // Mode pill differs.
+    assert.match(single, /<code>single-user<\/code>/);
+    assert.match(multi, /<code>multi-user<\/code>/);
+  });
+
+  it('always emits the Get started button pointing at the docs', () => {
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /href="https:\/\/jss\.live\/docs\/getting-started\/"/);
+    assert.match(html, /Get started/);
+  });
+
+  it('emits Sign up + Sign in buttons hidden for the HEAD probe to reveal', () => {
+    const html = renderServerRoot({ version: '1.0.0' });
+    // Both anchors are present in every mode; the inline script reveals
+    // them based on what /idp/register actually returns.
+    assert.match(html, /<a href="\/idp\/register"[^>]*data-cond="register"[^>]*hidden/);
+    assert.match(html, /<a href="\/idp"[^>]*data-cond="login"[^>]*hidden/);
+    assert.match(html, /Sign up/);
     assert.match(html, /Sign in/);
   });
 
-  it('single-user + IDP shows Sign in only (no Create a pod)', () => {
-    const html = renderServerRoot({ version: '1.0.0', singleUser: true, idp: true, singleUserName: 'alice' });
-    assert.doesNotMatch(html, /Create a pod/);
-    assert.match(html, /Sign in/);
+  it('includes the HEAD-adaptive script targeting /idp/register', () => {
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /fetch\(['"]\/idp\/register['"]/);
+    assert.match(html, /method:\s*['"]HEAD['"]/);
+    // The three documented branches: 200 → both, 403 → login only,
+    // anything else → neither. Assert the magic numbers are present.
+    assert.match(html, /res\.status === 200/);
+    assert.match(html, /res\.status === 403/);
   });
 
-  it('multi-user without IDP shows only the Docs link', () => {
-    const html = renderServerRoot({ version: '1.0.0', singleUser: false, idp: false });
-    assert.doesNotMatch(html, /Create a pod/);
-    assert.doesNotMatch(html, /Sign in/);
-    assert.match(html, /Docs/);
+  it('includes the live-URL script that fills in window.location.origin', () => {
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /id="server-url"/);
+    assert.match(html, /window\.location\.origin/);
   });
 
-  it('single-user subtitle includes the pod name when provided', () => {
-    const html = renderServerRoot({ version: '1.0.0', singleUser: true, idp: false, singleUserName: 'alice' });
-    assert.match(html, /Personal pod for alice/);
-  });
-
-  it('lists enabled features', () => {
+  it('lists enabled features as pills', () => {
     const html = renderServerRoot({
       version: '1.0.0',
-      singleUser: false,
-      idp: true,
       enabled: { idp: true, nostr: true, webrtc: true, terminal: true }
     });
     assert.match(html, /<span>idp<\/span>/);
@@ -137,7 +166,7 @@ describe('renderServerRoot — mode-specific output', () => {
     assert.match(html, /<span>terminal<\/span>/);
   });
 
-  it('interpolates version', () => {
+  it('interpolates version into the info box', () => {
     const html = renderServerRoot({ version: '9.9.9' });
     assert.match(html, /<code>9\.9\.9<\/code>/);
   });
@@ -148,45 +177,10 @@ describe('renderServerRoot — mode-specific output', () => {
     assert.match(html, /&lt;script&gt;/);
   });
 
-  // Regression for token re-scanning (#433 review thread): if the
-  // renderer ran a chain of sequential .replace() calls, a value
-  // containing a literal `{{actions}}` would land inside the subtitle
-  // and then get expanded by the later `.replace(/{{actions}}/g, ...)`,
-  // letting any pod owner inject other template fragments via their
-  // singleUserName. The single-pass substitution prevents that.
-  it('does not re-scan substituted values for further template tokens', () => {
-    const html = renderServerRoot({
-      version: '1.0.0',
-      singleUser: true,
-      idp: false,
-      // The HTML escape only touches & < > " — { } pass through, so the
-      // token would land in the output verbatim if the substitution were
-      // multi-pass.
-      singleUserName: 'evil{{actions}}name'
-    });
-    assert.match(html, /Personal pod for evil\{\{actions\}\}name/,
-      'singleUserName containing a template token should appear as plain text, not be re-templated');
-    // Sanity: the real {{actions}} slot is still resolved (Docs link is always present).
-    assert.match(html, /href="https:\/\/javascriptsolidserver\.github\.io\/docs/);
-  });
-
-  // Regression for the `$&` substitution gotcha (#433): a string used as
-  // the second argument of String.prototype.replace interprets `$&`,
-  // `$1`, etc. as substitution patterns. Interpolated values can contain
-  // `$` (notably a singleUserName), so the renderer uses the function
-  // form of replace instead. Asserting the literal `$&` survives the
-  // round-trip would mean it survived as plain text.
-  it('preserves $-patterns in singleUserName instead of treating them as replacement specials', () => {
-    const html = renderServerRoot({
-      version: '1.0.0',
-      singleUser: true,
-      idp: false,
-      singleUserName: 'foo$&bar'
-    });
-    // The HTML escape converts `&` to `&amp;`; the rest must stay verbatim,
-    // not be replaced by the matched template token.
-    assert.match(html, /Personal pod for foo\$&amp;bar/,
-      'singleUserName containing "$&" should land as-is, not trigger String.replace substitution');
-    assert.doesNotMatch(html, /\{\{subtitle\}\}/, 'subtitle token should be fully consumed');
+  it('points the footer at the GitHub repo and the customise hint', () => {
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /href="https:\/\/github\.com\/JavaScriptSolidServer\/JavaScriptSolidServer"/);
+    assert.match(html, /Customise this page/);
+    assert.match(html, /<code>\/index\.html<\/code>/);
   });
 });

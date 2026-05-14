@@ -37,33 +37,22 @@ function listFeatures(options = {}) {
 }
 
 /**
- * Build an HTML snippet of action buttons based on server mode.
- */
-function renderActions({ singleUser, idp }) {
-  const buttons = [];
-  if (!singleUser && idp) {
-    buttons.push('<a href="/idp/register" class="btn btn-primary">Create a pod</a>');
-    buttons.push('<a href="/idp" class="btn btn-secondary">Sign in</a>');
-  } else if (singleUser && idp) {
-    buttons.push('<a href="/idp" class="btn btn-primary">Sign in</a>');
-  }
-  buttons.push('<a href="https://javascriptsolidserver.github.io/docs/" class="btn btn-secondary">Docs</a>');
-  return `<div class="actions">${buttons.join('\n      ')}</div>`;
-}
-
-/**
  * Render the landing page as an HTML string.
  *
+ * The page itself is mode-agnostic — it doesn't change based on
+ * single-user vs multi-user, and Sign up / Sign in are revealed at
+ * load time by an inline HEAD probe against /idp/register. So the
+ * same seeded HTML keeps working when the operator changes modes
+ * without regenerating the file. See #435.
+ *
  * @param {object} ctx
- * @param {string} ctx.version - JSS version
- * @param {boolean} [ctx.singleUser]
- * @param {boolean} [ctx.idp]
- * @param {string} [ctx.singleUserName]
- * @param {object} [ctx.enabled] - Map of feature flags
+ * @param {string} [ctx.version]   - JSS version (rendered into the info box)
+ * @param {boolean} [ctx.singleUser] - Drives the "Mode" label only
+ * @param {object} [ctx.enabled]   - Map of feature flags for the pills row
  * @returns {string} HTML
  */
 export function renderServerRoot(ctx = {}) {
-  const { version = 'unknown', singleUser = false, idp = false, singleUserName, enabled = {} } = ctx;
+  const { version = 'unknown', singleUser = false, enabled = {} } = ctx;
 
   const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
   const mode = singleUser ? 'single-user' : 'multi-user';
@@ -71,29 +60,13 @@ export function renderServerRoot(ctx = {}) {
     .map(f => `<span>${f}</span>`)
     .join(' ');
 
-  const heading = 'JSS';
-  const subtitle = singleUser
-    ? `Personal pod${singleUserName && singleUserName !== '/' ? ` for ${escape(singleUserName)}` : ''}`
-    : 'A personal data server';
-  const description = singleUser
-    ? 'This server hosts a personal data pod. Apps come to the data rather than the other way around.'
-    : 'This server hosts personal data pods on the web. Each pod is a space you own, with your own identity and access control.';
-
-  // Single-pass token substitution. Sequential .replace() calls would
-  // re-scan already-substituted values, so a `singleUserName` of e.g.
-  // `{{actions}}` would land inside `subtitle`, then get expanded by
-  // the later `.replace(/{{actions}}/g, …)` — letting a pod owner
-  // inject other template fragments via their name. With a single
-  // pass over the original template, each {{token}} is matched once
-  // and replaced with its value; `$` inside any value is also harmless
-  // because the function form of replace skips substitution patterns.
-  // See #433 review thread.
+  // Single-pass token substitution. Each {{token}} in the original
+  // template is matched once and replaced from `values`; substituted
+  // text is not re-scanned, so a `$` or stray `{{…}}` in a value
+  // can't cause re-substitution or hit String.prototype.replace's
+  // `$&` substitution patterns. See #433 review thread.
   const values = {
-    title: heading,
-    heading,
-    subtitle,
-    description,
-    actions: renderActions({ singleUser, idp }),
+    title: 'JSS Solid pod',
     version: escape(version),
     mode,
     features
