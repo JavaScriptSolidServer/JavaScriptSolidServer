@@ -20,9 +20,16 @@
  *
  * Failure modes:
  *   401 — unauthenticated
- *   403 — multi-user: no account for the caller's WebID
+ *   403 — caller's WebID has no matching local account record;
+ *         applies to multi-user (no account for the WebID) and
+ *         single-user (authenticated WebID is not the seeded owner —
+ *         e.g. an external Solid-OIDC / LWS-CID identity)
  *   404 — pod directory unexpectedly missing (shouldn't happen for
  *         an account with a valid WebID, but caught defensively)
+ *   500 — defense-in-depth: podDir resolved to a server-internal
+ *         name (`.idp` / `.private` / etc.) in non-root-pod mode,
+ *         meaning account-creation validation has regressed and
+ *         allowed a reserved username through
  *
  * Cross-account access is structurally impossible: the endpoint
  * takes no target parameter and always scopes to the caller's
@@ -34,7 +41,6 @@
  */
 
 import path from 'path';
-import fs from 'fs';
 import { promises as fsp } from 'fs';
 import zlib from 'zlib';
 import tar from 'tar-stream';
@@ -233,14 +239,19 @@ export async function handleExportAccount(request, reply, options = {}) {
 
   // Defensive: the pod dir should exist for any legitimate caller.
   // 404 lets the client distinguish "auth was fine, but there's
-  // nothing on disk" from a true server error.
+  // nothing on disk" from a true server error. The
+  // error_description is intentionally generic — echoing the
+  // resolved podDir back would leak the operator's filesystem
+  // layout to any authenticated owner whose pod is missing. The
+  // path is in the server log via request context for debugging.
   try {
     const st = await fsp.stat(podDir);
     if (!st.isDirectory()) throw new Error('not a directory');
   } catch {
+    request.log.warn({ podDir }, 'pod export: podDir missing or not a directory');
     return reply.code(404).send({
       error: 'not_found',
-      error_description: `No pod directory at ${podDir}`,
+      error_description: 'Pod data not found',
     });
   }
 
