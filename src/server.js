@@ -1045,9 +1045,16 @@ export function createServer(options = {}) {
     await storage.createContainer('/settings/');
     await storage.createContainer('/profile/');
 
-    // Generate profile
-    const profile = generateProfile({ webId, name: displayName, podUri, issuer });
-    await storage.write('/profile/card.jsonld', serialize(profile));
+    // Generate the owner key in memory up-front (when --provision-keys
+    // is set) so its VM can be injected into the WebID profile that
+    // gets written last. On-disk persistence of the secret happens
+    // *after* the ACL tree is in place — see the ordering block
+    // further below.
+    const ownerKey = provisionKeysEnabled
+      ? provisionOwnerKey({ webId })
+      : null;
+
+    // Profile is written last (see the ACL/privkey block below).
 
     // Preferences and type indexes
     const prefs = generatePreferences({ webId, podUri });
@@ -1090,13 +1097,26 @@ export function createServer(options = {}) {
     const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
-    // Optional: provision a Schnorr secp256k1 owner key in /private/.
-    // Phase 1 of #437. See src/keys/provision.js for the design notes.
-    // Throw on write failure so single-user startup fails loud rather
-    // than logging "Provisioned …" against a missing on-disk file.
-    let ownerKey;
-    if (provisionKeysEnabled) {
-      ownerKey = provisionOwnerKey({ controllerWebId: webId });
+    // Owner-key persistence + profile write (when --provision-keys is
+    // on). Order is load-bearing for two distinct concerns
+    // (#444 review):
+    //
+    //   1. WAC vacuum: write privkey *after* the ACL tree is in place
+    //      so the secret file is born under owner-only WAC. Without
+    //      this, there's a window where the file exists but no
+    //      /private/.acl protects it; deny-by-default since #f43ecdf
+    //      would mitigate to 401, but defence-in-depth beats relying
+    //      on a security default holding. The single-user root pod is
+    //      especially exposed since the URL is the server origin.
+    //
+    //   2. Orphan-VM: write privkey *before* the profile so a crash
+    //      between the two leaves an orphan secret file (easy to
+    //      delete) rather than an orphan VM in a published WebID
+    //      profile that forever advertises an authentication method
+    //      whose secret was never persisted.
+    //
+    // Combined: ACLs (above) → privkey (here) → profile (next).
+    if (ownerKey) {
       const ok = await storage.write(
         '/private/privkey.jsonld',
         JSON.stringify(ownerKey.document, null, 2),
@@ -1109,8 +1129,16 @@ export function createServer(options = {}) {
       }
     }
 
-    // Note: Quota not initialized for root-level pods (no user directory)
-    return { ownerKey };
+    // Generate profile (with the owner key's VM landed in
+    // verificationMethod when --provision-keys is on). Written last —
+    // see ordering rationale above.
+    const profile = generateProfile({ webId, name: displayName, podUri, issuer, ownerVm: ownerKey?.vm });
+    await storage.write('/profile/card.jsonld', serialize(profile));
+
+    // Note: Quota not initialized for root-level pods (no user directory).
+    // Spread `ownerKey` only when set so the field is genuinely absent
+    // (not `null`) on the no-provisioning path.
+    return { ...(ownerKey && { ownerKey }) };
   }
 
   // Start file watcher for live reload (watches filesystem for external changes)

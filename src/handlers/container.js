@@ -190,9 +190,20 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.createContainer(`${podPath}settings/`);
   await storage.createContainer(`${podPath}profile/`);
 
-  // Generate and write WebID profile at /profile/card.jsonld
-  const profile = generateProfile({ webId, name, podUri, issuer });
-  await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
+  // Optional: provision a Schnorr secp256k1 owner key. The keypair is
+  // generated in memory up-front so its VM can be injected into the
+  // WebID profile that gets written last. The on-disk persistence of
+  // the secret is deferred to *after* the ACL tree is in place — see
+  // the ordering block further below. Strict `=== true` (not just
+  // truthy) so a misconfigured caller passing `'true'` / `1` / etc.
+  // doesn't silently activate; matches handleCreatePod's HTTP-side
+  // check on the body field.
+  const ownerKey = options.provisionKeys === true
+    ? provisionOwnerKey({ webId })
+    : null;
+
+  // Profile is written last (see the ACL/privkey block below). Skip
+  // the write here; we'll do it after privkey lands on disk.
 
   // Generate and write preferences
   const prefs = generatePreferences({ webId, podUri });
@@ -248,18 +259,24 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     await initializeQuota(name, defaultQuota);
   }
 
-  // Optional: provision a Schnorr secp256k1 owner key in /private/.
-  // Phase 1 of #437. See src/keys/provision.js for the design notes.
-  // Throw on write failure so the caller's cleanup path runs and the
-  // pod isn't left with a phantom `ownerKey` in the response that
-  // doesn't correspond to any on-disk file.
+  // Owner-key persistence + profile write (when --provision-keys is on).
+  // Order is load-bearing for two distinct concerns (#444 review):
   //
-  // Strict `=== true` (not just truthy) so a misconfigured caller
-  // passing `'true'` / `1` / etc. doesn't silently activate. Matches
-  // handleCreatePod's HTTP-side check on the body field.
-  let ownerKey;
-  if (options.provisionKeys === true) {
-    ownerKey = provisionOwnerKey({ controllerWebId: webId });
+  //   1. WAC vacuum: write privkey *after* the ACL tree is in place so
+  //      the secret file is born under owner-only WAC. Without this,
+  //      there's a window where the file exists but no /private/.acl
+  //      protects it; jss's deny-by-default since #f43ecdf would
+  //      mitigate to 401, but defence-in-depth beats relying on a
+  //      security default holding.
+  //
+  //   2. Orphan-VM: write privkey *before* the profile so a crash
+  //      between the two leaves an orphan secret file (easy to delete)
+  //      rather than an orphan VM in a published WebID profile that
+  //      forever advertises an authentication method whose secret was
+  //      never persisted.
+  //
+  // Combined: ACLs (above) → privkey (here) → profile (next).
+  if (ownerKey) {
     const ok = await storage.write(
       `${podPath}private/privkey.jsonld`,
       JSON.stringify(ownerKey.document, null, 2),
@@ -272,7 +289,19 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     }
   }
 
-  return { podPath, podUri, ownerKey };
+  // Generate and write WebID profile at /profile/card.jsonld. When an
+  // owner key was provisioned, its VM lands in the profile so the
+  // existing LWS-CID verifier (src/auth/lws-cid.js) can authenticate
+  // JWTs signed with the matching secret. Profile is intentionally
+  // written last — see ordering rationale above.
+  const profile = generateProfile({ webId, name, podUri, issuer, ownerVm: ownerKey?.vm });
+  await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
+
+  // Spread `ownerKey` only when set so the field is genuinely absent
+  // (not `null`) on the no-provisioning path — matches the existing
+  // test expectation that `result.ownerKey === undefined` when the
+  // flag was omitted.
+  return { podPath, podUri, ...(ownerKey && { ownerKey }) };
 }
 
 /**

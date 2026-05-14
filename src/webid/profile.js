@@ -16,15 +16,31 @@ const CID = 'https://www.w3.org/ns/cid/v1#';
 const LWS = 'https://www.w3.org/ns/lws#';
 
 /**
- * Generate JSON-LD data for a WebID profile
+ * Generate JSON-LD data for a WebID profile.
+ *
  * @param {object} options
  * @param {string} options.webId - Full WebID URI (e.g., https://example.com/alice/profile/card#me)
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI (e.g., https://example.com/alice/)
  * @param {string} options.issuer - OIDC issuer URI
+ * @param {object} [options.ownerVm] - Optional verificationMethod
+ *   entry for an owner-held key (Phase 2 of #437 / #443). Build via
+ *   `src/keys/provision.js#buildOwnerVerificationMethod`.
+ *
+ *   **Fresh-pod-only when `ownerVm` is set.** The helper unconditionally
+ *   overwrites `verificationMethod`, `authentication`, and
+ *   `assertionMethod` with single-element arrays referencing this VM.
+ *   That's correct for the only current caller (fresh pod creation,
+ *   nothing to overwrite), but a future "rotate-keys" / re-provisioning
+ *   command using this helper to regenerate an existing profile would
+ *   silently drop any VMs / proof-purpose references the operator
+ *   added by hand. Either pass the existing profile through a merge
+ *   step before calling this, or treat the helper as fresh-pod-only.
+ *   See #444 review.
+ *
  * @returns {object} JSON-LD profile data
  */
-export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
+export function generateProfileJsonLd({ webId, name, podUri, issuer, ownerVm = null }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
   // Document URL is the WebID without its fragment; service entries use
   // fragment ids resolved against it.
@@ -114,7 +130,24 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
         '@type': 'lws:OpenIdProvider',
         'serviceEndpoint': issuer
       }
-    ]
+    ],
+    // Optional: a verificationMethod for an owner-held key, populated
+    // when the pod was created with `--provision-keys` (Phase 2 of
+    // #437 / #443). The VM lands the public side of the owner key
+    // into the profile so the existing LWS-CID verifier in
+    // src/auth/lws-cid.js can authenticate JWTs signed with the
+    // matching secret. Both `publicKeyMultibase` (CID v1.0
+    // conformance) and `publicKeyJwk` (LWS-CID compat) are emitted by
+    // src/keys/provision.js's buildOwnerVerificationMethod helper.
+    //
+    // The VM is also referenced from `authentication` and
+    // `assertionMethod` so the same key counts as an authentication
+    // factor without an app needing to PATCH those arrays separately.
+    ...(ownerVm && {
+      verificationMethod: [ownerVm],
+      authentication: [ownerVm['@id']],
+      assertionMethod: [ownerVm['@id']]
+    })
   };
 }
 
@@ -131,10 +164,15 @@ export function generateProfileJsonLd({ webId, name, podUri, issuer }) {
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI
  * @param {string} options.issuer - OIDC issuer URI
+ * @param {object} [options.ownerVm] - Optional verificationMethod entry
+ *   for an owner-held key (Phase 2 of #437 / #443). When set, lands
+ *   the VM in `verificationMethod` and references it from
+ *   `authentication` + `assertionMethod`. Build via
+ *   `src/keys/provision.js#buildOwnerVerificationMethod`.
  * @returns {object} JSON-LD profile document
  */
-export function generateProfile({ webId, name, podUri, issuer }) {
-  return generateProfileJsonLd({ webId, name, podUri, issuer });
+export function generateProfile({ webId, name, podUri, issuer, ownerVm = null }) {
+  return generateProfileJsonLd({ webId, name, podUri, issuer, ownerVm });
 }
 
 /**

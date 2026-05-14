@@ -71,8 +71,11 @@ describe('POST /.pods — provisionKeys: true (Phase 1 of #437)', () => {
     const doc = JSON.parse(await fs.readFile(filePath, 'utf8'));
     assert.strictEqual(doc['@context'], 'https://www.w3.org/ns/cid/v1');
     assert.strictEqual(doc.type, 'Multikey');
-    assert.strictEqual(doc.controller, body.webId,
-      'Phase 1 controller is the pod owner WebID (did:nostr lands in Phase 2)');
+    // Phase 2 of #437 (#443): controller is now did:nostr:<hex>,
+    // computed from the freshly-minted publicHex. Round-trips through
+    // jss's existing did:nostr resolver.
+    assert.match(doc.controller, /^did:nostr:[0-9a-f]{64}$/,
+      'Phase 2 controller is did:nostr:<hex>');
     assert.match(doc.publicKeyMultibase, /^fe70102[0-9a-f]{64}$/);
     assert.match(doc.secretKeyMultibase, /^f8126[0-9a-f]{64}$/);
     // Round-trip the public side through jss's existing decoder.
@@ -237,7 +240,22 @@ describe('createPodStructure — provisionKeys option (direct call)', () => {
     assert.match(result.ownerKey.publicHex, /^[0-9a-f]{64}$/);
     assert.match(result.ownerKey.secretHex, /^[0-9a-f]{64}$/);
     assert.strictEqual(result.ownerKey.publicMultibase, result.ownerKey.document.publicKeyMultibase);
-    assert.strictEqual(result.ownerKey.document.controller, webId);
+    // Phase 2 default controller — did:nostr:<hex>.
+    assert.strictEqual(
+      result.ownerKey.document.controller,
+      `did:nostr:${result.ownerKey.publicHex}`
+    );
+    // Phase 2 surfaces the VM and the did:nostr identifier alongside
+    // the document for callers that want to display the public side.
+    assert.strictEqual(result.ownerKey.vm.controller, webId);
+    assert.strictEqual(
+      result.ownerKey.vm['@id'],
+      `${podUri}profile/card.jsonld#owner-key`
+    );
+    assert.strictEqual(
+      result.ownerKey.didNostr,
+      `did:nostr:${result.ownerKey.publicHex}`
+    );
   });
 
   it('returns no ownerKey when the option is omitted', async () => {
