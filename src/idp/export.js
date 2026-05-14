@@ -172,6 +172,31 @@ export async function handleExportAccount(request, reply, options = {}) {
           'Authenticated WebID does not match the single-user account',
       });
     }
+    // Defense-in-depth: in named-pod single-user mode, the seeded
+    // accountRecord.podName MUST equal options.singleUserName (the
+    // CLI option that derives podDir). If seedSingleUserIdpAccount
+    // ever drifted, manifest.podName (read from accountRecord) would
+    // advertise X while the pod tree is read from <dataRoot>/Y.
+    // Refuse with 500 so a seeding regression fails loudly rather
+    // than producing a silently mismatched archive.
+    //
+    // Skipped in root-pod mode where podDir is dataRoot regardless
+    // of the seeded podName (which is intentionally 'me' for OIDC
+    // identity, not a path component).
+    if (!isRootPod && accountRecord.podName !== options.singleUserName) {
+      request.log.error(
+        {
+          seededPodName: accountRecord.podName,
+          cliSingleUserName: options.singleUserName,
+        },
+        'pod export refused — accountRecord.podName disagrees with ' +
+        'singleUserName; seedSingleUserIdpAccount regression?',
+      );
+      return reply.code(500).send({
+        error: 'server_error',
+        error_description: 'Pod identity inconsistent with on-disk layout',
+      });
+    }
     // manifest.podName mirrors the IDP account's podName (the OIDC
     // short name) for parity with the multi-user branch — both
     // branches now read podName from accountRecord, so a downstream
@@ -237,21 +262,46 @@ export async function handleExportAccount(request, reply, options = {}) {
     });
   }
 
-  // Defensive: the pod dir should exist for any legitimate caller.
-  // 404 lets the client distinguish "auth was fine, but there's
-  // nothing on disk" from a true server error. The
-  // error_description is intentionally generic — echoing the
-  // resolved podDir back would leak the operator's filesystem
-  // layout to any authenticated owner whose pod is missing. The
-  // path is in the server log via request context for debugging.
+  // Pre-flight the pod directory BEFORE flushing response headers.
+  // We do both checks (stat for existence/type, readdir for
+  // readability) up front so a first-byte EACCES on the top-level
+  // readdir doesn't surface inside the streaming pipeline AFTER
+  // reply.send(gzip) has already flushed headers — that would leave
+  // the client with a 200 + truncated/empty body instead of a clean
+  // 5xx JSON error.
+  //
+  // 404 vs 500 split:
+  //   ENOENT/ENOTDIR → 404 (auth was fine, just no pod on disk)
+  //   anything else (EACCES, EIO, etc.) → 500 (server-side problem)
+  //
+  // Generic error_descriptions on the wire — echoing the resolved
+  // podDir back would leak the operator's filesystem layout. Path
+  // stays in the server log via request.log.{warn,error} for
+  // operator debugging.
   try {
     const st = await fsp.stat(podDir);
-    if (!st.isDirectory()) throw new Error('not a directory');
-  } catch {
-    request.log.warn({ podDir }, 'pod export: podDir missing or not a directory');
-    return reply.code(404).send({
-      error: 'not_found',
-      error_description: 'Pod data not found',
+    if (!st.isDirectory()) {
+      const err = new Error('not a directory');
+      err.code = 'ENOTDIR';
+      throw err;
+    }
+    // Pre-flight readability via the same call walkAndPack will use
+    // for its first iteration. Discard the result; walkAndPack will
+    // redo this — readdir on a top-level pod dir is O(top-level
+    // entries) and cheap relative to the streamed walk.
+    await fsp.readdir(podDir);
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
+      request.log.warn({ podDir }, 'pod export: podDir missing or not a directory');
+      return reply.code(404).send({
+        error: 'not_found',
+        error_description: 'Pod data not found',
+      });
+    }
+    request.log.error({ err, podDir }, 'pod export: pre-flight failed');
+    return reply.code(500).send({
+      error: 'server_error',
+      error_description: 'Pod data is unreadable',
     });
   }
 
@@ -323,15 +373,18 @@ export async function handleExportAccount(request, reply, options = {}) {
   // Pump in the background; entries are added asynchronously below.
   // The root-pod denylist is wired in so single-user-root-pod mode
   // doesn't ship .idp/ (accounts + signing keys + OIDC state).
-  const streamingPromise = packExport({
+  // No `void` / no local — `.then().catch(onStreamError)` already
+  // attaches a rejection handler, so there's no unhandled-rejection
+  // risk and the pipeline runs detached.
+  packExport({
     pack,
     podDir,
     manifest,
     accountRecord,
     excludeAtRoot: (options.singleUser && isRootPod) ? ROOT_POD_EXCLUDE : null,
-  }).then(() => { packFinished = true; }).catch(onStreamError);
-
-  void streamingPromise;
+  })
+    .then(() => { packFinished = true; })
+    .catch(onStreamError);
 
   return reply.send(gzip);
 }
