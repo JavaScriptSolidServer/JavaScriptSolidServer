@@ -149,11 +149,18 @@ export async function handleExportAccount(request, reply, options = {}) {
           'Authenticated WebID does not match the single-user account',
       });
     }
+    // manifest.podName mirrors the IDP account's podName (the OIDC
+    // short name) for parity with the multi-user branch — both
+    // branches now read podName from accountRecord, so a downstream
+    // importer keying on manifest.podName or account.json.podName
+    // gets the same answer regardless of server mode. Filesystem
+    // layout (root-pod vs /<name>/ pod) is conveyed by `mode` +
+    // the seeded podName ('me' for root-pod, singleUserName otherwise).
     manifest = {
       webId: accountRecord.webId,
       username: accountRecord.username,
       email: accountRecord.email,
-      podName: isRootPod ? null : options.singleUserName,
+      podName: accountRecord.podName,
       mode: 'single-user',
       createdAt: accountRecord.createdAt,
       exportedAt: new Date().toISOString(),
@@ -225,7 +232,13 @@ export async function handleExportAccount(request, reply, options = {}) {
   // error signal. We log on the server side and destroy the
   // pipeline so the client at least sees an aborted transfer rather
   // than a corrupt but seemingly-complete archive.
+  // Idempotent: invoked from pack.error, gzip.error, AND
+  // streamingPromise.catch. Destroying a stream re-emits 'error',
+  // which would re-enter this handler and produce duplicate log
+  // lines for one underlying failure. The destroyed-flag short-
+  // circuits all subsequent calls so a single failure logs once.
   const onStreamError = (err) => {
+    if (gzip.destroyed || pack.destroyed) return;
     request.log.error({ err }, 'pod export stream error');
     pack.destroy(err);
     gzip.destroy(err);
@@ -269,16 +282,16 @@ async function packExport({ pack, podDir, manifest, accountRecord, excludeAtRoot
   await addEntry(pack, 'jss-export/manifest.json',
     Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
 
-  // Account record — allowlisted fields only. Single-user without
-  // an IDP account skips this (no record to include).
-  if (accountRecord) {
-    const safeAccount = {};
-    for (const key of ACCOUNT_EXPORT_FIELDS) {
-      if (accountRecord[key] !== undefined) safeAccount[key] = accountRecord[key];
-    }
-    await addEntry(pack, 'jss-export/account.json',
-      Buffer.from(JSON.stringify(safeAccount, null, 2), 'utf8'));
+  // Account record — allowlisted fields only. Both branches in
+  // handleExportAccount now refuse with 403 when accountRecord is
+  // null, so by the time we get here the record is always defined
+  // and account.json is always emitted.
+  const safeAccount = {};
+  for (const key of ACCOUNT_EXPORT_FIELDS) {
+    if (accountRecord[key] !== undefined) safeAccount[key] = accountRecord[key];
   }
+  await addEntry(pack, 'jss-export/account.json',
+    Buffer.from(JSON.stringify(safeAccount, null, 2), 'utf8'));
 
   // Pod tree. The first-level filter (`excludeAtRoot`) is what
   // prevents single-user-root-pod mode from leaking .idp/.

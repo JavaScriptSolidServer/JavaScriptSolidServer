@@ -309,6 +309,24 @@ describe('GET /idp/account/export — single-user ROOT pod (denylist check)', ()
       'pod content must still be exported');
     assert.ok(podKeys.some(k => k.endsWith('private/privkey.jsonld')),
       'pod /private/ must still be exported (this is pod data, not server-internal)');
+
+    // Manifest shape in root-pod mode. Pins the parity property:
+    // manifest.podName MUST equal account.json.podName so a downstream
+    // importer keying on either field gets the same answer. Without
+    // this, root-pod previously emitted manifest.podName=null while
+    // accountRecord.podName='me' — silent disagreement in the same
+    // archive.
+    assert.ok(files['jss-export/manifest.json'], 'manifest.json must be present');
+    assert.ok(files['jss-export/account.json'], 'account.json must be present');
+    const manifest = JSON.parse(files['jss-export/manifest.json'].toString('utf8'));
+    const account = JSON.parse(files['jss-export/account.json'].toString('utf8'));
+    assert.strictEqual(manifest.mode, 'single-user');
+    assert.strictEqual(manifest.username, 'me',
+      'root-pod manifest carries the seeded username');
+    assert.strictEqual(manifest.podName, account.podName,
+      'manifest.podName must match account.json.podName — single source of truth');
+    assert.strictEqual(account.podName, 'me',
+      'seeded root-pod account.podName is "me" (the OIDC short name)');
   });
 });
 

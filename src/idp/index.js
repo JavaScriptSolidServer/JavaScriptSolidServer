@@ -37,6 +37,18 @@ import { landingPage, accountDeletePage } from './views.js';
  * @param {FastifyInstance} fastify
  * @param {object} options
  * @param {string} options.issuer - The issuer URL
+ * @param {boolean} [options.inviteOnly=false] - If true, /idp/register
+ *   requires a valid invite code; public registration is disabled.
+ * @param {boolean} [options.singleUser=false] - Single-user mode.
+ *   Disables /idp/register and /idp/account DELETE; gates the
+ *   single-user branch in /idp/account/export.
+ * @param {string|null} [options.singleUserName=null] - Single-user
+ *   pod name. null → root pod (podDir = dataRoot); string → pod
+ *   lives at <dataRoot>/<name>/. Threaded into /idp/account/export
+ *   so the handler can resolve podDir + apply ROOT_POD_EXCLUDE.
+ * @param {string} [options.jssVersion] - Server version, written
+ *   into the export manifest for forensic / "what server made this"
+ *   purposes. Defaults to 'unknown' inside the export handler.
  */
 export async function idpPlugin(fastify, options) {
   const { issuer, inviteOnly = false, singleUser = false, singleUserName = null, jssVersion } = options;
