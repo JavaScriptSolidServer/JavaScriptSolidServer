@@ -10,7 +10,8 @@ import {
   canAcceptInput,
   toJsonLd,
   fromJsonLd,
-  RDF_TYPES
+  RDF_TYPES,
+  getVaryHeader
 } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
@@ -157,6 +158,8 @@ export async function handleGet(request, reply) {
   if (ifNoneMatch) {
     const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
     if (!check.ok && check.notModified) {
+      reply.header('ETag', effectiveEtag);
+      reply.header('Vary', getVaryHeader(request.connegEnabled, request.mashlibEnabled));
       return reply.code(304).send();
     }
   }
@@ -668,6 +671,8 @@ export async function handleHead(request, reply) {
   if (ifNoneMatch) {
     const check = checkIfNoneMatchForGet(ifNoneMatch, headEtag);
     if (!check.ok && check.notModified) {
+      reply.header('ETag', headEtag);
+      reply.header('Vary', getVaryHeader(connegEnabled, request.mashlibEnabled));
       return reply.code(304).send();
     }
   }
