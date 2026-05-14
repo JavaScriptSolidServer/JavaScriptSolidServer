@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}}</title>
+  <meta name="description" content="A personal data server powered by JSS">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: Georgia, 'Times New Roman', serif;
+      background: #fafaf8;
+      color: #2c2c2c;
+      line-height: 1.7;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .container { max-width: 560px; width: 100%; }
+    h1 { font-size: 2.2rem; font-weight: 400; margin-bottom: 0.25rem; }
+    .subtitle { color: #666; font-size: 1.05rem; margin-bottom: 2rem; padding-bottom: 1.5rem; border-bottom: 1px solid #ddd; }
+    p { margin-bottom: 1.25rem; }
+    .actions { display: flex; gap: 0.75rem; margin: 1.5rem 0 2rem; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 0.6rem 1.2rem;
+      border-radius: 4px;
+      text-decoration: none;
+      font-family: Georgia, serif;
+      font-size: 0.95rem;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+    .btn-primary { background: #7c3aed; color: #fff; }
+    .btn-primary:hover { background: #6025c0; }
+    .btn-secondary { background: #fff; color: #2c2c2c; border-color: #ccc; }
+    .btn-secondary:hover { background: #f0efeb; }
+    .info { background: #f5f4f0; border-radius: 4px; padding: 1rem; font-size: 0.85rem; color: #666; margin-top: 1.5rem; }
+    .info .row { display: flex; justify-content: space-between; padding: 0.2rem 0; }
+    .info .label { color: #999; }
+    .info code { font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.9em; color: #555; }
+    footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #ddd; color: #999; font-size: 0.8rem; text-align: center; }
+    footer a { color: #888; }
+    .features { font-size: 0.85rem; color: #666; margin-top: 0.5rem; }
+    .features span { display: inline-block; background: #eee; padding: 0.15rem 0.5rem; border-radius: 3px; margin-right: 0.3rem; margin-bottom: 0.3rem; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>{{heading}}</h1>
+    <div class="subtitle">{{subtitle}}</div>
+    <p>{{description}}</p>
+
+    {{actions}}
+
+    <div class="info">
+      <div class="row"><span class="label">Version</span><code>{{version}}</code></div>
+      <div class="row"><span class="label">Mode</span><code>{{mode}}</code></div>
+      <div class="features">{{features}}</div>
+    </div>
+
+    <footer>
+      Powered by <a href="https://jss.live">JSS</a>
+    </footer>
+  </div>
+</body>
+</html>
