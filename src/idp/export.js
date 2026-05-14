@@ -41,7 +41,8 @@
  */
 
 import path from 'path';
-import { promises as fsp } from 'fs';
+import { promises as fsp, constants as fsConstants } from 'fs';
+import crypto from 'crypto';
 import zlib from 'zlib';
 import tar from 'tar-stream';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
@@ -159,7 +160,35 @@ export async function handleExportAccount(request, reply, options = {}) {
     // idpEnabled, so a missing account record means "caller is not
     // the seeded owner" — refuse with the same 403 shape as
     // multi-user.
-    isRootPod = !options.singleUserName;
+    //
+    // Refuse empty-string / non-string singleUserName explicitly.
+    // The previous `!singleUserName` falsy-check silently mapped
+    // both '' and null to root-pod, but '' is almost certainly a
+    // misconfiguration — an operator who meant root-pod omits the
+    // option entirely, and an operator who meant a named pod
+    // wouldn't use empty string. WORSE, with `!''`=true the old
+    // code took the root-pod branch and applied ROOT_POD_EXCLUDE;
+    // a strict null check WITHOUT this refusal would take the
+    // named-pod branch with podDir = path.join(dataRoot, '') =
+    // dataRoot AND excludeAtRoot = null, silently exporting
+    // server-internal `.idp/` and `.private/`. So we explicitly
+    // reject the empty-string / non-string case before deciding
+    // isRootPod.
+    if (
+      options.singleUserName !== null &&
+      options.singleUserName !== undefined &&
+      (typeof options.singleUserName !== 'string' || options.singleUserName.length === 0)
+    ) {
+      request.log.error(
+        { singleUserName: options.singleUserName },
+        'pod export refused — singleUserName must be null/undefined or a non-empty string',
+      );
+      return reply.code(500).send({
+        error: 'server_error',
+        error_description: 'Invalid singleUserName configuration',
+      });
+    }
+    isRootPod = options.singleUserName == null;
     podDir = isRootPod
       ? dataRoot
       : path.join(dataRoot, options.singleUserName);
@@ -285,11 +314,12 @@ export async function handleExportAccount(request, reply, options = {}) {
       err.code = 'ENOTDIR';
       throw err;
     }
-    // Pre-flight readability via the same call walkAndPack will use
-    // for its first iteration. Discard the result; walkAndPack will
-    // redo this — readdir on a top-level pod dir is O(top-level
-    // entries) and cheap relative to the streamed walk.
-    await fsp.readdir(podDir);
+    // Pre-flight readability with `fsp.access(R_OK | X_OK)` rather
+    // than a discarded readdir — same effect (catches EACCES on the
+    // pod directory) without scanning the whole top-level entry
+    // list twice. R_OK gates listing, X_OK gates traversal into
+    // subdirectories, both required by the recursive walk.
+    await fsp.access(podDir, fsConstants.R_OK | fsConstants.X_OK);
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) {
       request.log.warn({ podDir }, 'pod export: podDir missing or not a directory');
@@ -308,7 +338,12 @@ export async function handleExportAccount(request, reply, options = {}) {
   // 3. Set headers and start streaming.
   const slug = sanitizeSlug(webId);
   const isoDate = manifest.exportedAt.replace(/[:.]/g, '-');
-  const filename = `jss-export-${slug}-${isoDate}.tar.gz`;
+  // Short random suffix avoids collisions when a client batches
+  // exports — ISO timestamps have only millisecond resolution and
+  // two consecutive calls in the same ms would otherwise produce
+  // identical filenames that overwrite each other on the client.
+  const rand = crypto.randomBytes(3).toString('hex');  // 6 hex chars
+  const filename = `jss-export-${slug}-${isoDate}-${rand}.tar.gz`;
 
   // sanitizeSlug() restricts the slug to [A-Za-z0-9._-] and isoDate
   // is ISO-8601 with `:`/`.` replaced — both are strict-ASCII safe
