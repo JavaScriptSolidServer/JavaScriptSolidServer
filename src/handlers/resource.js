@@ -656,7 +656,7 @@ export async function handleHead(request, reply) {
       contentType = 'application/ld+json';
     }
   } else {
-    contentType = getContentType(storagePath);
+    contentType = headMashlib0 ? 'text/html' : getContentType(storagePath);
   }
 
   const headers = getAllHeaders({
@@ -669,7 +669,10 @@ export async function handleHead(request, reply) {
     mashlibEnabled: request.mashlibEnabled
   });
 
-  if (!stats.isDirectory) {
+  // Content-Length: only set for non-mashlib resources where the file
+  // size matches the response body. Mashlib HTML is dynamically
+  // generated so we can't know its size without rendering it.
+  if (!stats.isDirectory && !headMashlib0) {
     headers['Content-Length'] = stats.size;
   }
 
