@@ -191,11 +191,14 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.createContainer(`${podPath}profile/`);
 
   // Optional: provision a Schnorr secp256k1 owner key. The keypair is
-  // generated up-front so the public side can be injected into the
-  // WebID profile's verificationMethod array before the profile is
-  // written. Phase 2 of #437 (#443) — see src/keys/provision.js for
-  // the design notes. The on-disk secret file is written last so a
-  // failure during ACL setup doesn't leave a key without protection.
+  // generated in memory up-front so its VM can be injected into the
+  // WebID profile, then persisted to /private/privkey.jsonld *before*
+  // the profile is written. This ordering matters: the WebID
+  // profile advertises the VM, so a crash between profile and privkey
+  // would leave the WebID permanently advertising an authentication
+  // method whose secret was never persisted (#444 review). Writing
+  // privkey first means the worst-case crash leaves an orphan secret
+  // file (easy to delete) rather than an orphan VM in a public profile.
   // Strict `=== true` (not just truthy) so a misconfigured caller
   // passing `'true'` / `1` / etc. doesn't silently activate; matches
   // handleCreatePod's HTTP-side check on the body field.
@@ -203,10 +206,24 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     ? provisionOwnerKey({ webId })
     : null;
 
+  if (ownerKey) {
+    const ok = await storage.write(
+      `${podPath}private/privkey.jsonld`,
+      JSON.stringify(ownerKey.document, null, 2),
+      { mode: 0o600 }
+    );
+    if (!ok) {
+      throw new Error(
+        `Failed to write owner key file at ${podPath}private/privkey.jsonld`
+      );
+    }
+  }
+
   // Generate and write WebID profile at /profile/card.jsonld. When
   // an owner key was provisioned, its VM lands in the profile so the
   // existing LWS-CID verifier (src/auth/lws-cid.js) can authenticate
-  // JWTs signed with the matching secret.
+  // JWTs signed with the matching secret. The privkey file already
+  // exists on disk at this point — see ordering rationale above.
   const profile = generateProfile({ webId, name, podUri, issuer, ownerVm: ownerKey?.vm });
   await storage.write(`${podPath}profile/card.jsonld`, serialize(profile));
 
@@ -264,25 +281,8 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
     await initializeQuota(name, defaultQuota);
   }
 
-  // Owner-key file is written last (after the rest of the pod
-  // structure exists) so a failure during ACL setup doesn't leave a
-  // secret on disk without proper protection. The keypair itself was
-  // generated up-front for profile injection; this step persists it.
-  // Throw on write failure so the caller's cleanup path runs and the
-  // pod isn't left with a phantom `ownerKey` in the response that
-  // doesn't correspond to any on-disk file.
-  if (ownerKey) {
-    const ok = await storage.write(
-      `${podPath}private/privkey.jsonld`,
-      JSON.stringify(ownerKey.document, null, 2),
-      { mode: 0o600 }
-    );
-    if (!ok) {
-      throw new Error(
-        `Failed to write owner key file at ${podPath}private/privkey.jsonld`
-      );
-    }
-  }
+  // (privkey was written above, before the profile, to avoid
+  // orphan-VM-on-crash. Nothing more to do here.)
 
   // Spread `ownerKey` only when set so the field is genuinely absent
   // (not `null`) on the no-provisioning path — matches the existing

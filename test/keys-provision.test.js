@@ -193,13 +193,14 @@ describe('provisionOwnerKey', () => {
     assert.match(out.vm.publicKeyJwk.y, /^[A-Za-z0-9_-]+$/);
   });
 
-  it('still accepts the legacy controllerWebId arg (Phase 1 callers)', () => {
-    // Phase 1 callers passed controllerWebId; honour it so an old
-    // call site doesn't silently break and so test fixtures targeting
-    // the WebID-controller shape stay terse.
-    const out = provisionOwnerKey({ controllerWebId: webId });
+  it('honours an explicit documentController override', () => {
+    // The legacy controllerWebId alias was removed in #443 review —
+    // the canonical way to pin the document controller to a WebID
+    // (or any other URI) is documentController.
+    const out = provisionOwnerKey({ webId, documentController: webId });
     assert.strictEqual(out.document.controller, webId);
-    assert.strictEqual(out.vm.controller, webId);
+    assert.strictEqual(out.vm.controller, webId,
+      'VM controller still uses webId regardless of documentController');
   });
 });
 

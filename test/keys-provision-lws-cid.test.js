@@ -160,7 +160,11 @@ describe('Phase 2: LWS-CID round-trip with provisioned owner key (#443)', () => 
     const result = await verifyLwsCidAuth(makeRequest(token));
     assert.strictEqual(result.webId, null,
       'mismatched secret must not authenticate');
-    assert.match(result.error || '', /signature/i,
-      'error should mention signature failure');
+    // Match the specific verifier error prefix, not just any string
+    // containing "signature" — JWS-related errors (expired, malformed,
+    // bad nbf, etc.) also mention "signature" but for the wrong
+    // reasons. We want to prove the signature *check* did real work.
+    assert.match(result.error || '', /signature verification failed/,
+      'error should be the signature-verification path, not some other JWT failure');
   });
 });

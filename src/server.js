@@ -1045,17 +1045,35 @@ export function createServer(options = {}) {
     await storage.createContainer('/settings/');
     await storage.createContainer('/profile/');
 
-    // Generate the owner key up-front (when --provision-keys is set)
-    // so its public side can be injected into the WebID profile's
-    // verificationMethod array before the profile is written. Phase 2
-    // of #437 (#443). The on-disk secret file is written last, after
-    // the rest of the structure exists.
+    // Generate the owner key in memory up-front (when --provision-keys
+    // is set), persist it to /private/privkey.jsonld *before* the
+    // WebID profile is written. The profile advertises the VM, so a
+    // crash between profile and privkey would leave the WebID
+    // permanently advertising an authentication method whose secret
+    // never persisted (#444 review). Writing privkey first means the
+    // worst-case crash leaves an orphan secret file (easy to delete)
+    // rather than an orphan VM in a public profile.
     const ownerKey = provisionKeysEnabled
       ? provisionOwnerKey({ webId })
       : null;
 
+    if (ownerKey) {
+      const ok = await storage.write(
+        '/private/privkey.jsonld',
+        JSON.stringify(ownerKey.document, null, 2),
+        { mode: 0o600 }
+      );
+      if (!ok) {
+        throw new Error(
+          'Failed to write owner key file at /private/privkey.jsonld'
+        );
+      }
+    }
+
     // Generate profile (with the owner key's VM landed in
-    // verificationMethod when --provision-keys is on).
+    // verificationMethod when --provision-keys is on). The privkey
+    // file already exists on disk at this point — see ordering
+    // rationale above.
     const profile = generateProfile({ webId, name: displayName, podUri, issuer, ownerVm: ownerKey?.vm });
     await storage.write('/profile/card.jsonld', serialize(profile));
 
@@ -1100,22 +1118,8 @@ export function createServer(options = {}) {
     const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
-    // Owner-key file is written last. The keypair itself was generated
-    // up-front for profile injection; this step persists it. Throw on
-    // write failure so single-user startup fails loud rather than
-    // logging "Provisioned …" against a missing on-disk file.
-    if (ownerKey) {
-      const ok = await storage.write(
-        '/private/privkey.jsonld',
-        JSON.stringify(ownerKey.document, null, 2),
-        { mode: 0o600 }
-      );
-      if (!ok) {
-        throw new Error(
-          'Failed to write owner key file at /private/privkey.jsonld'
-        );
-      }
-    }
+    // (privkey was written above, before the profile, to avoid
+    // orphan-VM-on-crash. Nothing more to do here.)
 
     // Note: Quota not initialized for root-level pods (no user directory).
     // Spread `ownerKey` only when set so the field is genuinely absent

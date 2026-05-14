@@ -223,12 +223,17 @@ export function buildOwnerVerificationMethod({ webId, publicHex, fragment = 'own
  * The returned `secretHex` should be considered sensitive and not
  * logged; the public `publicMultibase` IS safe to print.
  *
+ * Single canonical input shape — `webId` for VM controller + VM `@id`
+ * derivation, `documentController` to override the Multikey document's
+ * controller (defaults to `did:nostr:<publicHex>` per Phase 2 of #437).
+ * The previous `controllerWebId` legacy alias was removed in #443
+ * because it created surprising precedence interactions with the new
+ * `documentController` and asymmetric document/VM controllers.
+ *
  * @param {object} args
- * @param {string} args.webId - Pod owner's WebID. Used as the
- *   `controller` of the VM and to derive the VM's `@id` fragment.
- *   The Multikey document's `controller` is the `did:nostr:<hex>`
- *   form by default (Phase 2 of #437 / #443).
- * @param {string} [args.controller] - Override the Multikey
+ * @param {string} args.webId - Pod owner's WebID. Used as the VM
+ *   controller and to derive the VM's `@id` fragment.
+ * @param {string} [args.documentController] - Override the Multikey
  *   document's controller. Defaults to `did:nostr:<publicHex>`.
  * @returns {{
  *   document: object,
@@ -239,21 +244,17 @@ export function buildOwnerVerificationMethod({ webId, publicHex, fragment = 'own
  *   didNostr: string
  * }}
  */
-export function provisionOwnerKey({ webId, controller, controllerWebId }) {
-  // Backward-compat: callers from Phase 1 passed `controllerWebId` and
-  // expected it to land in both the document's `controller` field and
-  // (implicitly) the VM controller. Map it to the new shape.
-  const effectiveWebId = webId ?? controllerWebId;
-  if (typeof effectiveWebId !== 'string' || !effectiveWebId) {
+export function provisionOwnerKey({ webId, documentController }) {
+  if (typeof webId !== 'string' || !webId) {
     throw new Error('provisionOwnerKey: webId required');
   }
   const { publicHex, secretHex } = generateOwnerKeypair();
   const document = buildOwnerKeyDocument({
     publicHex,
     secretHex,
-    controller: controller ?? (controllerWebId ?? didNostrFromPublicHex(publicHex))
+    controller: documentController ?? didNostrFromPublicHex(publicHex)
   });
-  const vm = buildOwnerVerificationMethod({ webId: effectiveWebId, publicHex });
+  const vm = buildOwnerVerificationMethod({ webId, publicHex });
   return {
     document,
     vm,

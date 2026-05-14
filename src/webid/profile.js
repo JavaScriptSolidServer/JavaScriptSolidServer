@@ -24,6 +24,18 @@ const LWS = 'https://www.w3.org/ns/lws#';
  * @param {string} options.issuer - OIDC issuer URI
  * @returns {object} JSON-LD profile data
  */
+/**
+ * NOTE on `ownerVm`: when provided, this helper unconditionally
+ * overwrites `verificationMethod`, `authentication`, and
+ * `assertionMethod` with single-element arrays. That's correct for
+ * the only current caller (fresh-pod creation, where there's nothing
+ * to overwrite), but if a future "rotate-keys" / re-provisioning
+ * command ever calls this helper to regenerate an existing profile,
+ * it will silently drop any VMs / proof-purpose references the
+ * operator added by hand. Either pass the existing profile through
+ * a merge step before calling this, or treat this helper as
+ * fresh-pod-only. See #444 review.
+ */
 export function generateProfileJsonLd({ webId, name, podUri, issuer, ownerVm = null }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
   // Document URL is the WebID without its fragment; service entries use
