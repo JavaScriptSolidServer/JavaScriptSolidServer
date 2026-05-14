@@ -291,7 +291,7 @@ export async function handleGet(request, reply) {
         );
       const headers = getAllHeaders({
         isContainer: true,
-        etag: stats.etag,
+        etag: effectiveEtag,
         contentType: 'text/html',
         origin,
         resourceUrl,
