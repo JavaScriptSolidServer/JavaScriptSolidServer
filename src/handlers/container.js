@@ -4,7 +4,7 @@ import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } from '../wac/parser.js';
-import { provisionOwnerKey } from '../keys/provision.js';
+import { provisionOwnerKey, assertProvisionKeysCompatible } from '../keys/provision.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
@@ -304,6 +304,19 @@ export async function handleCreatePod(request, reply) {
   // Validate pod name (alphanumeric, dash, underscore)
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
     return reply.code(400).send({ error: 'Invalid pod name. Use alphanumeric, dash, or underscore only.' });
+  }
+
+  // Refuse provisionKeys + --public: WAC would be bypassed, exposing the
+  // freshly written secret to anyone. Surfaces the contradiction at
+  // request time rather than after a key leak.
+  if (provisionKeys === true && request.config?.public) {
+    return reply.code(400).send({
+      error: 'provisionKeys cannot be used in --public mode',
+      message:
+        '--public bypasses WAC, which would make /private/privkey.jsonld ' +
+        'publicly readable. Use provisionKeys with WAC enforcement (the ' +
+        'default), or drop --public.'
+    });
   }
 
   const podPath = `/${name}/`;

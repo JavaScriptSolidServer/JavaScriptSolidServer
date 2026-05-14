@@ -152,6 +152,72 @@ describe('POST /.pods — provisionKeys: true (Phase 1 of #437)', () => {
   });
 });
 
+describe('POST /.pods — provisionKeys + --public (footgun guard)', () => {
+  // --public mode bypasses WAC: every resource becomes publicly
+  // readable. Combined with provisionKeys, /private/privkey.jsonld
+  // would be the world's worst secret store. Refuse the combination
+  // at request time with 400 so the operator hits the contradiction
+  // immediately. See #442 review.
+  let server;
+  let baseUrl;
+  let savedDataRoot;
+  const DATA_DIR = './test-data-provision-public';
+
+  before(async () => {
+    savedDataRoot = process.env.DATA_ROOT;
+    await fs.remove(DATA_DIR);
+    await fs.ensureDir(DATA_DIR);
+    const { createServer } = await import('../src/server.js');
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: DATA_DIR,
+      public: true
+    });
+    await server.listen({ port: 0, host: '127.0.0.1' });
+    baseUrl = `http://127.0.0.1:${server.server.address().port}`;
+  });
+  after(async () => {
+    await server.close();
+    await fs.remove(DATA_DIR);
+    if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = savedDataRoot;
+  });
+
+  it('rejects POST /.pods with provisionKeys: true on a --public server (400)', async () => {
+    const res = await fetch(`${baseUrl}/.pods`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'shouldnotexist', provisionKeys: true })
+    });
+    assert.strictEqual(res.status, 400);
+    const body = await res.json();
+    assert.match(body.message || body.error || '', /public/i,
+      'error must explain why provisionKeys is rejected');
+    // Pod must not have been created.
+    assert.strictEqual(await fs.pathExists(`${DATA_DIR}/shouldnotexist/`), false);
+  });
+
+  it('still allows POST /.pods without provisionKeys on a --public server', async () => {
+    const res = await fetch(`${baseUrl}/.pods`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'publicpod' })
+    });
+    assert.strictEqual(res.status, 201);
+  });
+});
+
+describe('createServer — provisionKeys + --public refused at start', () => {
+  it('throws synchronously when both options are set', async () => {
+    const { createServer } = await import('../src/server.js');
+    assert.throws(
+      () => createServer({ logger: false, provisionKeys: true, public: true }),
+      /cannot be combined with --public/
+    );
+  });
+});
+
 describe('createPodStructure — provisionKeys option (direct call)', () => {
   before(async () => {
     await startTestServer();

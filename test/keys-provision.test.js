@@ -10,7 +10,8 @@ import {
   publicKeyMultibase,
   secretKeyMultibase,
   buildOwnerKeyDocument,
-  provisionOwnerKey
+  provisionOwnerKey,
+  assertProvisionKeysCompatible
 } from '../src/keys/provision.js';
 import { decodeFFormSecp256k1 } from '../src/auth/nostr-keys.js';
 
@@ -128,6 +129,36 @@ describe('provisionOwnerKey', () => {
     assert.strictEqual(out.publicMultibase, out.document.publicKeyMultibase);
     assert.strictEqual(out.document.type, 'Multikey');
     assert.strictEqual(out.document.controller, 'https://alice.example/profile/card.jsonld#me');
+  });
+});
+
+describe('assertProvisionKeysCompatible', () => {
+  // Refuse the provisionKeys + --public combination — public mode
+  // bypasses WAC, which would expose the freshly-written secret on
+  // /private/privkey.jsonld to anyone over HTTP.
+  it('throws when both provisionKeys and isPublic are true', () => {
+    assert.throws(
+      () => assertProvisionKeysCompatible({ provisionKeys: true, isPublic: true }),
+      /cannot be combined with --public/
+    );
+  });
+
+  it('does NOT throw for provisionKeys alone (the supported case)', () => {
+    assert.doesNotThrow(() =>
+      assertProvisionKeysCompatible({ provisionKeys: true, isPublic: false })
+    );
+  });
+
+  it('does NOT throw for --public alone (no secrets being written)', () => {
+    assert.doesNotThrow(() =>
+      assertProvisionKeysCompatible({ provisionKeys: false, isPublic: true })
+    );
+  });
+
+  it('does NOT throw when neither flag is set', () => {
+    assert.doesNotThrow(() =>
+      assertProvisionKeysCompatible({ provisionKeys: false, isPublic: false })
+    );
   });
 });
 

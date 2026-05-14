@@ -119,6 +119,35 @@ export function provisionOwnerKey({ controllerWebId }) {
   };
 }
 
+/**
+ * Refuse to provision keys when WAC is being bypassed.
+ *
+ * `--public` (and `request.config.public`) tells JSS to skip WAC and
+ * grant unauthenticated access to everything. Combined with
+ * `--provision-keys`, it would mean a plaintext secret at
+ * `/private/privkey.jsonld` is readable by anyone over HTTP — the
+ * exact opposite of what the seeded owner-only ACL is supposed to do.
+ *
+ * Throws a clear error so the operator hits the contradiction at
+ * startup (or pod-creation) rather than discovering it by reading
+ * their own server logs after a key leak.
+ *
+ * @param {object} args
+ * @param {boolean} args.provisionKeys
+ * @param {boolean} args.isPublic - jss `--public` mode
+ * @throws {Error} when both flags are true
+ */
+export function assertProvisionKeysCompatible({ provisionKeys, isPublic }) {
+  if (provisionKeys && isPublic) {
+    throw new Error(
+      '--provision-keys cannot be combined with --public. --public bypasses ' +
+      'WAC, which would make /private/privkey.jsonld readable by anyone over ' +
+      'HTTP. Use --provision-keys with WAC enforcement (the default), or drop ' +
+      '--public.'
+    );
+  }
+}
+
 function bytesToHex(bytes) {
   let s = '';
   for (let i = 0; i < bytes.length; i++) {

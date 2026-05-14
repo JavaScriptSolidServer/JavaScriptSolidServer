@@ -68,6 +68,17 @@ Same effect as the CLI flag; useful in containerised deployments.
 
 The file mode is set to `0o600` on POSIX. WAC restricts HTTP access to the pod owner via `<pod>/private/.acl` (the standard private-folder ACL JSS writes anyway).
 
+## Incompatible with `--public`
+
+JSS refuses to provision keys when `--public` mode is on. `--public` tells JSS to skip WAC entirely and grant unauthenticated access to every resource — including `/private/privkey.jsonld`. Combined with `--provision-keys`, that would write a plaintext secret straight to a publicly-readable URL.
+
+The two flags are explicitly incompatible:
+
+- **At server start**: `jss start --single-user --provision-keys --public` throws at server-create time with a clear error. The server doesn't start.
+- **At pod creation over HTTP**: `POST /.pods` with `provisionKeys: true` returns **400 Bad Request** when the server is in `--public` mode.
+
+If you genuinely want both behaviours, you don't actually want both: either pick `--public` (no auth, no secrets on disk) or pick `--provision-keys` (WAC-protected secrets). There's no middle ground that's safe.
+
 ## Threat model and protection
 
 The web user (pod owner) reads the key over HTTP, authenticated against their WebID. WAC checks the request and serves the file:

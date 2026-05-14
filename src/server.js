@@ -29,6 +29,7 @@ import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
 import { registerErrorHandler } from './utils/error-handler.js';
 import { seedServerRoot } from './ui/server-root.js';
+import { assertProvisionKeysCompatible } from './keys/provision.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -141,7 +142,15 @@ export function createServer(options = {}) {
   // when a single-user pod is first created. Phase 1 of #437. Off by
   // default: keys-on-disk is a real security tradeoff, opt-in keeps
   // the choice visible to the operator.
+  //
+  // Refuse the --provision-keys + --public combination at server-create
+  // time so the operator hits the contradiction immediately rather than
+  // by reading a leaked key from logs / the public web. See #442 review.
   const provisionKeysEnabled = options.provisionKeys ?? false;
+  assertProvisionKeysCompatible({
+    provisionKeys: provisionKeysEnabled,
+    isPublic: !!options.public
+  });
   const mongoUrl = options.mongoUrl ?? 'mongodb://localhost:27017';
   const mongoDatabase = options.mongoDatabase ?? 'solid';
   // HTTP 402 paid /pay/ routes are OFF by default
