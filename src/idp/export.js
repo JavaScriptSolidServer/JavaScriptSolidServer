@@ -63,6 +63,20 @@ import { findByWebId } from './accounts.js';
  * Named-pod single-user (podDir = <dataRoot>/<name>/) and multi-user
  * (podDir = <dataRoot>/<podName>/) don't hit this code path — the
  * pod tree is already isolated by the path layout.
+ *
+ * !!! SECURITY-CRITICAL — DO NOT ADD A NEW SERVER-INTERNAL TOP-LEVEL
+ * DIRECTORY WITHOUT ALSO ADDING IT HERE AND ADDING A REGRESSION TEST.
+ *
+ * We use a denylist (not an allowlist of pod-data subdirs) because
+ * pod content is open-ended — operators and apps create arbitrary
+ * top-level containers, and an allowlist would break Credible Exit
+ * by silently dropping legitimate user data. The trade-off: any new
+ * server-managed dotfile dir landing at the data root must be added
+ * here in the same PR that introduces it. The denylist test in
+ * test/idp-export.test.js asserts on the property "no IdP secrets
+ * appear in the archive" against on-disk seeded files, so it will
+ * regress loudly if a future feature drops a secret-bearing dir at
+ * the data root and forgets to update this set.
  */
 const ROOT_POD_EXCLUDE = new Set(['.idp', '.private']);
 
@@ -113,18 +127,35 @@ export async function handleExportAccount(request, reply, options = {}) {
 
   if (options.singleUser) {
     // Single-user: pod is at `/` (root pod) or `/<name>/` based on
-    // singleUserName. There's at most one IDP account; if it exists
-    // include it, else emit a single-user manifest with no account.
+    // singleUserName. The seeded IDP account (per
+    // seedSingleUserIdpAccount in src/server.js) is the sole owner —
+    // an authenticated WebID without a matching local account is
+    // some third-party identity (external Solid-OIDC, LWS-CID JWT,
+    // etc.), NOT the pod owner, and must not get the operator's
+    // /private/privkey.jsonld. The route is only mounted when
+    // idpEnabled, so a missing account record means "caller is not
+    // the seeded owner" — refuse with the same 403 shape as
+    // multi-user.
     isRootPod = !options.singleUserName;
     podDir = isRootPod
       ? dataRoot
       : path.join(dataRoot, options.singleUserName);
 
-    accountRecord = await findByWebId(webId);   // may be null in --no-idp mode
+    accountRecord = await findByWebId(webId);
+    if (!accountRecord) {
+      return reply.code(403).send({
+        error: 'forbidden',
+        error_description:
+          'Authenticated WebID does not match the single-user account',
+      });
+    }
     manifest = {
-      webId,
-      mode: 'single-user',
+      webId: accountRecord.webId,
+      username: accountRecord.username,
+      email: accountRecord.email,
       podName: isRootPod ? null : options.singleUserName,
+      mode: 'single-user',
+      createdAt: accountRecord.createdAt,
       exportedAt: new Date().toISOString(),
       jssVersion: options.jssVersion ?? 'unknown',
     };

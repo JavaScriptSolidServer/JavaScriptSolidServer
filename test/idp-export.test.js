@@ -24,8 +24,15 @@ import zlib from 'zlib';
 import tar from 'tar-stream';
 import { Readable } from 'stream';
 import { createServer } from '../src/server.js';
+import { createToken } from '../src/auth/token.js';
 
+// startServer/stopServer manage process.env.DATA_ROOT via a snapshot
+// stored on the returned server. createServer mutates DATA_ROOT
+// (src/server.js:175); without restore, subsequent unrelated tests
+// reading DATA_ROOT in this run see a stale path pointing at a
+// now-removed directory.
 async function startServer(dataDir, options = {}) {
+  const prevDataRoot = process.env.DATA_ROOT;
   await fs.remove(dataDir);
   await fs.ensureDir(dataDir);
   const server = createServer({
@@ -38,12 +45,15 @@ async function startServer(dataDir, options = {}) {
   });
   await server.listen({ port: 0, host: '127.0.0.1' });
   const baseUrl = `http://127.0.0.1:${server.server.address().port}`;
+  server.__prevDataRoot = prevDataRoot;
   return { server, baseUrl };
 }
 
 async function stopServer(server, dataDir) {
   await server.close();
   await fs.remove(dataDir);
+  if (server.__prevDataRoot === undefined) delete process.env.DATA_ROOT;
+  else process.env.DATA_ROOT = server.__prevDataRoot;
 }
 
 /**
@@ -256,18 +266,26 @@ describe('GET /idp/account/export — single-user ROOT pod (denylist check)', ()
     // the denylist assertion below is exercising real entries. We
     // synthesize .private/ ourselves (pay handler only writes it on
     // first /pay use) so the test doesn't depend on side-channel
-    // activity to be meaningful.
+    // activity to be meaningful. We also pin the IdP secret-bearing
+    // file specifically — the property under test is "no IdP secrets
+    // appear in the export", not just "no entries under one specific
+    // dotted prefix". A future refactor moving secrets out of
+    // `.idp/accounts/*.json` would fail this pre-condition loudly
+    // and force the denylist + assertion to be re-pinned to wherever
+    // the secrets moved.
     await fs.outputFile(
       path.join(DATA_DIR, '.private', 'keypair.json'),
       JSON.stringify({ canary: 'must-not-leak' }),
     );
+    const idpAccounts = await fs.readdir(path.join(DATA_DIR, '.idp', 'accounts'))
+      .catch(() => []);
+    const accountFiles = idpAccounts.filter(f => f.endsWith('.json'));
+    assert.ok(accountFiles.length > 0,
+      'pre-condition: .idp/accounts/*.json must exist (the actual ' +
+      'secret-bearing material that the denylist must keep out of the export)');
     assert.ok(
-      await fs.pathExists(path.join(DATA_DIR, '.idp')),
-      'pre-condition: .idp/ must exist on disk for the test to be meaningful'
-    );
-    assert.ok(
-      await fs.pathExists(path.join(DATA_DIR, '.private')),
-      'pre-condition: .private/ must exist on disk for the test to be meaningful'
+      await fs.pathExists(path.join(DATA_DIR, '.private', 'keypair.json')),
+      'pre-condition: .private/keypair.json must exist'
     );
     const res = await fetch(`${baseUrl}/idp/account/export`, {
       headers: { Authorization: `Bearer ${ownerToken}` }
@@ -339,6 +357,12 @@ describe('GET /idp/account/export — single-user with --provision-keys', () => 
       'manifest.mode reflects the server mode, not the existence of an account record');
     assert.strictEqual(manifest.podName, 'me',
       'singleUserName="me" → pod is at <DATA_ROOT>/me/ → podName is "me"');
+    // Single-user manifest now includes account-derived fields when an
+    // account record exists, matching the multi-user manifest shape so
+    // a downstream importer doesn't see different shapes per server mode.
+    assert.strictEqual(manifest.username, 'me');
+    assert.match(manifest.webId, /me\/profile\/card\.jsonld#me$/);
+    assert.ok(manifest.createdAt, 'manifest.createdAt must be populated from the seeded account');
 
     // The on-disk secret must be in the archive — Credible Exit
     // requires the user can leave with their identity, not just
@@ -351,5 +375,30 @@ describe('GET /idp/account/export — single-user with --provision-keys', () => 
     );
     // And the WebID profile carrying the public side.
     assert.ok(podKeys.some(k => k.endsWith('profile/card.jsonld')));
+  });
+
+  it('rejects an authenticated third-party WebID with 403', async () => {
+    // Single-user mode previously trusted ANY successfully-authenticated
+    // WebID and shipped the entire pod (incl. /private/privkey.jsonld)
+    // to the caller. If the server accepts external Solid-OIDC issuers,
+    // LWS-CID JWTs, or any non-local WebID, that meant a third party's
+    // bearer token was sufficient to download the operator's secret.
+    //
+    // The handler now refuses with 403 when the authenticated WebID
+    // does NOT match the seeded single-user account — same shape as
+    // the multi-user "no local account record" 403.
+    //
+    // We mint the third-party token with createToken (same HMAC
+    // SECRET the server uses) so verifyToken accepts the signature
+    // and getWebIdFromRequestAsync resolves to the foreign WebID.
+    const intruderWebId = 'http://attacker.example.com/profile/card.jsonld#me';
+    const intruderToken = createToken(intruderWebId, 3600);
+    const res = await fetch(`${baseUrl}/idp/account/export`, {
+      headers: { Authorization: `Bearer ${intruderToken}` }
+    });
+    assert.strictEqual(res.status, 403,
+      'authenticated-but-not-owner WebID must NOT receive the pod export');
+    const body = await res.json();
+    assert.strictEqual(body.error, 'forbidden');
   });
 });
