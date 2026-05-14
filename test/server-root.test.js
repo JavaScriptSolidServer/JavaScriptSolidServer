@@ -132,12 +132,12 @@ describe('renderServerRoot', () => {
     assert.doesNotMatch(html, /class="info"/);
   });
 
-  it('always emits the Get started button pointing at the docs introduction', () => {
+  it('always emits the Get started button pointing at the docs First Run page', () => {
     const html = renderServerRoot({ version: '1.0.0' });
-    // The canonical URL is the introduction page, not the category.
-    // Docusaurus 3 doesn't auto-generate a category index page, so
-    // /docs/getting-started/ would 404. Link to the real document.
-    assert.match(html, /href="https:\/\/jss\.live\/docs\/getting-started\/introduction"/);
+    // First Run is the friendly "you just installed it, now what?"
+    // walkthrough — better destination for a first-time installer than
+    // the encyclopedic Introduction page. See #440.
+    assert.match(html, /href="https:\/\/jss\.live\/docs\/getting-started\/first-run"/);
     assert.match(html, /Get started/);
   });
 
