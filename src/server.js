@@ -146,7 +146,14 @@ export function createServer(options = {}) {
   // Refuse the --provision-keys + --public combination at server-create
   // time so the operator hits the contradiction immediately rather than
   // by reading a leaked key from logs / the public web. See #442 review.
-  const provisionKeysEnabled = options.provisionKeys ?? false;
+  //
+  // Strict `=== true` (not `?? false`) coerces a misconfigured truthy
+  // non-boolean (e.g. JSON config / env coercion handing in `'true'`
+  // as a string) to false at the boundary. Without this, the root-pod
+  // branch's `if (provisionKeysEnabled)` would activate while the
+  // named-pod path's strict check downstream would not, leaving the
+  // two pod shapes behaving differently for the same input.
+  const provisionKeysEnabled = options.provisionKeys === true;
   assertProvisionKeysCompatible({
     provisionKeys: provisionKeysEnabled,
     isPublic: !!options.public
