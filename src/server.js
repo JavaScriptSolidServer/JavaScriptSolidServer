@@ -1085,14 +1085,21 @@ export function createServer(options = {}) {
 
     // Optional: provision a Schnorr secp256k1 owner key in /private/.
     // Phase 1 of #437. See src/keys/provision.js for the design notes.
+    // Throw on write failure so single-user startup fails loud rather
+    // than logging "Provisioned …" against a missing on-disk file.
     let ownerKey;
     if (provisionKeysEnabled) {
       ownerKey = provisionOwnerKey({ controllerWebId: webId });
-      await storage.write(
+      const ok = await storage.write(
         '/private/privkey.jsonld',
         JSON.stringify(ownerKey.document, null, 2),
         { mode: 0o600 }
       );
+      if (!ok) {
+        throw new Error(
+          'Failed to write owner key file at /private/privkey.jsonld'
+        );
+      }
     }
 
     // Note: Quota not initialized for root-level pods (no user directory)

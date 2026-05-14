@@ -250,14 +250,22 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
 
   // Optional: provision a Schnorr secp256k1 owner key in /private/.
   // Phase 1 of #437. See src/keys/provision.js for the design notes.
+  // Throw on write failure so the caller's cleanup path runs and the
+  // pod isn't left with a phantom `ownerKey` in the response that
+  // doesn't correspond to any on-disk file.
   let ownerKey;
   if (options.provisionKeys) {
     ownerKey = provisionOwnerKey({ controllerWebId: webId });
-    await storage.write(
+    const ok = await storage.write(
       `${podPath}private/privkey.jsonld`,
       JSON.stringify(ownerKey.document, null, 2),
       { mode: 0o600 }
     );
+    if (!ok) {
+      throw new Error(
+        `Failed to write owner key file at ${podPath}private/privkey.jsonld`
+      );
+    }
   }
 
   return { podPath, podUri, ownerKey };
@@ -307,16 +315,22 @@ export async function handleCreatePod(request, reply) {
   }
 
   // Refuse provisionKeys + --public: WAC would be bypassed, exposing the
-  // freshly written secret to anyone. Surfaces the contradiction at
-  // request time rather than after a key leak.
-  if (provisionKeys === true && request.config?.public) {
-    return reply.code(400).send({
-      error: 'provisionKeys cannot be used in --public mode',
-      message:
-        '--public bypasses WAC, which would make /private/privkey.jsonld ' +
-        'publicly readable. Use provisionKeys with WAC enforcement (the ' +
-        'default), or drop --public.'
-    });
+  // freshly written secret to anyone. Use the same assertion helper as
+  // createServer's startup-time check so the error message stays in
+  // one place — converted to a 400 here because we're in an HTTP
+  // request context, not the constructor.
+  if (provisionKeys === true) {
+    try {
+      assertProvisionKeysCompatible({
+        provisionKeys: true,
+        isPublic: !!request.config?.public
+      });
+    } catch (err) {
+      return reply.code(400).send({
+        error: 'provisionKeys cannot be used in --public mode',
+        message: err.message
+      });
+    }
   }
 
   const podPath = `/${name}/`;
