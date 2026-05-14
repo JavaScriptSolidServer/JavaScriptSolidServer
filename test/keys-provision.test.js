@@ -118,10 +118,11 @@ describe('buildOwnerKeyDocument', () => {
     assert.strictEqual(doc.controller, `did:nostr:${args.publicHex}`);
   });
 
-  it('accepts an explicit controller override (Phase 1 backward-compat)', () => {
-    // Tests / fixtures that need the legacy WebID-controller shape can
-    // pass `controller` explicitly. Phase 1-style call sites and any
-    // future caller wanting a non-default controller stay supported.
+  it('accepts an explicit controller override (e.g. WebID, urn:, custom DID method)', () => {
+    // The forward-looking knob — operators or future callers that
+    // want to pin the document's controller to something other than
+    // did:nostr (a WebID, a urn:, a custom DID method) pass
+    // `controller` explicitly. Defaults still fire when omitted.
     const doc = buildOwnerKeyDocument({
       publicHex: args.publicHex,
       secretHex: args.secretHex,
@@ -195,12 +196,26 @@ describe('provisionOwnerKey', () => {
 
   it('honours an explicit documentController override', () => {
     // The legacy controllerWebId alias was removed in #443 review —
-    // the canonical way to pin the document controller to a WebID
-    // (or any other URI) is documentController.
+    // the canonical way to pin the document controller is
+    // documentController.
     const out = provisionOwnerKey({ webId, documentController: webId });
     assert.strictEqual(out.document.controller, webId);
     assert.strictEqual(out.vm.controller, webId,
       'VM controller still uses webId regardless of documentController');
+  });
+
+  it('keeps document.controller and vm.controller decoupled by design', () => {
+    // Asymmetric on purpose: vm.controller lives inside the WebID
+    // profile and identifies who in WebID-land can present this VM
+    // (always the pod owner = webId). document.controller lives in
+    // /private/privkey.jsonld and identifies the key in its own right
+    // (defaults to did:nostr, can be overridden to any custom DID
+    // method or URI). The two are distinct semantically; the JSDoc
+    // on provisionOwnerKey spells this out.
+    const out = provisionOwnerKey({ webId, documentController: 'urn:example:custom' });
+    assert.strictEqual(out.document.controller, 'urn:example:custom');
+    assert.strictEqual(out.vm.controller, webId,
+      'vm.controller intentionally tracks webId, not documentController');
   });
 });
 

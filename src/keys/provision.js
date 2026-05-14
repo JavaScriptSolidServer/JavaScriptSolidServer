@@ -230,6 +230,15 @@ export function buildOwnerVerificationMethod({ webId, publicHex, fragment = 'own
  * because it created surprising precedence interactions with the new
  * `documentController` and asymmetric document/VM controllers.
  *
+ * **Two controllers, on purpose.** `vm.controller` lives inside the
+ * WebID profile and always tracks `webId` — it identifies who in
+ * WebID-land can present this VM (the pod owner). `document.controller`
+ * lives in /private/privkey.jsonld and identifies the key in its own
+ * right (default did:nostr, overridable). They're decoupled by design;
+ * `documentController` does NOT propagate to the VM. If a caller wants
+ * both to point at, say, a custom DID, they should construct the VM
+ * separately via `buildOwnerVerificationMethod` and merge.
+ *
  * @param {object} args
  * @param {string} args.webId - Pod owner's WebID. Used as the VM
  *   controller and to derive the VM's `@id` fragment.
@@ -314,6 +323,14 @@ function hexToBase64Url(hex) {
 }
 
 function hexToBytes(hex) {
+  // Validate up front — without this, `parseInt('zz', 16)` returns
+  // NaN and silently writes 0 into the byte slot. Today the only
+  // caller passes freshly-generated 32-byte hex, but the helper is
+  // shared infrastructure: every sibling helper (`publicKeyJwkFromHex`,
+  // `didNostrFromPublicHex`, `hexToBase64Url`) validates the same way.
+  if (typeof hex !== 'string' || !/^[0-9a-fA-F]+$/.test(hex) || hex.length % 2 !== 0) {
+    throw new Error('hexToBytes: expected even-length hex');
+  }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   return out;
