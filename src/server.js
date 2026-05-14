@@ -743,6 +743,14 @@ export function createServer(options = {}) {
     '/.well-known/did/nostr/',
     '/.well-known/did/nostr/:pubkeyAndExt',
     '/.well-known/did/nostr/*',
+    // /.well-known/nostr.json — NIP-05 mapping (#446). Same WAC-bypass
+    // concern as /.well-known/did/nostr/*: the global preHandler skips
+    // auth for /.well-known/* (the spec-mandated public namespace),
+    // so without 405 blocks the wildcard write handlers would let
+    // anyone PUT/DELETE/PATCH this file and hijack the pod's NIP-05
+    // identity. GET/HEAD reach the LDP layer normally and serve the
+    // file written by --provision-keys.
+    '/.well-known/nostr.json',
   ]) {
     fastify.put(pat, methodNotAllowed);
     fastify.post(pat, methodNotAllowed);
@@ -765,7 +773,6 @@ export function createServer(options = {}) {
       instance.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
     });
   }
-
 
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)
@@ -892,6 +899,30 @@ export function createServer(options = {}) {
             'Filesystem reads bypass WAC; use FDE / OS keyring / restrictive umask ' +
             'for any pod that matters. See docs/provision-keys.md.'
           );
+
+          // NIP-05 mapping for the bare domain (#446). Lives at the
+          // server root regardless of whether the pod is at / or
+          // /<name>/ — `.well-known/` is per-origin, not per-pod.
+          // This branch covers BOTH single-user shapes (root pod via
+          // createRootPodStructure, named pod via createPodStructure)
+          // because the file is logically server-level identity, not
+          // pod-internal data. Multi-user aggregation is the next
+          // slice of #445. WAC bypass on /.well-known/* is balanced
+          // by the 405 method-not-allowed guards registered earlier
+          // so an attacker can't PUT-overwrite this mapping.
+          await storage.createContainer('/.well-known/');
+          const nip05Ok = await storage.write(
+            '/.well-known/nostr.json',
+            JSON.stringify({ names: { _: creation.ownerKey.publicHex } }, null, 2)
+          );
+          if (!nip05Ok) {
+            fastify.log.warn(
+              'Failed to write /.well-known/nostr.json — pod is provisioned ' +
+              'but NIP-05 verification will not resolve to this server.'
+            );
+          } else {
+            fastify.log.info(`NIP-05 mapping at ${baseUrl}/.well-known/nostr.json`);
+          }
         }
       }
 
@@ -1129,23 +1160,11 @@ export function createServer(options = {}) {
         );
       }
 
-      // NIP-05 mapping for the bare domain (#446). NIP-05 §3 reserves
-      // `_` as the "naked domain" identifier — a single-user pod IS
-      // the domain, so the owner's Nostr identity is just `<host>`
-      // with no `name@` prefix. The file is a plain JSON resource
-      // under the spec-mandated `.well-known/` namespace; jss already
-      // bypasses WAC for /.well-known/* and lets the LDP GET handler
-      // serve it as a static file. No new route needed.
-      await storage.createContainer('/.well-known/');
-      const nip05 = { names: { _: ownerKey.publicHex } };
-      const nip05Ok = await storage.write(
-        '/.well-known/nostr.json',
-        JSON.stringify(nip05, null, 2)
-      );
-      if (!nip05Ok) {
-        throw new Error('Failed to write /.well-known/nostr.json');
-      }
     }
+    // NIP-05 mapping is written outside this function (in the
+    // single-user onReady block) so it covers both root pods and
+    // named single-user pods (which take the createPodStructure
+    // path), not just the root case. See #447 review.
 
     // Generate profile (with the owner key's VM landed in
     // verificationMethod when --provision-keys is on). Written last —

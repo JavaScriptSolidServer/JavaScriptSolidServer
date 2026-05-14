@@ -118,15 +118,15 @@ describe('NIP-05 MVP — single-user without a provisioned key', () => {
 });
 
 describe('NIP-05 MVP — multi-user mode', () => {
-  let server;
+  let server, baseUrl;
   let savedDataRoot;
 
   before(async () => {
     savedDataRoot = process.env.DATA_ROOT;
-    // No singleUser → multi-user. createRootPodStructure isn't called;
-    // each pod's createPodStructure is, but the MVP only writes the
-    // NIP-05 file in single-user mode.
-    ({ server } = await startServer({}));
+    // No singleUser → multi-user. The MVP only writes the NIP-05
+    // file in single-user mode; aggregation across multi-user pods
+    // is the next slice of #445.
+    ({ server, baseUrl } = await startServer({}));
   });
 
   after(async () => {
@@ -135,10 +135,34 @@ describe('NIP-05 MVP — multi-user mode', () => {
     else process.env.DATA_ROOT = savedDataRoot;
   });
 
-  it('does not write a server-level NIP-05 file (aggregation is the next slice)', async () => {
+  it('still does not write a server-level NIP-05 file when a pod is provisioned with keys', async () => {
+    // Actually exercise the code path that *could* have written the
+    // file — provision a multi-user pod with provisionKeys: true via
+    // POST /.pods. The pod's own /<name>/private/privkey.jsonld
+    // lands as expected, but the server-level /.well-known/nostr.json
+    // must remain absent because this is multi-user mode.
+    const res = await fetch(`${baseUrl}/.pods`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'alice', provisionKeys: true })
+    });
+    assert.strictEqual(res.status, 201, 'pod creation must succeed');
+    const body = await res.json();
+    assert.ok(body.ownerKey, 'pod-level owner key must still be provisioned');
+
+    // The pod's own privkey IS on disk — sanity check the multi-user
+    // provisioning path still ran.
+    assert.strictEqual(
+      await fs.pathExists(`${DATA_DIR}/alice/private/privkey.jsonld`),
+      true,
+      'multi-user pod provisioning still writes the pod-internal privkey'
+    );
+
+    // …but no server-level NIP-05 file.
     assert.strictEqual(
       await fs.pathExists(`${DATA_DIR}/.well-known/nostr.json`),
-      false
+      false,
+      'multi-user mode must not write a server-level NIP-05 mapping'
     );
   });
 });
