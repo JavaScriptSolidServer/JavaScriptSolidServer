@@ -11,6 +11,7 @@ import { authenticate, findByUsername, findByWebId, updatePassword, verifyPasswo
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 import { accountDeletePage } from './views.js';
+import { expireSessionCookies } from './cookies.js';
 
 /**
  * Handle POST /idp/credentials
@@ -364,6 +365,10 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   // and rationale (#391 pass 2 / pass 3).
   const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
 
+  // Expire OIDC session cookies so the browser doesn't send stale
+  // references on the next login attempt (#452).
+  expireSessionCookies(reply, request);
+
   reply.header('Cache-Control', 'no-store');
   reply.header('Pragma', 'no-cache');
   return {
@@ -546,6 +551,10 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
   }
 
   const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
+
+  // Expire OIDC session cookies so the browser doesn't send stale
+  // references on the next login attempt (#452).
+  expireSessionCookies(reply, request);
 
   // If the user asked for a purge but it didn't run (fs.remove threw,
   // path-relative check rejected, etc.), surface that on the success

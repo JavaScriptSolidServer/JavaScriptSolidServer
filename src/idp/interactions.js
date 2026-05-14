@@ -9,6 +9,7 @@ import * as storage from '../storage/filesystem.js';
 import { createPodStructure } from '../handlers/container.js';
 import { validateInvite } from './invites.js';
 import { verifyNostrAuth, getNostrPubkey, verifyNostrPubkeyAgainstWebId } from '../auth/nostr.js';
+import { expireSessionCookies } from './cookies.js';
 
 // Security: Maximum body size for IdP form submissions (1MB)
 const MAX_BODY_SIZE = 1024 * 1024;
@@ -348,22 +349,10 @@ export async function handleSwitchAccount(request, reply, provider) {
     const ttl = Math.max(1, interaction.exp - Math.floor(Date.now() / 1000));
     await interaction.save(ttl);
 
-    // Clear the user-agent's session cookie too. The IdP runs with
-    // signed cookies (provider.js cookies.long.signed = true), so each
-    // session cookie has a paired `.sig`. The `.legacy` variant is
-    // created during identifier rotation and likewise has its own
-    // `.sig`. Clearing all four keeps the browser fully tidy. JSS
-    // doesn't register @fastify/cookie, so we emit Set-Cookie headers
-    // directly with an expired Expires + Max-Age=0. Server-side state
-    // is already gone via session.destroy() above — these expirations
+    // Clear the user-agent's session cookies. Server-side state is
+    // already gone via session.destroy() above — these expirations
     // are belt-and-suspenders.
-    const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
-    reply.header('Set-Cookie', [
-      `_session=; ${expired}`,
-      `_session.sig=; ${expired}`,
-      `_session.legacy=; ${expired}`,
-      `_session.legacy.sig=; ${expired}`,
-    ]);
+    expireSessionCookies(reply, request);
 
     // 303 See Other — explicitly forces the UA to issue GET on the
     // Location target. 302 leaves it ambiguous (and some legacy UAs

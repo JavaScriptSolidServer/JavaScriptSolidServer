@@ -8,6 +8,7 @@ import { createAdapter } from './adapter.js';
 import { getJwks, getCookieKeys } from './keys.js';
 import { getAccountForProvider } from './accounts.js';
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { expireSessionCookiesKoa } from './cookies.js';
 
 // Cache for fetched client documents
 const clientDocumentCache = new Map();
@@ -264,8 +265,16 @@ export async function createProvider(issuer) {
     // Auto-approve consent by loading/creating grants automatically
     // This skips the consent prompt for all clients (appropriate for test/dev servers)
     loadExistingGrant: async (ctx) => {
-      // Check if there's an existing grant for this client/account pair
-      const grantId = ctx.oidc.session?.grantIdFor(ctx.oidc.client?.clientId);
+      // Guard: if session or client is missing (e.g. stale cookies after
+      // account deletion), bail out early so oidc-provider doesn't crash
+      // calling getOIDCScopeEncountered() on an undefined grant (#452).
+      if (!ctx.oidc.session || !ctx.oidc.client) {
+        return undefined;
+      }
+
+      // Check if there's an existing grant for this client/account pair.
+      // Optional chain: grantIdFor may be absent on a stale session stub.
+      const grantId = ctx.oidc.session.grantIdFor?.(ctx.oidc.client.clientId);
 
       if (grantId) {
         const existingGrant = await ctx.oidc.provider.Grant.find(grantId);
@@ -275,7 +284,7 @@ export async function createProvider(issuer) {
       }
 
       // Auto-approve: create a new grant with all requested scopes
-      if (ctx.oidc.session?.accountId && ctx.oidc.client?.clientId) {
+      if (ctx.oidc.session.accountId) {
         const grant = new ctx.oidc.provider.Grant({
           accountId: ctx.oidc.session.accountId,
           clientId: ctx.oidc.client.clientId,
@@ -393,6 +402,27 @@ export async function createProvider(issuer) {
 
     // Render errors
     renderError: async (ctx, out, error) => {
+      // Stale session recovery (#452): when oidc-provider crashes because
+      // a deleted account's session/grant is still in the browser cookies,
+      // expire those cookies and redirect back to the same URL. The retry
+      // starts with a clean session and succeeds. The `_stale_retry` param
+      // prevents infinite redirect loops — only try once.
+      const isStaleSessionCrash = out.error === 'server_error' &&
+        error instanceof TypeError &&
+        /Cannot read properties of undefined/.test(error?.message);
+      const reqUrl = ctx.req?.originalUrl || ctx.request?.url || ctx.url || '';
+      const alreadyRetried = reqUrl.includes('_stale_retry=1');
+
+      // Only redirect browser GETs (authorization endpoint). POST/token/
+      // userinfo are programmatic — clients won't follow redirects or
+      // honor Set-Cookie, so just fall through to the error page.
+      if (isStaleSessionCrash && !alreadyRetried && ctx.method === 'GET') {
+        expireSessionCookiesKoa(ctx);
+        const separator = reqUrl.includes('?') ? '&' : '?';
+        ctx.redirect(`${reqUrl}${separator}_stale_retry=1`);
+        return;
+      }
+
       ctx.type = 'html';
       ctx.body = `
         <!DOCTYPE html>
