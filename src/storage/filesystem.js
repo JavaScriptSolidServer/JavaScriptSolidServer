@@ -86,8 +86,10 @@ export function createReadStream(urlPath, options = {}) {
  *   time so the file is never visible to other unix users with a
  *   looser default; an additional `chmod` runs afterward to tighten
  *   the file when overwriting an existing path that was created with
- *   a wider mode. No-op on Windows. See #437 for the secret-material
- *   use case.
+ *   a wider mode. On Windows, NTFS approximates POSIX modes coarsely
+ *   (effectively read-only flag based on owner perms) — `chmod` is
+ *   still attempted there but should not be relied on for
+ *   cross-platform secrecy. See #437 for the secret-material use case.
  * @returns {Promise<boolean>} `true` on success, `false` on write
  *   failure (chmod failures are logged but do not fail the write).
  */
@@ -112,9 +114,10 @@ export async function write(urlPath, content, options = {}) {
     // Belt-and-braces: when overwriting an existing file, writeFile
     // does NOT change the existing mode — apply chmod so a stale 0644
     // file gets tightened to 0600 on subsequent writes. Logged but
-    // non-fatal: callers that care about strict permissions should
-    // also rely on filesystem-level protection (FDE / OS keyring /
-    // container user namespacing).
+    // non-fatal: chmod is attempted on every platform (incl. Windows,
+    // where NTFS approximates POSIX modes coarsely) but callers that
+    // care about strict permissions should also rely on filesystem-
+    // level protection (FDE / OS keyring / container user namespacing).
     if (typeof options.mode === 'number') {
       try {
         await fs.chmod(filePath, options.mode);

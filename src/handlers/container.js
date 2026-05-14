@@ -253,8 +253,12 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   // Throw on write failure so the caller's cleanup path runs and the
   // pod isn't left with a phantom `ownerKey` in the response that
   // doesn't correspond to any on-disk file.
+  //
+  // Strict `=== true` (not just truthy) so a misconfigured caller
+  // passing `'true'` / `1` / etc. doesn't silently activate. Matches
+  // handleCreatePod's HTTP-side check on the body field.
   let ownerKey;
-  if (options.provisionKeys) {
+  if (options.provisionKeys === true) {
     ownerKey = provisionOwnerKey({ controllerWebId: webId });
     const ok = await storage.write(
       `${podPath}private/privkey.jsonld`,

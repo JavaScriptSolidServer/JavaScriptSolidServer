@@ -248,4 +248,19 @@ describe('createPodStructure — provisionKeys option (direct call)', () => {
     );
     assert.strictEqual(result.ownerKey, undefined);
   });
+
+  it('requires strict boolean true (a truthy non-boolean does not trigger)', async () => {
+    // Defensive: matches the HTTP-side check on the request body so a
+    // misconfigured caller passing 'true' / 1 / etc. through the
+    // direct API doesn't silently provision a plaintext secret.
+    const podUri = 'http://127.0.0.1:0/direct3/';
+    const webId = `${podUri}profile/card.jsonld#me`;
+    const result = await createPodStructure(
+      'direct3', webId, podUri, podUri.replace(/\/$/, '/'), 0,
+      { provisionKeys: 'true' }   // intentionally string, not boolean
+    );
+    assert.strictEqual(result.ownerKey, undefined,
+      'string "true" must not activate provisioning at the direct entry');
+    assert.strictEqual(await fs.pathExists('./data/direct3/private/privkey.jsonld'), false);
+  });
 });
