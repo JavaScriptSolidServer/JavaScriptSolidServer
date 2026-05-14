@@ -24,6 +24,9 @@ import {
   handleCredentialsInfo,
   handleChangePassword,
   handleDeleteAccount,
+} from './credentials.js';
+import { handleExportAccount } from './export.js';
+import {
   handleAccountDeleteForm,
   setNoCacheClickjackHeaders,
 } from './credentials.js';
@@ -38,7 +41,7 @@ import { landingPage, accountDeletePage } from './views.js';
  * @param {string} options.issuer - The issuer URL
  */
 export async function idpPlugin(fastify, options) {
-  const { issuer, inviteOnly = false, singleUser = false } = options;
+  const { issuer, inviteOnly = false, singleUser = false, singleUserName = null, jssVersion } = options;
 
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
@@ -295,6 +298,27 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleDeleteAccount(request, reply, { singleUser });
+  });
+
+  // GET account export — authenticated owner downloads their pod tree as
+  // a streamed tar.gz (#353). MVP slice of the Credible Exit ladder
+  // (#448). Lighter rate-limit than the destructive endpoints — this is
+  // a read, but a heavy one (entire pod), so cap at 3/min/IP to deter
+  // abuse without blocking a legitimate operator pulling a backup.
+  fastify.get('/idp/account/export', {
+    config: {
+      rateLimit: {
+        max: 3,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleExportAccount(request, reply, {
+      singleUser,
+      singleUserName,
+      jssVersion,
+    });
   });
 
   // GET account-delete form (#392) - human-friendly UI for #352. Public
