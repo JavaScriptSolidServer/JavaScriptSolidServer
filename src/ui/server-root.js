@@ -18,62 +18,59 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(__dirname, 'server-root.html');
 
 /**
- * Collect the list of enabled features for display on the landing page.
- */
-function listFeatures(options = {}) {
-  const f = [];
-  if (options.idp) f.push('idp');
-  if (options.nostr) f.push('nostr');
-  if (options.webrtc) f.push('webrtc');
-  if (options.activitypub) f.push('activitypub');
-  if (options.git) f.push('git');
-  if (options.pay) f.push('payments');
-  if (options.notifications) f.push('notifications');
-  if (options.mashlib) f.push('mashlib');
-  if (options.mongo) f.push('mongo');
-  if (options.tunnel) f.push('tunnel');
-  if (options.terminal) f.push('terminal');
-  return f;
-}
-
-/**
  * Render the landing page as an HTML string.
  *
- * The page itself is mode-agnostic — it doesn't change based on
- * single-user vs multi-user, and Sign up / Sign in are revealed at
- * load time by an inline HEAD probe against /idp/register. So the
- * same seeded HTML keeps working when the operator changes modes
- * without regenerating the file. See #435.
+ * The page is mode-agnostic — same HTML for single-user and multi-user.
+ * Sign up / Sign in are revealed at load time by an inline HEAD probe
+ * against /idp/register, so the seeded file keeps working across mode
+ * changes without regeneration. See #435.
+ *
+ * Only `version` is rendered into the seeded HTML — anything else that
+ * varies with server state (mode, enabled features) would go stale on
+ * the next mode change because of skip-if-exists.
  *
  * @param {object} ctx
- * @param {string} [ctx.version]   - JSS version (rendered into the info box)
- * @param {boolean} [ctx.singleUser] - Drives the "Mode" label only
- * @param {object} [ctx.enabled]   - Map of feature flags for the pills row
+ * @param {string} [ctx.version] - JSS version (shown in the info box)
  * @returns {string} HTML
  */
 export function renderServerRoot(ctx = {}) {
-  const { version = 'unknown', singleUser = false, enabled = {} } = ctx;
-
+  const { version = 'unknown' } = ctx;
   const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
-  const mode = singleUser ? 'single-user' : 'multi-user';
-  const features = listFeatures(enabled)
-    .map(f => `<span>${f}</span>`)
-    .join(' ');
 
-  // Single-pass token substitution. Each {{token}} in the original
-  // template is matched once and replaced from `values`; substituted
-  // text is not re-scanned, so a `$` or stray `{{…}}` in a value
-  // can't cause re-substitution or hit String.prototype.replace's
-  // `$&` substitution patterns. See #433 review thread.
+  // Single-pass token substitution. Each {{token}} is matched once
+  // against the original template and replaced from `values`;
+  // substituted text isn't re-scanned (a `$` or stray `{{…}}` in a
+  // value can't cause re-substitution or hit String.prototype.replace's
+  // `$&` substitution patterns). See #433 review thread.
   const values = {
     title: 'JSS Solid pod',
-    version: escape(version),
-    mode,
-    features
+    version: escape(version)
   };
   return tpl.replace(/{{(\w+)}}/g, (match, key) =>
     Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
   );
+}
+
+/**
+ * Decide which conditional buttons (Sign up, Sign in) to reveal based
+ * on the response status of `HEAD /idp/register`. Pure function so the
+ * 200 / 403 / 404 matrix can be unit-tested without DOM. The inline
+ * script in server-root.html implements the same matrix literally;
+ * keep them in sync.
+ *
+ *   200 → registration open: reveal both Sign up and Sign in
+ *   403 → IDP enabled but registration disabled (single-user mode):
+ *         reveal Sign in only
+ *   anything else (404, network error) → reveal neither (no IDP)
+ *
+ * @param {number|undefined} status - HTTP status code, or undefined for
+ *   network error.
+ * @returns {{ register: boolean, login: boolean }}
+ */
+export function decideRevealForRegisterStatus(status) {
+  if (status === 200) return { register: true, login: true };
+  if (status === 403) return { register: false, login: true };
+  return { register: false, login: false };
 }
 
 function escape(s = '') {

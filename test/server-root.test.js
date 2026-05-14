@@ -12,7 +12,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs-extra';
 import { createServer } from '../src/server.js';
-import { renderServerRoot } from '../src/ui/server-root.js';
+import { renderServerRoot, decideRevealForRegisterStatus } from '../src/ui/server-root.js';
 import { startTestServer, stopTestServer, request, assertStatus } from './helpers.js';
 
 describe('Server-root landing page', () => {
@@ -105,22 +105,29 @@ describe('Server-root landing — operator override', () => {
 
 describe('renderServerRoot', () => {
   // Mode-agnostic copy: the same page is served regardless of single-user
-  // vs multi-user. The status pill carries the mode label; the buttons
-  // adapt at load time via the HEAD probe (verified separately below).
-  it('renders the same mode-agnostic copy regardless of singleUser flag', () => {
-    const single = renderServerRoot({ version: '1.0.0', singleUser: true });
-    const multi = renderServerRoot({ version: '1.0.0', singleUser: false });
+  // vs multi-user. There's no mode pill or features list in the seeded
+  // HTML — those would go stale on the next mode change because of
+  // skip-if-exists. Mode/feature differences land in the buttons, which
+  // adapt at load time via the HEAD probe (covered below).
+  it('renders the same copy regardless of any context flags', () => {
+    const a = renderServerRoot({ version: '1.0.0', singleUser: true });
+    const b = renderServerRoot({ version: '1.0.0', singleUser: false });
+    // Drop the only varying value (the version, identical here) and
+    // assert byte-equality across the two renders.
+    assert.strictEqual(a, b);
+    assert.match(a, /<h1>Welcome<\/h1>/);
+    assert.match(a, /Your JSS Solid pod is running/);
+    assert.match(a, /open standard for personal data/);
+  });
 
-    // Same welcome copy, same primary CTA, same explainer.
-    for (const html of [single, multi]) {
-      assert.match(html, /<h1>Welcome<\/h1>/);
-      assert.match(html, /Your JSS Solid pod is running/);
-      assert.match(html, /open standard for personal data/);
-    }
-
-    // Mode pill differs.
-    assert.match(single, /<code>single-user<\/code>/);
-    assert.match(multi, /<code>multi-user<\/code>/);
+  it('does not bake mode or feature pills into the seeded HTML', () => {
+    // These would go stale: the seed is skip-if-exists, so a mode
+    // change after first start wouldn't re-render them. Excluded
+    // from the seed; the CLI banner already lists them at startup.
+    const html = renderServerRoot({ version: '1.0.0', singleUser: true, enabled: { idp: true, nostr: true } });
+    assert.doesNotMatch(html, /<code>single-user<\/code>/);
+    assert.doesNotMatch(html, /<span>idp<\/span>/);
+    assert.doesNotMatch(html, /<span>nostr<\/span>/);
   });
 
   it('always emits the Get started button pointing at the docs introduction', () => {
@@ -134,20 +141,25 @@ describe('renderServerRoot', () => {
 
   it('emits Sign up + Sign in buttons hidden for the HEAD probe to reveal', () => {
     const html = renderServerRoot({ version: '1.0.0' });
-    // Both anchors are present in every mode; the inline script reveals
-    // them based on what /idp/register actually returns.
     assert.match(html, /<a href="\/idp\/register"[^>]*data-cond="register"[^>]*hidden/);
     assert.match(html, /<a href="\/idp"[^>]*data-cond="login"[^>]*hidden/);
     assert.match(html, /Sign up/);
     assert.match(html, /Sign in/);
   });
 
+  it('overrides the .btn display rule for the [hidden] attribute so the buttons actually start hidden', () => {
+    // Without an explicit !important [hidden] rule, the .btn class's
+    // display:inline-block beats the UA stylesheet's [hidden]{display:none}
+    // and the Sign up / Sign in anchors flash visible before the HEAD probe
+    // finishes. The CSS rule is the load-bearing piece; assert it's there.
+    const html = renderServerRoot({ version: '1.0.0' });
+    assert.match(html, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
+  });
+
   it('includes the HEAD-adaptive script targeting /idp/register', () => {
     const html = renderServerRoot({ version: '1.0.0' });
     assert.match(html, /fetch\(['"]\/idp\/register['"]/);
     assert.match(html, /method:\s*['"]HEAD['"]/);
-    // The three documented branches: 200 → both, 403 → login only,
-    // anything else → neither. Assert the magic numbers are present.
     assert.match(html, /res\.status === 200/);
     assert.match(html, /res\.status === 403/);
   });
@@ -156,17 +168,6 @@ describe('renderServerRoot', () => {
     const html = renderServerRoot({ version: '1.0.0' });
     assert.match(html, /id="server-url"/);
     assert.match(html, /window\.location\.origin/);
-  });
-
-  it('lists enabled features as pills', () => {
-    const html = renderServerRoot({
-      version: '1.0.0',
-      enabled: { idp: true, nostr: true, webrtc: true, terminal: true }
-    });
-    assert.match(html, /<span>idp<\/span>/);
-    assert.match(html, /<span>nostr<\/span>/);
-    assert.match(html, /<span>webrtc<\/span>/);
-    assert.match(html, /<span>terminal<\/span>/);
   });
 
   it('interpolates version into the info box', () => {
@@ -185,5 +186,47 @@ describe('renderServerRoot', () => {
     assert.match(html, /href="https:\/\/github\.com\/JavaScriptSolidServer\/JavaScriptSolidServer"/);
     assert.match(html, /Customise this page/);
     assert.match(html, /<code>\/index\.html<\/code>/);
+  });
+});
+
+// Pure-function unit tests for the HEAD response → button-reveal matrix.
+// The inline script in server-root.html implements the same matrix by
+// hand; a regex check on the script text (above) catches outright drops
+// of the literals, but only this helper test pins down the *behaviour*
+// of the matrix without needing a DOM.
+describe('decideRevealForRegisterStatus', () => {
+  it('reveals both Sign up and Sign in for HTTP 200 (registration open)', () => {
+    assert.deepStrictEqual(
+      decideRevealForRegisterStatus(200),
+      { register: true, login: true }
+    );
+  });
+
+  it('reveals only Sign in for HTTP 403 (single-user — registration disabled)', () => {
+    assert.deepStrictEqual(
+      decideRevealForRegisterStatus(403),
+      { register: false, login: true }
+    );
+  });
+
+  it('reveals neither for HTTP 404 (no IDP)', () => {
+    assert.deepStrictEqual(
+      decideRevealForRegisterStatus(404),
+      { register: false, login: false }
+    );
+  });
+
+  it('reveals neither for any other status (e.g. 500)', () => {
+    assert.deepStrictEqual(
+      decideRevealForRegisterStatus(500),
+      { register: false, login: false }
+    );
+  });
+
+  it('reveals neither when status is undefined (network error)', () => {
+    assert.deepStrictEqual(
+      decideRevealForRegisterStatus(undefined),
+      { register: false, login: false }
+    );
   });
 });
