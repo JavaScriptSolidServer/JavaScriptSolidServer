@@ -95,6 +95,8 @@ program
   .option('--no-notifications', 'Disable WebSocket notifications')
   .option('--idp', 'Enable built-in Identity Provider')
   .option('--no-idp', 'Disable built-in Identity Provider')
+  .option('--provision-keys', 'Generate a Schnorr secp256k1 owner key on pod creation, written to <pod>/private/privkey.jsonld in W3C CID v1.0 Multikey format (off by default)')
+  .option('--no-provision-keys', 'Do not auto-generate an owner key on pod creation')
   .option('--idp-issuer <url>', 'IdP issuer URL (defaults to server URL)')
   .option('--subdomains', 'Enable subdomain-based pods (XSS protection)')
   .option('--no-subdomains', 'Disable subdomain-based pods')
@@ -218,6 +220,7 @@ program
         singleUser: config.singleUser,
         singleUserName: config.singleUserName,
         singleUserPassword: config.singleUserPassword,
+        provisionKeys: config.provisionKeys,
         public: config.public,
         readOnly: config.readOnly,
         liveReload: config.liveReload,

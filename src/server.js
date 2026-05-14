@@ -29,6 +29,7 @@ import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
 import { registerErrorHandler } from './utils/error-handler.js';
 import { seedServerRoot } from './ui/server-root.js';
+import { assertProvisionKeysCompatible } from './keys/provision.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -137,6 +138,26 @@ export function createServer(options = {}) {
   const liveReloadEnabled = options.liveReload ?? false;
   // MongoDB-backed /db/ route is OFF by default
   const mongoEnabled = options.mongo ?? false;
+  // Provision a Schnorr secp256k1 owner key in /private/privkey.jsonld
+  // when a single-user pod is first created. Phase 1 of #437. Off by
+  // default: keys-on-disk is a real security tradeoff, opt-in keeps
+  // the choice visible to the operator.
+  //
+  // Refuse the --provision-keys + --public combination at server-create
+  // time so the operator hits the contradiction immediately rather than
+  // by reading a leaked key from logs / the public web. See #442 review.
+  //
+  // Strict `=== true` (not `?? false`) coerces a misconfigured truthy
+  // non-boolean (e.g. JSON config / env coercion handing in `'true'`
+  // as a string) to false at the boundary. Without this, the root-pod
+  // branch's `if (provisionKeysEnabled)` would activate while the
+  // named-pod path's strict check downstream would not, leaving the
+  // two pod shapes behaving differently for the same input.
+  const provisionKeysEnabled = options.provisionKeys === true;
+  assertProvisionKeysCompatible({
+    provisionKeys: provisionKeysEnabled,
+    isPublic: !!options.public
+  });
   const mongoUrl = options.mongoUrl ?? 'mongodb://localhost:27017';
   const mongoDatabase = options.mongoDatabase ?? 'solid';
   // HTTP 402 paid /pay/ routes are OFF by default
@@ -840,14 +861,37 @@ export function createServer(options = {}) {
       if (!profileExists) {
         fastify.log.info(`Creating single-user pod at ${podUri}...`);
 
+        let creation;
         if (isRootPod) {
           // Root-level pod - create structure directly at /
-          await createRootPodStructure(webId, podUri, issuer, displayName);
+          creation = await createRootPodStructure(webId, podUri, issuer, displayName);
         } else {
           // Named pod at /{name}/
-          await createPodStructure(singleUserName, webId, podUri, issuer, defaultQuota);
+          creation = await createPodStructure(
+            singleUserName, webId, podUri, issuer, defaultQuota,
+            { provisionKeys: provisionKeysEnabled }
+          );
         }
         fastify.log.info(`Single-user pod created at ${podUri}`);
+
+        // Surface the public side of any provisioned owner key, plus
+        // a prominent backup reminder. The secret is NOT logged — it
+        // lives on disk only, under /private/privkey.jsonld with
+        // owner-only WAC and file mode 0o600.
+        if (creation?.ownerKey) {
+          // `podUri` already includes the trailing slash + any pod
+          // name segment, so the same expression covers root and
+          // named single-user pods.
+          const keyPath = `${podUri}private/privkey.jsonld`;
+          fastify.log.info(`Provisioned Schnorr secp256k1 owner key`);
+          fastify.log.info(`  Public key file: ${keyPath}`);
+          fastify.log.info(`  publicKeyMultibase: ${creation.ownerKey.publicMultibase}`);
+          fastify.log.warn(
+            `BACK UP ${keyPath} — losing this file means losing this identity. ` +
+            'Filesystem reads bypass WAC; use FDE / OS keyring / restrictive umask ' +
+            'for any pod that matters. See docs/provision-keys.md.'
+          );
+        }
       }
 
       // Seed an IDP account so the operator can actually log in. Without
@@ -980,11 +1024,19 @@ export function createServer(options = {}) {
   }
 
   /**
-   * Create root-level pod structure (for single-user mode with pod at /)
+   * Create root-level pod structure (for single-user mode with pod at /).
+   * When --provision-keys is set, returns `{ ownerKey }` so the caller
+   * can surface the public side in the startup banner. The returned
+   * `ownerKey` includes secretHex and secretKeyMultibase — needed by
+   * tests, present in case a future caller needs to perform a one-shot
+   * sign before the file is read back via WAC. **Callers must not log
+   * the secret.** The secret's only durable home is the on-disk file
+   * under /private/ (mode 0o600, owner-only WAC).
    */
   async function createRootPodStructure(webId, podUri, issuer, displayName) {
     const { generateProfile, generatePreferences, generateTypeIndex, serialize } = await import('./webid/profile.js');
     const { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } = await import('./wac/parser.js');
+    const { provisionOwnerKey } = await import('./keys/provision.js');
 
     // Create directories at root
     await storage.createContainer('/inbox/');
@@ -1038,7 +1090,27 @@ export function createServer(options = {}) {
     const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
+    // Optional: provision a Schnorr secp256k1 owner key in /private/.
+    // Phase 1 of #437. See src/keys/provision.js for the design notes.
+    // Throw on write failure so single-user startup fails loud rather
+    // than logging "Provisioned …" against a missing on-disk file.
+    let ownerKey;
+    if (provisionKeysEnabled) {
+      ownerKey = provisionOwnerKey({ controllerWebId: webId });
+      const ok = await storage.write(
+        '/private/privkey.jsonld',
+        JSON.stringify(ownerKey.document, null, 2),
+        { mode: 0o600 }
+      );
+      if (!ok) {
+        throw new Error(
+          'Failed to write owner key file at /private/privkey.jsonld'
+        );
+      }
+    }
+
     // Note: Quota not initialized for root-level pods (no user directory)
+    return { ownerKey };
   }
 
   // Start file watcher for live reload (watches filesystem for external changes)
