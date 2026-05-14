@@ -333,11 +333,12 @@ export async function handleExportAccount(request, reply, options = {}) {
   // error signal. We log on the server side and destroy the
   // pipeline so the client at least sees an aborted transfer rather
   // than a corrupt but seemingly-complete archive.
-  // Idempotent: invoked from pack.error, gzip.error, AND
-  // streamingPromise.catch. Destroying a stream re-emits 'error',
-  // which would re-enter this handler and produce duplicate log
-  // lines for one underlying failure. The destroyed-flag short-
-  // circuits all subsequent calls so a single failure logs once.
+  // Idempotent: invoked from pack.error, gzip.error, AND the
+  // .catch(onStreamError) chained on packExport(...) below.
+  // Destroying a stream re-emits 'error', which would re-enter this
+  // handler and produce duplicate log lines for one underlying
+  // failure. The destroyed-flag short-circuits all subsequent calls
+  // so a single failure logs once.
   const onStreamError = (err) => {
     if (gzip.destroyed || pack.destroyed) return;
     request.log.error({ err }, 'pod export stream error');
@@ -354,17 +355,23 @@ export async function handleExportAccount(request, reply, options = {}) {
   // Destroying both ends short-circuits the walk via stream error
   // propagation; the request.log captures the abort for diagnostics.
   //
-  // The `packFinished` flag closes a race window: socket 'close'
-  // can briefly observe `writableEnded === false` on a perfectly
-  // normal completion (between socket close and writableEnded
-  // flipping), which would log a spurious "client disconnected"
-  // warn line for successful exports on slow/congested writes.
-  // We set the flag synchronously after pack.finalize() resolves
-  // so the close handler can distinguish "real disconnect mid-walk"
-  // from "natural end of stream".
-  let packFinished = false;
+  // `responseFinished` closes a race window. We can't gate on
+  // `packExport`'s resolution: that fires when `pack.finalize()`
+  // returns, which is "we're done WRITING into the pipeline" — not
+  // "the client has received the bytes". For a multi-GB gzipped
+  // response over a slow link, the gap between those two events
+  // can be substantial, and a real client disconnect during the
+  // final flush would be silently swallowed (close handler
+  // short-circuits on a flag set too early). Gate instead on
+  // `reply.raw.on('finish')` — Node emits 'finish' when the last
+  // byte has been flushed to the OS socket buffer, AFTER which a
+  // 'close' event means "client disconnected after we were done"
+  // and is correctly ignored. Before 'finish', a 'close' is a
+  // genuine mid-stream disconnect and gets logged + cleans up.
+  let responseFinished = false;
+  reply.raw.on('finish', () => { responseFinished = true; });
   reply.raw.on('close', () => {
-    if (packFinished || reply.raw.writableEnded) return;
+    if (responseFinished || reply.raw.writableEnded) return;
     request.log.warn('pod export client disconnected mid-stream');
     pack.destroy(new Error('client disconnected'));
     gzip.destroy(new Error('client disconnected'));
@@ -373,18 +380,15 @@ export async function handleExportAccount(request, reply, options = {}) {
   // Pump in the background; entries are added asynchronously below.
   // The root-pod denylist is wired in so single-user-root-pod mode
   // doesn't ship .idp/ (accounts + signing keys + OIDC state).
-  // No `void` / no local — `.then().catch(onStreamError)` already
-  // attaches a rejection handler, so there's no unhandled-rejection
-  // risk and the pipeline runs detached.
+  // `.catch(onStreamError)` attaches a rejection handler so there's
+  // no unhandled-rejection risk; the pipeline runs detached.
   packExport({
     pack,
     podDir,
     manifest,
     accountRecord,
     excludeAtRoot: (options.singleUser && isRootPod) ? ROOT_POD_EXCLUDE : null,
-  })
-    .then(() => { packFinished = true; })
-    .catch(onStreamError);
+  }).catch(onStreamError);
 
   return reply.send(gzip);
 }

@@ -97,6 +97,9 @@ describe('GET /idp/account/export — multi-user', () => {
   before(async () => {
     ({ server, baseUrl } = await startServer(DATA_DIR));
     // Create two pods so the cross-account property is real.
+    // Hard-fail on pod creation so a /.pods shape regression surfaces
+    // as "pod creation failed" rather than as cryptic 401s in every
+    // downstream test. Same pattern as the single-user before hooks.
     const aliceRes = await fetch(`${baseUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -104,7 +107,9 @@ describe('GET /idp/account/export — multi-user', () => {
         name: 'alice', email: 'alice@example.com', password: 'pw-alice-123'
       })
     });
+    assert.ok(aliceRes.ok, `alice pod creation failed: ${aliceRes.status}`);
     aliceToken = (await aliceRes.json()).token;
+    assert.ok(aliceToken, 'alice pod creation must return a token');
     const bobRes = await fetch(`${baseUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,7 +117,9 @@ describe('GET /idp/account/export — multi-user', () => {
         name: 'bob', email: 'bob@example.com', password: 'pw-bob-456'
       })
     });
+    assert.ok(bobRes.ok, `bob pod creation failed: ${bobRes.status}`);
     bobToken = (await bobRes.json()).token;
+    assert.ok(bobToken, 'bob pod creation must return a token');
 
     // Plant the alice-only canary file directly on disk under
     // <DATA_ROOT>/alice/. PUT through the LDP layer would also work
