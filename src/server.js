@@ -941,7 +941,7 @@ export function createServer(options = {}) {
    */
   async function createRootPodStructure(webId, podUri, issuer, displayName) {
     const { generateProfile, generatePreferences, generateTypeIndex, serialize } = await import('./webid/profile.js');
-    const { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } = await import('./wac/parser.js');
+    const { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } = await import('./wac/parser.js');
 
     // Create directories at root
     await storage.createContainer('/inbox/');
@@ -966,34 +966,33 @@ export function createServer(options = {}) {
 
     // ACL files. Both `accessTo` (#428) and `acl:agent` (#430) are written
     // relatively so the on-disk pod isn't host-locked to whichever interface
-    // the server happened to bind on first start. New single-user pods only
-    // ever use the modern card.jsonld profile layout (legacy `card` pods
-    // are detected and skipped in the caller), so the relative WebID is
-    // safe to hardcode.
-    const ownerFromRoot = './profile/card.jsonld#me';
-    const ownerFromChild = '../profile/card.jsonld#me';
-    const ownerFromProfile = './card.jsonld#me';
+    // the server happened to bind on first start. The owner WebID is
+    // derived from the absolute `webId` and each .acl's location by
+    // `relativizeOwnerWebId`, so any current or future profile layout
+    // (modern `profile/card.jsonld#me`, legacy `profile/card#me`, etc.)
+    // produces the correct relative IRI without hardcoding.
+    const owner = aclBase => relativizeOwnerWebId(webId, podUri, aclBase);
 
-    const rootAcl = generateOwnerAcl('./', ownerFromRoot, true);
+    const rootAcl = generateOwnerAcl('./', owner(''), true);
     await storage.write('/.acl', serializeAcl(rootAcl));
 
-    const privateAcl = generatePrivateAcl('./', ownerFromChild);
+    const privateAcl = generatePrivateAcl('./', owner('private/'));
     await storage.write('/private/.acl', serializeAcl(privateAcl));
 
-    const settingsAcl = generatePrivateAcl('./', ownerFromChild);
+    const settingsAcl = generatePrivateAcl('./', owner('settings/'));
     await storage.write('/settings/.acl', serializeAcl(settingsAcl));
 
     // publicTypeIndex: public read, overrides the private default inherited from /settings/
-    const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', ownerFromChild, false);
+    const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', owner('settings/'), false);
     await storage.write('/settings/publicTypeIndex.jsonld.acl', serializeAcl(publicTypeIndexAcl));
 
-    const inboxAcl = generateInboxAcl('./', ownerFromChild);
+    const inboxAcl = generateInboxAcl('./', owner('inbox/'));
     await storage.write('/inbox/.acl', serializeAcl(inboxAcl));
 
-    const publicAcl = generatePublicFolderAcl('./', ownerFromChild);
+    const publicAcl = generatePublicFolderAcl('./', owner('public/'));
     await storage.write('/public/.acl', serializeAcl(publicAcl));
 
-    const profileAcl = generatePublicFolderAcl('./', ownerFromProfile);
+    const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
     // Note: Quota not initialized for root-level pods (no user directory)

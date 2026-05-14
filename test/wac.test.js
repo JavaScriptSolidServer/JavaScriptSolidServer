@@ -21,7 +21,8 @@ import {
   generateInboxAcl,
   generatePublicFolderAcl,
   generatePublicReadAcl,
-  serializeAcl
+  serializeAcl,
+  relativizeOwnerWebId
 } from '../src/wac/parser.js';
 import { checkAccess, getRequiredMode } from '../src/wac/checker.js';
 
@@ -337,6 +338,86 @@ describe('WAC Parser', () => {
         `Expected localhost agent, got: ${JSON.stringify(owner1.agents)}`);
       assert.ok(owner2.agents.includes('http://0.0.0.0:4444/profile/card.jsonld#me'),
         `Expected 0.0.0.0 agent, got: ${JSON.stringify(owner2.agents)}`);
+    });
+
+    // The relativizeOwnerWebId helper drives the Phase 2 callers. Cover
+    // the layouts Copilot asked about so callers don't need to hardcode.
+    describe('relativizeOwnerWebId helper', () => {
+      const podUri = 'http://h/alice/';
+
+      it('emits "./<tail>" from the pod root', () => {
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}profile/card.jsonld#me`, podUri, ''),
+          './profile/card.jsonld#me'
+        );
+      });
+
+      it('emits "../<tail>" from an immediate child folder', () => {
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}profile/card.jsonld#me`, podUri, 'private/'),
+          '../profile/card.jsonld#me'
+        );
+      });
+
+      it('handles legacy /profile/card#me layout', () => {
+        // Pre-#282 pods used extensionless `profile/card`. The helper just
+        // slices the tail, so any layout works.
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}profile/card#me`, podUri, ''),
+          './profile/card#me'
+        );
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}profile/card#me`, podUri, 'private/'),
+          '../profile/card#me'
+        );
+      });
+
+      it('handles a custom (non-profile/) WebID shape', () => {
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}me#me`, podUri, ''),
+          './me#me'
+        );
+        assert.strictEqual(
+          relativizeOwnerWebId(`${podUri}me#me`, podUri, 'public/'),
+          '../me#me'
+        );
+      });
+
+      it('returns the absolute WebID unchanged for foreign owners', () => {
+        const foreign = 'https://other.example/profile/card.jsonld#me';
+        assert.strictEqual(
+          relativizeOwnerWebId(foreign, podUri, ''),
+          foreign
+        );
+        assert.strictEqual(
+          relativizeOwnerWebId(foreign, podUri, 'private/'),
+          foreign
+        );
+      });
+
+      it('round-trips through the parser back to the absolute WebID', async () => {
+        // Helper output is correct iff parsing it under the same pod URI
+        // yields the original absolute WebID. Covers both modern and
+        // legacy layouts, from root and from a child folder.
+        const cases = [
+          { web: `${podUri}profile/card.jsonld#me`, base: '',         acl: `${podUri}.acl` },
+          { web: `${podUri}profile/card.jsonld#me`, base: 'private/', acl: `${podUri}private/.acl` },
+          { web: `${podUri}profile/card#me`,        base: '',         acl: `${podUri}.acl` },
+          { web: `${podUri}profile/card#me`,        base: 'private/', acl: `${podUri}private/.acl` },
+          { web: `${podUri}me#me`,                  base: 'public/',  acl: `${podUri}public/.acl` }
+        ];
+        for (const { web, base, acl } of cases) {
+          const rel = relativizeOwnerWebId(web, podUri, base);
+          const generated = generateOwnerAcl('./', rel, true);
+          const wire = serializeAcl(generated);
+          const auths = await parseAcl(wire, acl);
+          const owner = auths.find(a => a.id === '#owner');
+          assert.ok(
+            owner.agents.includes(web),
+            `Round-trip failed for ${web} from ${base}: relative=${rel}, resolved=${JSON.stringify(owner.agents)}`
+          );
+        }
+      });
     });
 
     it('round-trip: relative ownerWebId from a child folder resolves correctly (#430)', async () => {

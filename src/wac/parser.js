@@ -211,6 +211,38 @@ function normalizeMode(mode) {
 }
 
 /**
+ * Express an absolute owner WebID as a path relative to a given .acl
+ * file's container, so the in-ACL `acl:agent` reference is host-portable.
+ * The parser resolves the relative IRI against the .acl URL at check
+ * time. See #430.
+ *
+ * If the WebID isn't hosted under this pod (foreign owner), the absolute
+ * URI is returned unchanged — there's no in-pod path to resolve to. This
+ * also means the helper degrades gracefully for any current or future
+ * profile layout (modern `profile/card.jsonld#me`, legacy `profile/card#me`,
+ * single-file `me#me`, etc.) — whatever path the WebID actually has under
+ * the pod is what gets emitted.
+ *
+ * @param {string} webId - Owner WebID, typically absolute.
+ * @param {string} podUri - Pod root URI (must end with `/`).
+ * @param {string} aclBaseInPod - The .acl file's container, expressed
+ *   relative to the pod root, e.g. `''` for `<pod>/.acl`, `'private/'`
+ *   for `<pod>/private/.acl`, `'settings/'` for the resource ACL
+ *   `<pod>/settings/publicTypeIndex.jsonld.acl`.
+ * @returns {string} Relative IRI for use as `acl:agent`, or the original
+ *   absolute WebID if it isn't hosted under `podUri`.
+ */
+export function relativizeOwnerWebId(webId, podUri, aclBaseInPod = '') {
+  if (typeof webId !== 'string' || !webId) return webId;
+  if (typeof podUri !== 'string' || !podUri) return webId;
+  if (!webId.startsWith(podUri)) return webId;
+  const tail = webId.slice(podUri.length);
+  const depth = aclBaseInPod ? aclBaseInPod.split('/').filter(Boolean).length : 0;
+  const ups = depth === 0 ? './' : '../'.repeat(depth);
+  return ups + tail;
+}
+
+/**
  * Generate a default public read ACL
  * @param {string} resourceUrl - URL of the resource. May be relative (e.g.
  *   './' for the .acl's own container) — the parser resolves it against

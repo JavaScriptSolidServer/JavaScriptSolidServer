@@ -3,7 +3,7 @@ import { initializeQuota, checkQuota, updateQuotaUsage } from '../storage/quota.
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
-import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl } from '../wac/parser.js';
+import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } from '../wac/parser.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
@@ -194,43 +194,41 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   await storage.write(`${podPath}settings/privateTypeIndex.jsonld`, serialize(privateTypeIndex));
 
   // Create default ACL files. Each .acl is written inside the container it
-  // protects, so the resource it refers to is always './' (resolved against
-  // the .acl's own URL by the parser — see #428).
+  // protects, so `acl:accessTo` is always './' (resolved against the .acl's
+  // own URL by the parser — see #428).
   //
-  // The owner WebID is also written relatively (#430). The WebID lives at
-  // <pod>/profile/card.jsonld#me, so each .acl references it relative to
-  // that .acl's container — './profile/card.jsonld#me' from the root,
-  // '../profile/card.jsonld#me' from an immediate child folder, etc.
-  // This keeps the on-disk pod portable across hostnames; the absolute
-  // podUri is no longer baked into either accessTo or agent.
-  const ownerFromRoot = './profile/card.jsonld#me';
-  const ownerFromChild = '../profile/card.jsonld#me';
-  const ownerFromProfile = './card.jsonld#me';
+  // The owner WebID is also written relatively (#430), derived from the
+  // absolute `webId` and the .acl's location within the pod by
+  // `relativizeOwnerWebId`. This works for any profile layout (modern
+  // `profile/card.jsonld#me`, legacy `profile/card#me`, custom shapes) and
+  // falls back to the absolute WebID for foreign owners. Together this
+  // keeps the on-disk pod portable across hostnames.
+  const owner = aclBase => relativizeOwnerWebId(webId, podUri, aclBase);
 
-  const rootAcl = generateOwnerAcl('./', ownerFromRoot, true);
+  const rootAcl = generateOwnerAcl('./', owner(''), true);
   await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
 
-  const privateAcl = generatePrivateAcl('./', ownerFromChild);
+  const privateAcl = generatePrivateAcl('./', owner('private/'));
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
-  const settingsAcl = generatePrivateAcl('./', ownerFromChild);
+  const settingsAcl = generatePrivateAcl('./', owner('settings/'));
   await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
 
   // publicTypeIndex: public read, overrides the private default inherited
   // from /settings/. This is a resource ACL (lives at .../publicTypeIndex.jsonld.acl),
-  // so the resource is './publicTypeIndex.jsonld' relative to the parent.
-  // The .acl's base URL is /settings/, so the agent is one level up.
-  const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', ownerFromChild, false);
+  // whose base URL is /settings/ — same depth as `settings/.acl` for the
+  // owner reference.
+  const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', owner('settings/'), false);
   await storage.write(`${podPath}settings/publicTypeIndex.jsonld.acl`, serializeAcl(publicTypeIndexAcl));
 
-  const inboxAcl = generateInboxAcl('./', ownerFromChild);
+  const inboxAcl = generateInboxAcl('./', owner('inbox/'));
   await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
 
-  const publicAcl = generatePublicFolderAcl('./', ownerFromChild);
+  const publicAcl = generatePublicFolderAcl('./', owner('public/'));
   await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
 
   // Profile documents must be publicly readable for WebID verification
-  const profileAcl = generatePublicFolderAcl('./', ownerFromProfile);
+  const profileAcl = generatePublicFolderAcl('./', owner('profile/'));
   await storage.write(`${podPath}profile/.acl`, serializeAcl(profileAcl));
 
   // Initialize storage quota if configured
