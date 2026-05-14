@@ -18,99 +18,48 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = join(__dirname, 'server-root.html');
 
 /**
- * Collect the list of enabled features for display on the landing page.
- */
-function listFeatures(options = {}) {
-  const f = [];
-  if (options.idp) f.push('idp');
-  if (options.nostr) f.push('nostr');
-  if (options.webrtc) f.push('webrtc');
-  if (options.activitypub) f.push('activitypub');
-  if (options.git) f.push('git');
-  if (options.pay) f.push('payments');
-  if (options.notifications) f.push('notifications');
-  if (options.mashlib) f.push('mashlib');
-  if (options.mongo) f.push('mongo');
-  if (options.tunnel) f.push('tunnel');
-  if (options.terminal) f.push('terminal');
-  return f;
-}
-
-/**
- * Build an HTML snippet of action buttons based on server mode.
- */
-function renderActions({ singleUser, idp }) {
-  const buttons = [];
-  if (!singleUser && idp) {
-    buttons.push('<a href="/idp/register" class="btn btn-primary">Create a pod</a>');
-    buttons.push('<a href="/idp" class="btn btn-secondary">Sign in</a>');
-  } else if (singleUser && idp) {
-    buttons.push('<a href="/idp" class="btn btn-primary">Sign in</a>');
-  }
-  buttons.push('<a href="https://javascriptsolidserver.github.io/docs/" class="btn btn-secondary">Docs</a>');
-  return `<div class="actions">${buttons.join('\n      ')}</div>`;
-}
-
-/**
- * Render the landing page as an HTML string.
+ * Read the landing page template and return it as an HTML string.
  *
- * @param {object} ctx
- * @param {string} ctx.version - JSS version
- * @param {boolean} [ctx.singleUser]
- * @param {boolean} [ctx.idp]
- * @param {string} [ctx.singleUserName]
- * @param {object} [ctx.enabled] - Map of feature flags
+ * The seeded HTML is fully static — no template substitution. Anything
+ * we used to render in (mode, enabled features, version) would have
+ * gone stale on the next mode change or upgrade because the seed is
+ * skip-if-exists. They've been dropped from the template; the CLI
+ * banner lists them at startup, and Sign up / Sign in adapt at load
+ * time via the inline HEAD probe (see decideRevealForRegisterStatus
+ * below for the matrix that the inline script implements).
+ *
+ * The function still takes (and ignores) a `_ctx` arg for forward
+ * compatibility — callers (seedServerRoot, server.js) pass one.
+ *
+ * @param {object} [_ctx] - Reserved; currently unused.
  * @returns {string} HTML
  */
-export function renderServerRoot(ctx = {}) {
-  const { version = 'unknown', singleUser = false, idp = false, singleUserName, enabled = {} } = ctx;
-
-  const tpl = readFileSync(TEMPLATE_PATH, 'utf8');
-  const mode = singleUser ? 'single-user' : 'multi-user';
-  const features = listFeatures(enabled)
-    .map(f => `<span>${f}</span>`)
-    .join(' ');
-
-  const heading = 'JSS';
-  const subtitle = singleUser
-    ? `Personal pod${singleUserName && singleUserName !== '/' ? ` for ${escape(singleUserName)}` : ''}`
-    : 'A personal data server';
-  const description = singleUser
-    ? 'This server hosts a personal data pod. Apps come to the data rather than the other way around.'
-    : 'This server hosts personal data pods on the web. Each pod is a space you own, with your own identity and access control.';
-
-  // Single-pass token substitution. Sequential .replace() calls would
-  // re-scan already-substituted values, so a `singleUserName` of e.g.
-  // `{{actions}}` would land inside `subtitle`, then get expanded by
-  // the later `.replace(/{{actions}}/g, …)` — letting a pod owner
-  // inject other template fragments via their name. With a single
-  // pass over the original template, each {{token}} is matched once
-  // and replaced with its value; `$` inside any value is also harmless
-  // because the function form of replace skips substitution patterns.
-  // See #433 review thread.
-  const values = {
-    title: heading,
-    heading,
-    subtitle,
-    description,
-    actions: renderActions({ singleUser, idp }),
-    version: escape(version),
-    mode,
-    features
-  };
-  return tpl.replace(/{{(\w+)}}/g, (match, key) =>
-    Object.prototype.hasOwnProperty.call(values, key) ? values[key] : match
-  );
+// eslint-disable-next-line no-unused-vars
+export function renderServerRoot(_ctx = {}) {
+  return readFileSync(TEMPLATE_PATH, 'utf8');
 }
 
-function escape(s = '') {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+/**
+ * Decide which conditional buttons (Sign up, Sign in) to reveal based
+ * on the response status of `HEAD /idp/register`. Pure function so the
+ * 200 / 403 / 404 matrix can be unit-tested without DOM. The inline
+ * script in server-root.html implements the same matrix literally;
+ * keep them in sync.
+ *
+ *   200 → registration open: reveal both Sign up and Sign in
+ *   403 → IDP enabled but registration disabled (single-user mode):
+ *         reveal Sign in only
+ *   anything else (404, network error) → reveal neither (no IDP)
+ *
+ * @param {number|undefined} status - HTTP status code, or undefined for
+ *   network error.
+ * @returns {{ register: boolean, login: boolean }}
+ */
+export function decideRevealForRegisterStatus(status) {
+  if (status === 200) return { register: true, login: true };
+  if (status === 403) return { register: false, login: true };
+  return { register: false, login: false };
 }
-
 
 /**
  * Seed DATA_ROOT/index.html, DATA_ROOT/.acl and DATA_ROOT/index.html.acl
