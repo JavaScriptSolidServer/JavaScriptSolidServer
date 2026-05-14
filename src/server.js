@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { readFile } from 'fs/promises';
+import { readFileSync } from 'fs';
 import { STATUS_CODES } from 'node:http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -321,7 +322,28 @@ export function createServer(options = {}) {
 
   // Register Identity Provider plugin if enabled
   if (idpEnabled) {
-    fastify.register(idpPlugin, { issuer: idpIssuer, inviteOnly, singleUser });
+    // singleUserName + jssVersion are threaded through for the
+    // pod-data export endpoint (#353), which uses singleUserName to
+    // resolve the pod's on-disk path and writes the version into
+    // the export manifest for forensic / "what server made this"
+    // purposes. Reading the package.json lazily here keeps the
+    // export endpoint independent of any seedServerRoot work.
+    let jssVersion = 'unknown';
+    try {
+      // Sync read because createServer isn't async and we need the
+      // version to thread into idpPlugin registration below. The file
+      // is tiny + on local disk. There is a second async read of
+      // package.json in the onReady hook for seedServerRoot — both
+      // are read-once at startup so drift is bounded to "package.json
+      // changed between two ~ms-apart reads", which doesn't happen
+      // in practice. Hoisting both into a memoized module-level
+      // helper is a worthwhile follow-up but out of scope for #353.
+      const pkgRaw = readFileSync(join(__dirname, '..', 'package.json'), 'utf8');
+      jssVersion = JSON.parse(pkgRaw).version;
+    } catch { /* keep 'unknown' */ }
+    fastify.register(idpPlugin, {
+      issuer: idpIssuer, inviteOnly, singleUser, singleUserName, jssVersion,
+    });
   }
 
   // Register Nostr relay if enabled

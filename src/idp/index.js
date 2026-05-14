@@ -27,6 +27,7 @@ import {
   handleAccountDeleteForm,
   setNoCacheClickjackHeaders,
 } from './credentials.js';
+import { handleExportAccount } from './export.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
 import { landingPage, accountDeletePage } from './views.js';
@@ -36,9 +37,21 @@ import { landingPage, accountDeletePage } from './views.js';
  * @param {FastifyInstance} fastify
  * @param {object} options
  * @param {string} options.issuer - The issuer URL
+ * @param {boolean} [options.inviteOnly=false] - If true, /idp/register
+ *   requires a valid invite code; public registration is disabled.
+ * @param {boolean} [options.singleUser=false] - Single-user mode.
+ *   Disables /idp/register and /idp/account DELETE; gates the
+ *   single-user branch in /idp/account/export.
+ * @param {string|null} [options.singleUserName=null] - Single-user
+ *   pod name. null → root pod (podDir = dataRoot); string → pod
+ *   lives at <dataRoot>/<name>/. Threaded into /idp/account/export
+ *   so the handler can resolve podDir + apply ROOT_POD_EXCLUDE.
+ * @param {string} [options.jssVersion] - Server version, written
+ *   into the export manifest for forensic / "what server made this"
+ *   purposes. Defaults to 'unknown' inside the export handler.
  */
 export async function idpPlugin(fastify, options) {
-  const { issuer, inviteOnly = false, singleUser = false } = options;
+  const { issuer, inviteOnly = false, singleUser = false, singleUserName = null, jssVersion } = options;
 
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
@@ -295,6 +308,34 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleDeleteAccount(request, reply, { singleUser });
+  });
+
+  // GET account export — authenticated owner downloads their pod tree as
+  // a streamed tar.gz (#353). MVP slice of the Credible Exit ladder
+  // (#448). Lighter rate-limit than the destructive endpoints — this is
+  // a read, but a heavy one (entire pod), so cap at 3/min to deter
+  // abuse without blocking a legitimate operator pulling a backup.
+  //
+  // Keyed by IP, consistent with the other /idp/ endpoints. We can't
+  // honestly key by WebID here: the global auth hook in src/server.js
+  // skips /idp/* (so request.webId is unset at this phase) and the
+  // rate-limit keyGenerator is sync, so we can't await token
+  // verification inline. Per-user keying is a follow-up that needs
+  // a preParsing hook resolving auth before the limiter runs.
+  fastify.get('/idp/account/export', {
+    config: {
+      rateLimit: {
+        max: 3,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleExportAccount(request, reply, {
+      singleUser,
+      singleUserName,
+      jssVersion,
+    });
   });
 
   // GET account-delete form (#392) - human-friendly UI for #352. Public
