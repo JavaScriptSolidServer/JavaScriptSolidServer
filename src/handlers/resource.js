@@ -134,10 +134,21 @@ export async function handleGet(request, reply) {
     return reply.code(404).send({ error: 'Not Found' });
   }
 
+  // Compute the effective ETag for this response. When mashlib will wrap
+  // an RDF resource in HTML, the response body differs from the raw
+  // resource, so the ETag must differ too — otherwise browsers confuse
+  // cached JSON-LD with the HTML variant despite Vary: Accept (#315).
+  const storedContentType304 = stats.isDirectory ? null : getContentType(storagePath);
+  const willServeMashlib = !stats.isDirectory &&
+    shouldServeMashlib(request, request.mashlibEnabled, storedContentType304);
+  const effectiveEtag = willServeMashlib
+    ? stats.etag.replace(/"$/, '-html"')
+    : stats.etag;
+
   // Check If-None-Match for conditional GET (304 Not Modified)
   const ifNoneMatch = request.headers['if-none-match'];
   if (ifNoneMatch) {
-    const check = checkIfNoneMatchForGet(ifNoneMatch, stats.etag);
+    const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
     if (!check.ok && check.notModified) {
       return reply.code(304).send();
     }
@@ -410,7 +421,7 @@ export async function handleGet(request, reply) {
       );
     const headers = getAllHeaders({
       isContainer: false,
-      etag: stats.etag,
+      etag: effectiveEtag,
       contentType: 'text/html',
       origin,
       resourceUrl,
@@ -632,9 +643,18 @@ export async function handleHead(request, reply) {
     contentType = getContentType(storagePath);
   }
 
+  // Match GET's ETag logic: mashlib HTML responses get a suffixed ETag
+  // so HEAD and GET return consistent validators (#456).
+  const headStoredType = stats.isDirectory ? null : getContentType(storagePath);
+  const headWillServeMashlib = !stats.isDirectory &&
+    shouldServeMashlib(request, request.mashlibEnabled, headStoredType);
+  const headEtag = headWillServeMashlib
+    ? stats.etag.replace(/"$/, '-html"')
+    : stats.etag;
+
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
-    etag: stats.etag,
+    etag: headEtag,
     contentType,
     origin,
     resourceUrl,
