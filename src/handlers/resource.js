@@ -610,18 +610,11 @@ export async function handleHead(request, reply) {
     return reply.code(404).send();
   }
 
-  const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
-  const ifNoneMatch = request.headers['if-none-match'];
-  if (ifNoneMatch) {
-    const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
-    if (!check.ok && check.notModified) {
-      return reply.code(304).send();
-    }
-  }
-
   const origin = request.headers.origin;
   const connegEnabled = request.connegEnabled || false;
   let contentType;
+  let headEtag = stats.etag;
+  let isMashlibResponse = false;
 
   if (stats.isDirectory) {
     const indexPath = storagePath.endsWith('/') ? `${storagePath}index.html` : `${storagePath}/index.html`;
@@ -642,9 +635,6 @@ export async function handleHead(request, reply) {
       if (wantsTurtle) {
         contentType = 'text/turtle';
       } else if (wantsJsonLd) {
-        // For an index.html container, only override to JSON-LD if the
-        // Accept header explicitly asked for JSON; otherwise fall back
-        // to text/html so HEAD matches the index.html that GET serves.
         const explicitJson = EXPLICIT_JSON_RE.test(acceptHeader);
         contentType = (indexExists && !explicitJson) ? 'text/html' : 'application/ld+json';
       } else {
@@ -655,13 +645,36 @@ export async function handleHead(request, reply) {
     } else {
       contentType = 'application/ld+json';
     }
+
+    if (indexExists) {
+      // Mirror GET: containers with index.html use the index file's ETag
+      const indexStats = await storage.stat(indexPath);
+      headEtag = indexStats?.etag || stats.etag;
+    } else if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
+      // Container listing via mashlib — suffix the ETag (#456)
+      headEtag = stats.etag.replace(/"$/, '-html"');
+      contentType = 'text/html';
+      isMashlibResponse = true;
+    }
   } else {
+    const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
+    headEtag = effectiveEtag;
+    isMashlibResponse = willServeMashlib;
     contentType = willServeMashlib ? 'text/html' : getContentType(storagePath);
+  }
+
+  // Check If-None-Match using the final ETag (#456)
+  const ifNoneMatch = request.headers['if-none-match'];
+  if (ifNoneMatch) {
+    const check = checkIfNoneMatchForGet(ifNoneMatch, headEtag);
+    if (!check.ok && check.notModified) {
+      return reply.code(304).send();
+    }
   }
 
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
-    etag: effectiveEtag,
+    etag: headEtag,
     contentType,
     origin,
     resourceUrl,
@@ -669,10 +682,9 @@ export async function handleHead(request, reply) {
     mashlibEnabled: request.mashlibEnabled
   });
 
-  // Content-Length: only set for non-mashlib resources where the file
-  // size matches the response body. Mashlib HTML is dynamically
-  // generated so we can't know its size without rendering it.
-  if (!stats.isDirectory && !willServeMashlib) {
+  // Content-Length: only set when the file size matches the response body.
+  // Mashlib HTML and containers are dynamically generated.
+  if (!stats.isDirectory && !isMashlibResponse) {
     headers['Content-Length'] = stats.size;
   }
 
