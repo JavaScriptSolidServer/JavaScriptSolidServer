@@ -400,6 +400,29 @@ export async function createProvider(issuer) {
 
     // Render errors
     renderError: async (ctx, out, error) => {
+      // Stale session recovery (#452): when oidc-provider crashes because
+      // a deleted account's session/grant is still in the browser cookies,
+      // expire those cookies and redirect back to the same URL. The retry
+      // starts with a clean session and succeeds. The `_stale_retry` param
+      // prevents infinite redirect loops — only try once.
+      const isStaleSessionCrash = out.error === 'server_error' &&
+        error?.message?.includes('getOIDCScopeEncountered');
+      const reqUrl = ctx.req?.originalUrl || ctx.request?.url || ctx.url || '';
+      const alreadyRetried = reqUrl.includes('_stale_retry=1');
+
+      if (isStaleSessionCrash && !alreadyRetried) {
+        const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
+        ctx.set('Set-Cookie', [
+          `_session=; ${expired}`,
+          `_session.sig=; ${expired}`,
+          `_session.legacy=; ${expired}`,
+          `_session.legacy.sig=; ${expired}`,
+        ]);
+        const separator = reqUrl.includes('?') ? '&' : '?';
+        ctx.redirect(`${reqUrl}${separator}_stale_retry=1`);
+        return;
+      }
+
       ctx.type = 'html';
       ctx.body = `
         <!DOCTYPE html>
