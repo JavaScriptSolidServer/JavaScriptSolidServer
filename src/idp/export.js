@@ -44,15 +44,43 @@ import { findByWebId } from './accounts.js';
 /**
  * Entries at the data root that are server-internal, not pod data.
  * In single-user *root* pod mode, podDir IS dataRoot — packing it
- * naively would ship the IdP accounts (incl. passwordHash for every
- * user), the IdP signing keys (mint tokens for any user), and OIDC
- * adapter state (sessions, refresh tokens) to the caller. Skip them.
+ * naively would ship server-managed material to the caller. Skip:
+ *
+ *   .idp/      — IDP accounts (passwordHash for every user!) +
+ *                 signing keys (mint tokens for any user) +
+ *                 OIDC adapter state (sessions, refresh tokens)
+ *   .private/  — pay/Bitcoin keypair + UTXO state (drainable)
+ *
+ * The pod's *own* /private/ folder (no leading dot) lives at
+ * <dataRoot>/private/ in root-pod mode and IS pod data — operator
+ * key, etc. — and is INCLUDED.
+ *
+ * Public namespaces under .well-known/ (webledgers, openid-config,
+ * etc.) are reachable by any HTTP client by spec, so they're
+ * "pod data" in the sense that they're part of the pod's public
+ * surface — included.
  *
  * Named-pod single-user (podDir = <dataRoot>/<name>/) and multi-user
  * (podDir = <dataRoot>/<podName>/) don't hit this code path — the
  * pod tree is already isolated by the path layout.
  */
-const ROOT_POD_EXCLUDE = new Set(['.idp']);
+const ROOT_POD_EXCLUDE = new Set(['.idp', '.private']);
+
+/**
+ * Allowlist of account record fields that are safe to include in
+ * `account.json`. Defensive: a denylist that strips only
+ * `passwordHash` would silently leak any future secret-bearing
+ * field added to the account schema (passkey credential records,
+ * OIDC client secrets, recovery tokens, etc.).
+ *
+ * Adding a new field here requires a security review. Passkey
+ * credentials are intentionally NOT included — they're device-
+ * bound and not portable to a fresh server.
+ */
+const ACCOUNT_EXPORT_FIELDS = [
+  'id', 'webId', 'username', 'email', 'podName', 'createdAt', 'updatedAt',
+  'passwordChangedAt', 'lastLoginAt',
+];
 
 /**
  * @param {object} request - Fastify request
@@ -167,12 +195,26 @@ export async function handleExportAccount(request, reply, options = {}) {
   // pipeline so the client at least sees an aborted transfer rather
   // than a corrupt but seemingly-complete archive.
   const onStreamError = (err) => {
-    request.log?.error({ err }, 'pod export stream error');
+    request.log.error({ err }, 'pod export stream error');
     pack.destroy(err);
     gzip.destroy(err);
   };
   pack.on('error', onStreamError);
   gzip.on('error', onStreamError);
+
+  // Client disconnect handler. Without this, walkAndPack keeps
+  // reading every file in the pod, opening file descriptors, and
+  // pushing into a gzip whose downstream socket is gone. For a
+  // multi-GB pod that's wasted IO + fds until the walk finishes.
+  // Destroying both ends short-circuits the walk via stream error
+  // propagation; the request.log captures the abort for diagnostics.
+  reply.raw.on('close', () => {
+    if (!reply.raw.writableEnded) {
+      request.log.warn('pod export client disconnected mid-stream');
+      pack.destroy(new Error('client disconnected'));
+      gzip.destroy(new Error('client disconnected'));
+    }
+  });
 
   // Pump in the background; entries are added asynchronously below.
   // The root-pod denylist is wired in so single-user-root-pod mode
@@ -196,10 +238,13 @@ async function packExport({ pack, podDir, manifest, accountRecord, excludeAtRoot
   await addEntry(pack, 'jss-export/manifest.json',
     Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'));
 
-  // Account record minus passwordHash. Single-user mode without an
-  // IDP account skips this (no record to include).
+  // Account record — allowlisted fields only. Single-user without
+  // an IDP account skips this (no record to include).
   if (accountRecord) {
-    const { passwordHash: _omit, ...safeAccount } = accountRecord;
+    const safeAccount = {};
+    for (const key of ACCOUNT_EXPORT_FIELDS) {
+      if (accountRecord[key] !== undefined) safeAccount[key] = accountRecord[key];
+    }
     await addEntry(pack, 'jss-export/account.json',
       Buffer.from(JSON.stringify(safeAccount, null, 2), 'utf8'));
   }

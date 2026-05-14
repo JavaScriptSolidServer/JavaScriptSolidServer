@@ -74,11 +74,19 @@ async function unpackTarGz(buf) {
 
 describe('GET /idp/account/export — multi-user', () => {
   const DATA_DIR = './test-data-export-mu';
+  // Alice plants a uniquely-named marker resource in her pod. Bob's
+  // export must not contain anything matching this name OR contents.
+  // Anchors the cross-account test against the actual files-on-disk
+  // shape rather than the archive's prefix layout (which never embeds
+  // a username segment, so a plain `/alice/` regex would tautologically
+  // pass even if Bob's archive somehow contained Alice's bytes).
+  const ALICE_CANARY_NAME = 'alice-canary-do-not-leak.txt';
+  const ALICE_CANARY_BODY = 'ALICE_SECRET_CANARY_a7f3e9d1c4b2';
   let server, baseUrl, aliceToken, bobToken;
 
   before(async () => {
     ({ server, baseUrl } = await startServer(DATA_DIR));
-    // Create two pods so the cross-account 403 case is real.
+    // Create two pods so the cross-account property is real.
     const aliceRes = await fetch(`${baseUrl}/.pods`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -95,6 +103,14 @@ describe('GET /idp/account/export — multi-user', () => {
       })
     });
     bobToken = (await bobRes.json()).token;
+
+    // Plant the alice-only canary file directly on disk under
+    // <DATA_ROOT>/alice/. PUT through the LDP layer would also work
+    // but adds an auth round-trip we don't need for this assertion.
+    await fs.outputFile(
+      path.join(DATA_DIR, 'alice', ALICE_CANARY_NAME),
+      ALICE_CANARY_BODY,
+    );
   });
 
   after(async () => {
@@ -154,13 +170,39 @@ describe('GET /idp/account/export — multi-user', () => {
     assert.strictEqual(res.status, 200);
     const buf = Buffer.from(await res.arrayBuffer());
     const files = await unpackTarGz(buf);
+
+    // Manifest identifies bob.
     const manifest = JSON.parse(files['jss-export/manifest.json'].toString('utf8'));
     assert.strictEqual(manifest.username, 'bob');
     assert.strictEqual(manifest.podName, 'bob');
-    // No alice/* in bob's export.
-    const podKeys = Object.keys(files).filter(k => k.startsWith('jss-export/pod/'));
-    for (const k of podKeys) {
-      assert.doesNotMatch(k, /\/alice\//, `bob's export must not contain alice's data: ${k}`);
+
+    // Account record (the actual server-side record, not the manifest)
+    // identifies bob — guards against a bug where the wrong account
+    // is looked up but the manifest is built from the request webId.
+    assert.ok(files['jss-export/account.json'],
+      'account.json must be present in bob\'s export');
+    const account = JSON.parse(files['jss-export/account.json'].toString('utf8'));
+    assert.strictEqual(account.username, 'bob',
+      'account.json.username must be bob, not alice');
+    assert.strictEqual(account.email, 'bob@example.com');
+
+    // The alice-only canary file must NOT appear in bob's archive,
+    // by entry name or by entry contents. This is the substantive
+    // cross-account assertion — the previous `/alice/` regex check
+    // was tautological because pod-tree entries are namespaced by
+    // archive prefix (`jss-export/pod/...`), not by username segment.
+    const allKeys = Object.keys(files);
+    for (const k of allKeys) {
+      assert.ok(
+        !k.endsWith(ALICE_CANARY_NAME),
+        `bob's export must not contain alice's canary file: ${k}`,
+      );
+      // Body check: even if the entry name was reshaped, the canary
+      // body bytes must never appear in any of bob's archive entries.
+      assert.ok(
+        !files[k].includes(ALICE_CANARY_BODY),
+        `bob's export entry ${k} contains alice's canary body bytes`,
+      );
     }
   });
 });
@@ -168,10 +210,14 @@ describe('GET /idp/account/export — multi-user', () => {
 describe('GET /idp/account/export — single-user ROOT pod (denylist check)', () => {
   // Critical: in single-user root-pod mode (the default since #348),
   // podDir IS dataRoot. Without an explicit denylist, the export would
-  // ship `.idp/accounts/*.json` (every account record incl.
-  // passwordHash) AND `.idp/keys/` (the IdP signing keys that mint
-  // tokens for any user) to the caller. The handler must refuse to
-  // include `.idp/` at the top level.
+  // ship server-internal directories that live next to pod data:
+  //
+  //   .idp/      — every account record (incl. passwordHash) and the
+  //                IdP signing keys that mint tokens for any user
+  //   .private/  — pay handler's Bitcoin keypair + UTXO state
+  //                (recipient could drain pay balance / spend UTXOs)
+  //
+  // The handler must refuse to include either at the top level.
   const DATA_DIR = './test-data-export-root-pod';
   let server, baseUrl, ownerToken;
 
@@ -198,16 +244,30 @@ describe('GET /idp/account/export — single-user ROOT pod (denylist check)', ()
     await stopServer(server, DATA_DIR);
   });
 
-  it('does NOT pack /.idp/ (accounts, signing keys, OIDC adapter state)', async (t) => {
-    if (!ownerToken) {
-      t.skip('IDP credentials handshake unavailable');
-      return;
-    }
-    // Sanity: confirm the IdP actually wrote .idp/ to disk so the
-    // denylist test is exercising a non-empty thing.
+  it('does NOT pack server-internal dirs (.idp/, .private/) at root', async () => {
+    // Hard-fail rather than t.skip — a credentials regression must
+    // not silently disable this denylist test, which is the only
+    // assertion guarding against the catastrophic root-pod leak.
+    assert.ok(ownerToken,
+      'pre-condition: IDP credentials handshake must return a token; ' +
+      'a regression here would silently skip the denylist assertion');
+
+    // Sanity: confirm the server actually wrote these dirs to disk so
+    // the denylist assertion below is exercising real entries. We
+    // synthesize .private/ ourselves (pay handler only writes it on
+    // first /pay use) so the test doesn't depend on side-channel
+    // activity to be meaningful.
+    await fs.outputFile(
+      path.join(DATA_DIR, '.private', 'keypair.json'),
+      JSON.stringify({ canary: 'must-not-leak' }),
+    );
     assert.ok(
       await fs.pathExists(path.join(DATA_DIR, '.idp')),
       'pre-condition: .idp/ must exist on disk for the test to be meaningful'
+    );
+    assert.ok(
+      await fs.pathExists(path.join(DATA_DIR, '.private')),
+      'pre-condition: .private/ must exist on disk for the test to be meaningful'
     );
     const res = await fetch(`${baseUrl}/idp/account/export`, {
       headers: { Authorization: `Bearer ${ownerToken}` }
@@ -216,13 +276,14 @@ describe('GET /idp/account/export — single-user ROOT pod (denylist check)', ()
     const buf = Buffer.from(await res.arrayBuffer());
     const files = await unpackTarGz(buf);
 
-    // Critical: NOTHING under jss-export/pod/.idp/ in the archive.
-    const idpEntries = Object.keys(files).filter(k =>
-      k.startsWith('jss-export/pod/.idp/') || k === 'jss-export/pod/.idp'
+    // Critical: NOTHING under jss-export/pod/.idp/ or jss-export/pod/.private/.
+    const leakedEntries = Object.keys(files).filter(k =>
+      k.startsWith('jss-export/pod/.idp/') || k === 'jss-export/pod/.idp' ||
+      k.startsWith('jss-export/pod/.private/') || k === 'jss-export/pod/.private'
     );
-    assert.strictEqual(idpEntries.length, 0,
-      `.idp/ must not be packed in single-user root-pod export. ` +
-      `Found: ${idpEntries.join(', ')}`);
+    assert.strictEqual(leakedEntries.length, 0,
+      `Server-internal dirs must not be packed in root-pod export. ` +
+      `Found: ${leakedEntries.join(', ')}`);
 
     // Sanity: actual pod content IS in the archive.
     const podKeys = Object.keys(files).filter(k => k.startsWith('jss-export/pod/'));
@@ -260,11 +321,12 @@ describe('GET /idp/account/export — single-user with --provision-keys', () => 
     await stopServer(server, DATA_DIR);
   });
 
-  it('exports the pod tree including the on-disk owner secret', async (t) => {
-    if (!ownerToken) {
-      t.skip('IDP credentials endpoint did not return a token in this layout');
-      return;
-    }
+  it('exports the pod tree including the on-disk owner secret', async () => {
+    // Hard-fail rather than t.skip — a credentials regression must
+    // not silently turn this Credible Exit assertion into a no-op.
+    assert.ok(ownerToken,
+      'pre-condition: IDP credentials must return a token; a silent ' +
+      'skip here would mask a regression in single-user authentication');
     const res = await fetch(`${baseUrl}/idp/account/export`, {
       headers: { Authorization: `Bearer ${ownerToken}` }
     });

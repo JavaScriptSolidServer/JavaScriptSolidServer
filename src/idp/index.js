@@ -304,16 +304,18 @@ export async function idpPlugin(fastify, options) {
   // a read, but a heavy one (entire pod), so cap at 3/min to deter
   // abuse without blocking a legitimate operator pulling a backup.
   //
-  // Key by request.webId when present (so one user's heavy pull doesn't
-  // lock out everyone behind a shared NAT / proxy egress) and fall back
-  // to IP for unauthenticated requests (which 401 anyway, but the rate
-  // limiter runs before the handler).
+  // Keyed by IP, consistent with the other /idp/ endpoints. We can't
+  // honestly key by WebID here: the global auth hook in src/server.js
+  // skips /idp/* (so request.webId is unset at this phase) and the
+  // rate-limit keyGenerator is sync, so we can't await token
+  // verification inline. Per-user keying is a follow-up that needs
+  // a preParsing hook resolving auth before the limiter runs.
   fastify.get('/idp/account/export', {
     config: {
       rateLimit: {
         max: 3,
         timeWindow: '1 minute',
-        keyGenerator: (request) => request.webId || request.ip
+        keyGenerator: (request) => request.ip
       }
     }
   }, async (request, reply) => {
