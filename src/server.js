@@ -330,9 +330,14 @@ export function createServer(options = {}) {
     // export endpoint independent of any seedServerRoot work.
     let jssVersion = 'unknown';
     try {
-      // Synchronous read — createServer isn't async, and the file is
-      // tiny + on local disk. Same approach the existing config code
-      // uses for package.json metadata.
+      // Sync read because createServer isn't async and we need the
+      // version to thread into idpPlugin registration below. The file
+      // is tiny + on local disk. There is a second async read of
+      // package.json in the onReady hook for seedServerRoot — both
+      // are read-once at startup so drift is bounded to "package.json
+      // changed between two ~ms-apart reads", which doesn't happen
+      // in practice. Hoisting both into a memoized module-level
+      // helper is a worthwhile follow-up but out of scope for #353.
       const pkgRaw = readFileSync(join(__dirname, '..', 'package.json'), 'utf8');
       jssVersion = JSON.parse(pkgRaw).version;
     } catch { /* keep 'unknown' */ }

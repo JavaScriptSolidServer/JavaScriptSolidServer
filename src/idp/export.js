@@ -90,6 +90,15 @@ const ROOT_POD_EXCLUDE = new Set(['.idp', '.private']);
  * Adding a new field here requires a security review. Passkey
  * credentials are intentionally NOT included — they're device-
  * bound and not portable to a fresh server.
+ *
+ * !!! TOP-LEVEL ONLY. The allowlist gates only at the first level
+ * of the account record. If a future field is itself an
+ * object/array (e.g. `oidcClientConfig: { secret: ... }`,
+ * `metadata: { recoveryAnswers: [...] }`, etc.), allowlisting the
+ * top-level key alone exports the entire nested structure
+ * including any secrets. Nested structures need their own scrubbing
+ * before being added here, OR they should be projected into a flat
+ * shape that excludes the secret-bearing fields.
  */
 const ACCOUNT_EXPORT_FIELDS = [
   'id', 'webId', 'username', 'email', 'podName', 'createdAt', 'updatedAt',
@@ -97,6 +106,14 @@ const ACCOUNT_EXPORT_FIELDS = [
 ];
 
 /**
+ * Error vocabulary note: 401 uses the OAuth-Bearer-defined
+ * `invalid_token` (RFC 6750), while 403/404 use plain HTTP-semantic
+ * tokens (`forbidden`, `not_found`). This mixed convention is
+ * deliberate and consistent with the rest of `src/idp/` (see
+ * credentials.js: 401→`invalid_token`/`invalid_grant`, 403→
+ * `forbidden`, 400→`invalid_request`). Aligning to a single
+ * vocabulary across the whole IdP surface is its own refactor.
+ *
  * @param {object} request - Fastify request
  * @param {object} reply - Fastify reply
  * @param {object} options
@@ -191,6 +208,29 @@ export async function handleExportAccount(request, reply, options = {}) {
     };
   }
 
+  // Defense-in-depth: in multi-user mode `excludeAtRoot` is null
+  // because the pod is at <dataRoot>/<podName>/ (already isolated
+  // from server-internal dotfiles by the path layout). But if
+  // account-creation validation ever regressed and allowed a
+  // username matching `.idp` / `.private`, podDir would resolve to
+  // the server-internal directory and the export would happily
+  // walk it. Refuse here — account creation rejecting these names
+  // is the primary defense; this is the second line.
+  if (
+    !(options.singleUser && isRootPod) &&
+    ROOT_POD_EXCLUDE.has(path.basename(podDir))
+  ) {
+    request.log.error(
+      { podDir, basename: path.basename(podDir) },
+      'export refused — podDir resolved to a server-internal name; ' +
+      'account-creation validation regression?',
+    );
+    return reply.code(500).send({
+      error: 'server_error',
+      error_description: 'Pod resolution conflicts with server-internal layout',
+    });
+  }
+
   // Defensive: the pod dir should exist for any legitimate caller.
   // 404 lets the client distinguish "auth was fine, but there's
   // nothing on disk" from a true server error.
@@ -252,12 +292,21 @@ export async function handleExportAccount(request, reply, options = {}) {
   // multi-GB pod that's wasted IO + fds until the walk finishes.
   // Destroying both ends short-circuits the walk via stream error
   // propagation; the request.log captures the abort for diagnostics.
+  //
+  // The `packFinished` flag closes a race window: socket 'close'
+  // can briefly observe `writableEnded === false` on a perfectly
+  // normal completion (between socket close and writableEnded
+  // flipping), which would log a spurious "client disconnected"
+  // warn line for successful exports on slow/congested writes.
+  // We set the flag synchronously after pack.finalize() resolves
+  // so the close handler can distinguish "real disconnect mid-walk"
+  // from "natural end of stream".
+  let packFinished = false;
   reply.raw.on('close', () => {
-    if (!reply.raw.writableEnded) {
-      request.log.warn('pod export client disconnected mid-stream');
-      pack.destroy(new Error('client disconnected'));
-      gzip.destroy(new Error('client disconnected'));
-    }
+    if (packFinished || reply.raw.writableEnded) return;
+    request.log.warn('pod export client disconnected mid-stream');
+    pack.destroy(new Error('client disconnected'));
+    gzip.destroy(new Error('client disconnected'));
   });
 
   // Pump in the background; entries are added asynchronously below.
@@ -269,7 +318,7 @@ export async function handleExportAccount(request, reply, options = {}) {
     manifest,
     accountRecord,
     excludeAtRoot: (options.singleUser && isRootPod) ? ROOT_POD_EXCLUDE : null,
-  }).catch(onStreamError);
+  }).then(() => { packFinished = true; }).catch(onStreamError);
 
   void streamingPromise;
 
