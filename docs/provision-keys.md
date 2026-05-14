@@ -1,6 +1,6 @@
 # Owner-key provisioning (`--provision-keys`)
 
-Phase 1 of [#427 / #437](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/437). Generates a Schnorr secp256k1 keypair on pod creation and writes it as a W3C [Controlled Identifiers v1.0 Multikey](https://www.w3.org/TR/cid-1.0/) document at `<pod>/private/privkey.jsonld`.
+Phase 1 of [#437](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/437). Generates a Schnorr secp256k1 keypair on pod creation and writes it as a W3C [Controlled Identifiers v1.0 Multikey](https://www.w3.org/TR/cid-1.0/) document at `<pod>/private/privkey.jsonld`.
 
 The same key is intended to serve, over time, as: a Solid signing identity, a Nostr identity (same curve), and a `did:nostr:` DID controller (Phase 2). One CLI flag → pod-resident self-sovereign identity ready for both Solid and Nostr / agentic use cases.
 
@@ -113,14 +113,23 @@ Each upgrade is a wrapper around the same secret material. You're not picking a 
 This is not optional.
 
 ```bash
-# Authenticate as owner via HTTP (preferred — works even on a remote host)
+# Authenticate as owner via HTTP (preferred — works even on a remote host).
+# For a single-user / root pod the key is at <pod>/private/privkey.jsonld;
+# for a named pod (multi-user) it's at <pod>/<name>/private/privkey.jsonld.
 curl -H "Authorization: Bearer <owner-token>" \
      http://your.example/private/privkey.jsonld \
      -o pod-key-backup.jsonld
+# named-pod variant:
+curl -H "Authorization: Bearer <owner-token>" \
+     http://your.example/alice/private/privkey.jsonld \
+     -o pod-key-backup.jsonld
 chmod 600 pod-key-backup.jsonld
 
-# Or copy from disk if you have local access (preserves perms)
-cp -p /path/to/data/private/privkey.jsonld pod-key-backup.jsonld
+# Or copy from disk if you have local access (preserves perms).
+# Root pod (single-user, default since #348):
+cp -p <DATA_ROOT>/private/privkey.jsonld pod-key-backup.jsonld
+# Named pod (multi-user, or single-user with --single-user-name=alice):
+cp -p <DATA_ROOT>/alice/private/privkey.jsonld pod-key-backup.jsonld
 ```
 
 Store the backup somewhere that survives the pod's host: another machine, encrypted cloud storage, a hardware token, a sealed envelope in a safe — whatever you'd use for an SSH key you actually care about. Losing this file means losing this identity permanently. There is no recovery flow in Phase 1.

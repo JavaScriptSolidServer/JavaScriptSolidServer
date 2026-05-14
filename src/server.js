@@ -861,11 +861,12 @@ export function createServer(options = {}) {
         // Surface the public side of any provisioned owner key, plus
         // a prominent backup reminder. The secret is NOT logged — it
         // lives on disk only, under /private/privkey.jsonld with
-        // owner-only WAC and file mode 0600.
+        // owner-only WAC and file mode 0o600.
         if (creation?.ownerKey) {
-          const keyPath = isRootPod
-            ? `${podUri}private/privkey.jsonld`
-            : `${podUri}private/privkey.jsonld`;
+          // `podUri` already includes the trailing slash + any pod
+          // name segment, so the same expression covers root and
+          // named single-user pods.
+          const keyPath = `${podUri}private/privkey.jsonld`;
           fastify.log.info(`Provisioned Schnorr secp256k1 owner key`);
           fastify.log.info(`  Public key file: ${keyPath}`);
           fastify.log.info(`  publicKeyMultibase: ${creation.ownerKey.publicMultibase}`);
@@ -1008,9 +1009,13 @@ export function createServer(options = {}) {
 
   /**
    * Create root-level pod structure (for single-user mode with pod at /).
-   * Returns `{ ownerKey }` when --provision-keys is set so the caller can
-   * surface the public side in the startup banner. The secret is never
-   * returned (it's only on disk under /private/, mode 0600).
+   * When --provision-keys is set, returns `{ ownerKey }` so the caller
+   * can surface the public side in the startup banner. The returned
+   * `ownerKey` includes secretHex and secretKeyMultibase — needed by
+   * tests, present in case a future caller needs to perform a one-shot
+   * sign before the file is read back via WAC. **Callers must not log
+   * the secret.** The secret's only durable home is the on-disk file
+   * under /private/ (mode 0o600, owner-only WAC).
    */
   async function createRootPodStructure(webId, podUri, issuer, displayName) {
     const { generateProfile, generatePreferences, generateTypeIndex, serialize } = await import('./webid/profile.js');
