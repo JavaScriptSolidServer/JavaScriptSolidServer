@@ -364,6 +364,10 @@ export async function handleDeleteAccount(request, reply, options = {}) {
   // and rationale (#391 pass 2 / pass 3).
   const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
 
+  // Expire OIDC session cookies so the browser doesn't send stale
+  // references on the next login attempt (#452).
+  expireSessionCookies(reply);
+
   reply.header('Cache-Control', 'no-store');
   reply.header('Pragma', 'no-cache');
   return {
@@ -391,6 +395,22 @@ export function setNoCacheClickjackHeaders(reply) {
   reply.header('Pragma', 'no-cache');
   reply.header('X-Frame-Options', 'DENY');
   reply.header('Content-Security-Policy', "frame-ancestors 'none'");
+}
+
+/**
+ * Expire oidc-provider session cookies so the browser doesn't send
+ * stale references after account deletion (#452). Without this, the
+ * next OIDC auth request sends cookies that reference a destroyed
+ * session/grant, crashing in consent.js getOIDCScopeEncountered().
+ */
+function expireSessionCookies(reply) {
+  const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
+  reply.header('Set-Cookie', [
+    `_session=; ${expired}`,
+    `_session.sig=; ${expired}`,
+    `_session.legacy=; ${expired}`,
+    `_session.legacy.sig=; ${expired}`,
+  ]);
 }
 
 /**
@@ -546,6 +566,10 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
   }
 
   const { purged } = await deleteAccountAndOptionallyPurge(request, account, purgeData);
+
+  // Expire OIDC session cookies so the browser doesn't send stale
+  // references on the next login attempt (#452).
+  expireSessionCookies(reply);
 
   // If the user asked for a purge but it didn't run (fs.remove threw,
   // path-relative check rejected, etc.), surface that on the success

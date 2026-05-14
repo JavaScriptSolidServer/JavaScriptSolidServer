@@ -264,8 +264,15 @@ export async function createProvider(issuer) {
     // Auto-approve consent by loading/creating grants automatically
     // This skips the consent prompt for all clients (appropriate for test/dev servers)
     loadExistingGrant: async (ctx) => {
+      // Guard: if session or client is missing (e.g. stale cookies after
+      // account deletion), bail out early so oidc-provider doesn't crash
+      // calling getOIDCScopeEncountered() on an undefined grant (#452).
+      if (!ctx.oidc.session || !ctx.oidc.client) {
+        return undefined;
+      }
+
       // Check if there's an existing grant for this client/account pair
-      const grantId = ctx.oidc.session?.grantIdFor(ctx.oidc.client?.clientId);
+      const grantId = ctx.oidc.session.grantIdFor?.(ctx.oidc.client.clientId);
 
       if (grantId) {
         const existingGrant = await ctx.oidc.provider.Grant.find(grantId);
@@ -275,7 +282,7 @@ export async function createProvider(issuer) {
       }
 
       // Auto-approve: create a new grant with all requested scopes
-      if (ctx.oidc.session?.accountId && ctx.oidc.client?.clientId) {
+      if (ctx.oidc.session.accountId) {
         const grant = new ctx.oidc.provider.Grant({
           accountId: ctx.oidc.session.accountId,
           clientId: ctx.oidc.client.clientId,
