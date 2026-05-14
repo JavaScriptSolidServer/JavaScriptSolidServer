@@ -120,6 +120,22 @@ function parseRangeHeader(rangeHeader, fileSize) {
 }
 
 /**
+ * Compute a content-type-aware ETag. When mashlib will wrap an RDF
+ * resource in HTML, the response body differs from the raw resource,
+ * so the ETag must differ too — otherwise browsers confuse cached
+ * JSON-LD with the HTML variant despite Vary: Accept (#456).
+ */
+function getMashlibEtag(request, stats, storagePath) {
+  const storedType = stats.isDirectory ? null : getContentType(storagePath);
+  const willServeMashlib = !stats.isDirectory &&
+    shouldServeMashlib(request, request.mashlibEnabled, storedType);
+  const effectiveEtag = willServeMashlib
+    ? stats.etag.replace(/"$/, '-html"')
+    : stats.etag;
+  return { willServeMashlib, effectiveEtag };
+}
+
+/**
  * Handle GET request
  */
 export async function handleGet(request, reply) {
@@ -134,16 +150,7 @@ export async function handleGet(request, reply) {
     return reply.code(404).send({ error: 'Not Found' });
   }
 
-  // Compute the effective ETag for this response. When mashlib will wrap
-  // an RDF resource in HTML, the response body differs from the raw
-  // resource, so the ETag must differ too — otherwise browsers confuse
-  // cached JSON-LD with the HTML variant despite Vary: Accept (#315).
-  const storedContentType304 = stats.isDirectory ? null : getContentType(storagePath);
-  const willServeMashlib = !stats.isDirectory &&
-    shouldServeMashlib(request, request.mashlibEnabled, storedContentType304);
-  const effectiveEtag = willServeMashlib
-    ? stats.etag.replace(/"$/, '-html"')
-    : stats.etag;
+  const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
 
   // Check If-None-Match for conditional GET (304 Not Modified)
   const ifNoneMatch = request.headers['if-none-match'];
@@ -603,17 +610,10 @@ export async function handleHead(request, reply) {
     return reply.code(404).send();
   }
 
-  // Conditional HEAD: check If-None-Match before doing content negotiation
-  // work, using the same content-type-aware ETag as GET (#456).
-  const headStoredType0 = stats.isDirectory ? null : getContentType(storagePath);
-  const headMashlib0 = !stats.isDirectory &&
-    shouldServeMashlib(request, request.mashlibEnabled, headStoredType0);
-  const headEtag0 = headMashlib0
-    ? stats.etag.replace(/"$/, '-html"')
-    : stats.etag;
+  const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
   const ifNoneMatch = request.headers['if-none-match'];
   if (ifNoneMatch) {
-    const check = checkIfNoneMatchForGet(ifNoneMatch, headEtag0);
+    const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
     if (!check.ok && check.notModified) {
       return reply.code(304).send();
     }
@@ -656,12 +656,12 @@ export async function handleHead(request, reply) {
       contentType = 'application/ld+json';
     }
   } else {
-    contentType = headMashlib0 ? 'text/html' : getContentType(storagePath);
+    contentType = willServeMashlib ? 'text/html' : getContentType(storagePath);
   }
 
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
-    etag: headEtag0,
+    etag: effectiveEtag,
     contentType,
     origin,
     resourceUrl,
@@ -672,7 +672,7 @@ export async function handleHead(request, reply) {
   // Content-Length: only set for non-mashlib resources where the file
   // size matches the response body. Mashlib HTML is dynamically
   // generated so we can't know its size without rendering it.
-  if (!stats.isDirectory && !headMashlib0) {
+  if (!stats.isDirectory && !willServeMashlib) {
     headers['Content-Length'] = stats.size;
   }
 
