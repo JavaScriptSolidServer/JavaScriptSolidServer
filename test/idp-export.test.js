@@ -142,12 +142,12 @@ describe('GET /idp/account/export — multi-user', () => {
       'ACL files must be in the export');
   });
 
-  it("returns 403 for an authenticated caller exporting somebody else's account", async () => {
-    // bob is authenticated, but the export endpoint scopes to the
-    // caller's WebID — bob can only get bob's data, never alice's.
-    // The endpoint doesn't take a target parameter; cross-account is
-    // already prevented by design. This test pins that property by
-    // confirming bob's export contains bob, never alice.
+  it("scopes the export to the authenticated caller — no cross-account exposure", async () => {
+    // The endpoint takes no target parameter; the WebID is taken
+    // from the auth context. Cross-account access is structurally
+    // impossible to attempt (so there's no 403 case). This test
+    // pins the *property* by confirming bob's authenticated call
+    // returns bob's data and never anything from alice's pod.
     const res = await fetch(`${baseUrl}/idp/account/export`, {
       headers: { Authorization: `Bearer ${bobToken}` }
     });
@@ -162,6 +162,74 @@ describe('GET /idp/account/export — multi-user', () => {
     for (const k of podKeys) {
       assert.doesNotMatch(k, /\/alice\//, `bob's export must not contain alice's data: ${k}`);
     }
+  });
+});
+
+describe('GET /idp/account/export — single-user ROOT pod (denylist check)', () => {
+  // Critical: in single-user root-pod mode (the default since #348),
+  // podDir IS dataRoot. Without an explicit denylist, the export would
+  // ship `.idp/accounts/*.json` (every account record incl.
+  // passwordHash) AND `.idp/keys/` (the IdP signing keys that mint
+  // tokens for any user) to the caller. The handler must refuse to
+  // include `.idp/` at the top level.
+  const DATA_DIR = './test-data-export-root-pod';
+  let server, baseUrl, ownerToken;
+
+  before(async () => {
+    ({ server, baseUrl } = await startServer(DATA_DIR, {
+      singleUser: true,
+      // No singleUserName → root pod (#348 default)
+      singleUserName: null,
+      singleUserPassword: 'pw-root-321',
+      provisionKeys: true,
+    }));
+    const credRes = await fetch(`${baseUrl}/idp/credentials`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'me', password: 'pw-root-321' }).toString(),
+    });
+    if (credRes.status === 200) {
+      const body = await credRes.json();
+      ownerToken = body.access_token || body.token;
+    }
+  });
+
+  after(async () => {
+    await stopServer(server, DATA_DIR);
+  });
+
+  it('does NOT pack /.idp/ (accounts, signing keys, OIDC adapter state)', async (t) => {
+    if (!ownerToken) {
+      t.skip('IDP credentials handshake unavailable');
+      return;
+    }
+    // Sanity: confirm the IdP actually wrote .idp/ to disk so the
+    // denylist test is exercising a non-empty thing.
+    assert.ok(
+      await fs.pathExists(path.join(DATA_DIR, '.idp')),
+      'pre-condition: .idp/ must exist on disk for the test to be meaningful'
+    );
+    const res = await fetch(`${baseUrl}/idp/account/export`, {
+      headers: { Authorization: `Bearer ${ownerToken}` }
+    });
+    assert.strictEqual(res.status, 200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const files = await unpackTarGz(buf);
+
+    // Critical: NOTHING under jss-export/pod/.idp/ in the archive.
+    const idpEntries = Object.keys(files).filter(k =>
+      k.startsWith('jss-export/pod/.idp/') || k === 'jss-export/pod/.idp'
+    );
+    assert.strictEqual(idpEntries.length, 0,
+      `.idp/ must not be packed in single-user root-pod export. ` +
+      `Found: ${idpEntries.join(', ')}`);
+
+    // Sanity: actual pod content IS in the archive.
+    const podKeys = Object.keys(files).filter(k => k.startsWith('jss-export/pod/'));
+    assert.ok(podKeys.some(k => k.endsWith('profile/card.jsonld')),
+      'pod content must still be exported');
+    assert.ok(podKeys.some(k => k.endsWith('private/privkey.jsonld')),
+      'pod /private/ must still be exported (this is pod data, not server-internal)');
   });
 });
 

@@ -24,12 +24,10 @@ import {
   handleCredentialsInfo,
   handleChangePassword,
   handleDeleteAccount,
-} from './credentials.js';
-import { handleExportAccount } from './export.js';
-import {
   handleAccountDeleteForm,
   setNoCacheClickjackHeaders,
 } from './credentials.js';
+import { handleExportAccount } from './export.js';
 import * as passkey from './passkey.js';
 import { addTrustedIssuer } from '../auth/solid-oidc.js';
 import { landingPage, accountDeletePage } from './views.js';
@@ -303,14 +301,19 @@ export async function idpPlugin(fastify, options) {
   // GET account export — authenticated owner downloads their pod tree as
   // a streamed tar.gz (#353). MVP slice of the Credible Exit ladder
   // (#448). Lighter rate-limit than the destructive endpoints — this is
-  // a read, but a heavy one (entire pod), so cap at 3/min/IP to deter
+  // a read, but a heavy one (entire pod), so cap at 3/min to deter
   // abuse without blocking a legitimate operator pulling a backup.
+  //
+  // Key by request.webId when present (so one user's heavy pull doesn't
+  // lock out everyone behind a shared NAT / proxy egress) and fall back
+  // to IP for unauthenticated requests (which 401 anyway, but the rate
+  // limiter runs before the handler).
   fastify.get('/idp/account/export', {
     config: {
       rateLimit: {
         max: 3,
         timeWindow: '1 minute',
-        keyGenerator: (request) => request.ip
+        keyGenerator: (request) => request.webId || request.ip
       }
     }
   }, async (request, reply) => {

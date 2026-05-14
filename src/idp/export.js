@@ -24,6 +24,11 @@
  *   404 — pod directory unexpectedly missing (shouldn't happen for
  *         an account with a valid WebID, but caught defensively)
  *
+ * Cross-account access is structurally impossible: the endpoint
+ * takes no target parameter and always scopes to the caller's
+ * authenticated WebID. There's no `403 cross-account` failure mode
+ * because there's no path to attempt the access in the first place.
+ *
  * Out of scope: re-import, cross-server pod migration, periodic
  * scheduled backups, partial / per-resource selection. See #353.
  */
@@ -35,6 +40,19 @@ import zlib from 'zlib';
 import tar from 'tar-stream';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 import { findByWebId } from './accounts.js';
+
+/**
+ * Entries at the data root that are server-internal, not pod data.
+ * In single-user *root* pod mode, podDir IS dataRoot — packing it
+ * naively would ship the IdP accounts (incl. passwordHash for every
+ * user), the IdP signing keys (mint tokens for any user), and OIDC
+ * adapter state (sessions, refresh tokens) to the caller. Skip them.
+ *
+ * Named-pod single-user (podDir = <dataRoot>/<name>/) and multi-user
+ * (podDir = <dataRoot>/<podName>/) don't hit this code path — the
+ * pod tree is already isolated by the path layout.
+ */
+const ROOT_POD_EXCLUDE = new Set(['.idp']);
 
 /**
  * @param {object} request - Fastify request
@@ -63,12 +81,13 @@ export async function handleExportAccount(request, reply, options = {}) {
   let podDir;
   let accountRecord = null;
   let manifest;
+  let isRootPod = false;
 
   if (options.singleUser) {
     // Single-user: pod is at `/` (root pod) or `/<name>/` based on
     // singleUserName. There's at most one IDP account; if it exists
     // include it, else emit a single-user manifest with no account.
-    const isRootPod = !options.singleUserName;
+    isRootPod = !options.singleUserName;
     podDir = isRootPod
       ? dataRoot
       : path.join(dataRoot, options.singleUserName);
@@ -124,37 +143,54 @@ export async function handleExportAccount(request, reply, options = {}) {
   const isoDate = manifest.exportedAt.replace(/[:.]/g, '-');
   const filename = `jss-export-${slug}-${isoDate}.tar.gz`;
 
+  // sanitizeSlug() restricts the slug to [A-Za-z0-9._-] and isoDate
+  // is ISO-8601 with `:`/`.` replaced — both are strict-ASCII safe
+  // for the legacy `filename=` form. Also emit `filename*=UTF-8''…`
+  // (RFC 5987) so any future non-ASCII slip-through degrades to
+  // valid UTF-8 percent-encoding rather than a malformed header.
+  const cdValue =
+    `attachment; filename="${filename}"; ` +
+    `filename*=UTF-8''${encodeURIComponent(filename)}`;
   reply
     .type('application/x-tar+gzip')
-    .header('Content-Disposition', `attachment; filename="${filename}"`)
+    .header('Content-Disposition', cdValue)
     .header('Cache-Control', 'no-store');
 
   const pack = tar.pack();
   const gzip = zlib.createGzip();
   pack.pipe(gzip);
 
+  // Surface stream-level errors. Once response headers are out an
+  // EACCES / mid-pack failure can otherwise present as a silently
+  // truncated download — the client gets 200 + partial gzip + no
+  // error signal. We log on the server side and destroy the
+  // pipeline so the client at least sees an aborted transfer rather
+  // than a corrupt but seemingly-complete archive.
+  const onStreamError = (err) => {
+    request.log?.error({ err }, 'pod export stream error');
+    pack.destroy(err);
+    gzip.destroy(err);
+  };
+  pack.on('error', onStreamError);
+  gzip.on('error', onStreamError);
+
   // Pump in the background; entries are added asynchronously below.
+  // The root-pod denylist is wired in so single-user-root-pod mode
+  // doesn't ship .idp/ (accounts + signing keys + OIDC state).
   const streamingPromise = packExport({
     pack,
     podDir,
     manifest,
     accountRecord,
-  }).catch((err) => {
-    // Once headers + body bytes are out, the only thing we can do is
-    // destroy the stream and let Fastify surface the connection drop.
-    request.log?.error({ err }, 'pod export failed mid-stream');
-    pack.destroy(err);
-  });
+    excludeAtRoot: (options.singleUser && isRootPod) ? ROOT_POD_EXCLUDE : null,
+  }).catch(onStreamError);
 
-  // Don't await streamingPromise here — Fastify will close the
-  // response when `gzip` ends. We do attach the catch above so an
-  // error during traversal is logged instead of being swallowed.
   void streamingPromise;
 
   return reply.send(gzip);
 }
 
-async function packExport({ pack, podDir, manifest, accountRecord }) {
+async function packExport({ pack, podDir, manifest, accountRecord, excludeAtRoot }) {
   // Manifest first so consumers can read the shape before deciding
   // whether to keep streaming the (potentially large) pod tree.
   await addEntry(pack, 'jss-export/manifest.json',
@@ -168,39 +204,80 @@ async function packExport({ pack, podDir, manifest, accountRecord }) {
       Buffer.from(JSON.stringify(safeAccount, null, 2), 'utf8'));
   }
 
-  // Pod tree. Walk the directory, stream each file in turn. Symlinks
-  // are followed (we want the file content, not the link metadata).
-  await walkAndPack(pack, podDir, 'jss-export/pod');
+  // Pod tree. The first-level filter (`excludeAtRoot`) is what
+  // prevents single-user-root-pod mode from leaking .idp/.
+  await walkAndPack(pack, podDir, 'jss-export/pod', excludeAtRoot);
 
   pack.finalize();
 }
 
 /**
  * Recursively pack `dir` into `pack` under the tar prefix `tarBase`.
+ *
+ * @param {Set<string>|null} excludeAtRoot - first-level names to skip
+ *   (applied only at the top of the walk; deeper entries pass freely).
+ *   Set to `ROOT_POD_EXCLUDE` in single-user-root-pod mode where
+ *   podDir is the data root and server-internal dotfiles live next
+ *   to pod data.
  */
-async function walkAndPack(pack, dir, tarBase) {
+async function walkAndPack(pack, dir, tarBase, excludeAtRoot = null) {
   const entries = await fsp.readdir(dir, { withFileTypes: true });
   for (const dirent of entries) {
+    if (excludeAtRoot && excludeAtRoot.has(dirent.name)) {
+      // Top-level server-internal dir — never appears in any export.
+      continue;
+    }
     const fullPath = path.join(dir, dirent.name);
     const tarPath = `${tarBase}/${dirent.name}`;
     if (dirent.isDirectory()) {
-      await walkAndPack(pack, fullPath, tarPath);
+      // Emit an explicit directory entry so empty LDP containers
+      // (a container the operator provisioned but hasn't populated)
+      // survive a round-trip — preserves the pod's LDP shape on
+      // restore. tar requires the trailing slash on directory names.
+      await addDirEntry(pack, `${tarPath}/`);
+      // No `excludeAtRoot` on recursion — the denylist is first-level only.
+      await walkAndPack(pack, fullPath, tarPath, null);
     } else if (dirent.isFile()) {
-      const stat = await fsp.stat(fullPath);
-      // Stream the file into the entry — keeps memory constant
-      // even for large media files in a pod.
-      await new Promise((resolve, reject) => {
-        const entry = pack.entry(
-          { name: tarPath, size: stat.size, mode: stat.mode & 0o777 },
-          (err) => err ? reject(err) : resolve(),
-        );
-        fs.createReadStream(fullPath).pipe(entry);
-      });
+      // Stream the file into the entry from an *open fd* — opens
+      // and stats off the same fd, so a concurrent truncate/grow
+      // can't desync `size` from the bytes actually piped. Without
+      // this, a stat-then-open dance would TOCTOU on a live pod
+      // and produce a corrupt tar that fails extraction.
+      const fh = await fsp.open(fullPath, 'r');
+      try {
+        const st = await fh.stat();
+        await new Promise((resolve, reject) => {
+          const entry = pack.entry(
+            { name: tarPath, size: st.size, mode: st.mode & 0o777 },
+            (err) => err ? reject(err) : resolve(),
+          );
+          const rs = fh.createReadStream({ autoClose: false });
+          rs.on('error', reject);
+          entry.on('error', reject);
+          rs.pipe(entry);
+        });
+      } finally {
+        await fh.close();
+      }
     }
-    // Symlinks, sockets, etc. are intentionally skipped — they're
-    // out of scope for "downloadable pod data" and would complicate
-    // restore semantics without serving a real use case.
+    // Symlinks, sockets, FIFOs, etc. are intentionally skipped —
+    // `dirent.isFile()` is false for those, even when the symlink
+    // points at a regular file. Out of scope for "downloadable pod
+    // data" and would complicate restore semantics.
   }
+}
+
+/**
+ * Add a tar directory entry. `tar-stream` distinguishes by name
+ * suffix (`/`) and explicit `type: 'directory'`.
+ */
+function addDirEntry(pack, name) {
+  return new Promise((resolve, reject) => {
+    pack.entry({ name, type: 'directory', size: 0 }, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
 }
 
 /**
