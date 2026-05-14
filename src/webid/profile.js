@@ -16,25 +16,29 @@ const CID = 'https://www.w3.org/ns/cid/v1#';
 const LWS = 'https://www.w3.org/ns/lws#';
 
 /**
- * Generate JSON-LD data for a WebID profile
+ * Generate JSON-LD data for a WebID profile.
+ *
  * @param {object} options
  * @param {string} options.webId - Full WebID URI (e.g., https://example.com/alice/profile/card#me)
  * @param {string} options.name - Display name
  * @param {string} options.podUri - Pod root URI (e.g., https://example.com/alice/)
  * @param {string} options.issuer - OIDC issuer URI
+ * @param {object} [options.ownerVm] - Optional verificationMethod
+ *   entry for an owner-held key (Phase 2 of #437 / #443). Build via
+ *   `src/keys/provision.js#buildOwnerVerificationMethod`.
+ *
+ *   **Fresh-pod-only when `ownerVm` is set.** The helper unconditionally
+ *   overwrites `verificationMethod`, `authentication`, and
+ *   `assertionMethod` with single-element arrays referencing this VM.
+ *   That's correct for the only current caller (fresh pod creation,
+ *   nothing to overwrite), but a future "rotate-keys" / re-provisioning
+ *   command using this helper to regenerate an existing profile would
+ *   silently drop any VMs / proof-purpose references the operator
+ *   added by hand. Either pass the existing profile through a merge
+ *   step before calling this, or treat the helper as fresh-pod-only.
+ *   See #444 review.
+ *
  * @returns {object} JSON-LD profile data
- */
-/**
- * NOTE on `ownerVm`: when provided, this helper unconditionally
- * overwrites `verificationMethod`, `authentication`, and
- * `assertionMethod` with single-element arrays. That's correct for
- * the only current caller (fresh-pod creation, where there's nothing
- * to overwrite), but if a future "rotate-keys" / re-provisioning
- * command ever calls this helper to regenerate an existing profile,
- * it will silently drop any VMs / proof-purpose references the
- * operator added by hand. Either pass the existing profile through
- * a merge step before calling this, or treat this helper as
- * fresh-pod-only. See #444 review.
  */
 export function generateProfileJsonLd({ webId, name, podUri, issuer, ownerVm = null }) {
   const pod = podUri.endsWith('/') ? podUri : podUri + '/';
