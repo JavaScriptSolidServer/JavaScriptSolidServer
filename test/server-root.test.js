@@ -30,6 +30,24 @@ describe('Server-root landing page', () => {
     const res = await request('/index.html');
     assertStatus(res, 200);
   });
+
+  // Portability regression: the seeded ACLs must use './' (resolved
+  // against the .acl's own URL) rather than '/' (the origin root).
+  // The two coincide when JSS sits at the origin root, so a request
+  // smoke-test would pass either way; only direct inspection of the
+  // serialized accessTo catches a regression to the absolute form.
+  // Without this, JSS mounted under a reverse-proxy path prefix would
+  // see the seeded ACL match the origin root rather than the prefix.
+  it('seeded ACLs use relative resourceUrl ("./" / "./index.html"), not absolute paths', async () => {
+    const rootAcl = JSON.parse(await fs.readFile('./data/.acl', 'utf8'));
+    const pageAcl = JSON.parse(await fs.readFile('./data/index.html.acl', 'utf8'));
+    const rootAccessTo = rootAcl['@graph'][0]['acl:accessTo']['@id'];
+    const pageAccessTo = pageAcl['@graph'][0]['acl:accessTo']['@id'];
+    assert.strictEqual(rootAccessTo, './',
+      `Expected /.acl accessTo to be relative './', got '${rootAccessTo}'`);
+    assert.strictEqual(pageAccessTo, './index.html',
+      `Expected /index.html.acl accessTo to be relative './index.html', got '${pageAccessTo}'`);
+  });
 });
 
 // Operator's existing /index.html is preserved — dedicated server + data dir.

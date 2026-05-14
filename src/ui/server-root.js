@@ -137,18 +137,27 @@ export async function seedServerRoot(ctx = {}) {
 
   // Seed /.acl if one doesn't already exist. Public read on the container
   // itself — so GET / serves the landing page. Independent of index.html.
+  //
+  // Use './' (relative to the .acl's own URL) rather than '/' (the
+  // origin root). The two coincide when JSS is mounted at the origin
+  // root, but only the relative form survives reverse-proxy mounts at
+  // a path prefix (e.g. https://example/jss/). This matches the
+  // pattern used by createPodStructure / createRootPodStructure since
+  // #428 / #430.
+  //
   // (createRootPodStructure in single-user mode writes its own ACL and
   // runs in a later hook, which will overwrite this if needed.)
   if (!(await storage.exists('/.acl'))) {
-    const ok = await storage.write('/.acl', serializeAcl(generatePublicReadAcl('/')));
+    const ok = await storage.write('/.acl', serializeAcl(generatePublicReadAcl('./')));
     if (ok) seededAcl = true;
   }
 
   // Dedicated ACL for the landing page itself — public read. The container
   // ACL above has no acl:default (we don't want to implicitly publish all
   // children), so /index.html needs its own rule when fetched directly.
+  // Same relative-form rationale as above.
   if (!(await storage.exists('/index.html.acl'))) {
-    const ok = await storage.write('/index.html.acl', serializeAcl(generatePublicReadAcl('/index.html')));
+    const ok = await storage.write('/index.html.acl', serializeAcl(generatePublicReadAcl('./index.html')));
     if (ok) seededPageAcl = true;
   }
 
