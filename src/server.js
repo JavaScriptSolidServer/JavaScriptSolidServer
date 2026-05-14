@@ -265,6 +265,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibVersion', null);
   fastify.decorateRequest('mashlibModule', null);
   fastify.decorateRequest('defaultQuota', null);
+  fastify.decorateRequest('provisionKeys', null);
   fastify.decorateRequest('config', null);
   fastify.decorateRequest('liveReloadEnabled', null);
   fastify.decorateRequest('singleUser', null);
@@ -280,6 +281,7 @@ export function createServer(options = {}) {
     request.mashlibVersion = mashlibVersion;
     request.mashlibModule = mashlibModule;
     request.defaultQuota = defaultQuota;
+    request.provisionKeys = provisionKeysEnabled;
     request.config = { public: options.public, readOnly: options.readOnly };
     request.liveReloadEnabled = liveReloadEnabled;
     request.singleUser = singleUser;
