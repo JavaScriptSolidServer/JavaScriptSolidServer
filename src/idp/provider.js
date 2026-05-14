@@ -8,6 +8,7 @@ import { createAdapter } from './adapter.js';
 import { getJwks, getCookieKeys } from './keys.js';
 import { getAccountForProvider } from './accounts.js';
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { expireSessionCookiesKoa } from './cookies.js';
 
 // Cache for fetched client documents
 const clientDocumentCache = new Map();
@@ -271,7 +272,8 @@ export async function createProvider(issuer) {
         return undefined;
       }
 
-      // Check if there's an existing grant for this client/account pair
+      // Check if there's an existing grant for this client/account pair.
+      // Optional chain: grantIdFor may be absent on a stale session stub.
       const grantId = ctx.oidc.session.grantIdFor?.(ctx.oidc.client.clientId);
 
       if (grantId) {
@@ -411,13 +413,7 @@ export async function createProvider(issuer) {
       const alreadyRetried = reqUrl.includes('_stale_retry=1');
 
       if (isStaleSessionCrash && !alreadyRetried) {
-        const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
-        ctx.set('Set-Cookie', [
-          `_session=; ${expired}`,
-          `_session.sig=; ${expired}`,
-          `_session.legacy=; ${expired}`,
-          `_session.legacy.sig=; ${expired}`,
-        ]);
+        expireSessionCookiesKoa(ctx);
         const separator = reqUrl.includes('?') ? '&' : '?';
         ctx.redirect(`${reqUrl}${separator}_stale_retry=1`);
         return;

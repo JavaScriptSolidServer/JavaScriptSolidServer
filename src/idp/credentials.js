@@ -11,6 +11,7 @@ import { authenticate, findByUsername, findByWebId, updatePassword, verifyPasswo
 import { getJwks } from './keys.js';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
 import { accountDeletePage } from './views.js';
+import { expireSessionCookies } from './cookies.js';
 
 /**
  * Handle POST /idp/credentials
@@ -395,22 +396,6 @@ export function setNoCacheClickjackHeaders(reply) {
   reply.header('Pragma', 'no-cache');
   reply.header('X-Frame-Options', 'DENY');
   reply.header('Content-Security-Policy', "frame-ancestors 'none'");
-}
-
-/**
- * Expire oidc-provider session cookies so the browser doesn't send
- * stale references after account deletion (#452). Without this, the
- * next OIDC auth request sends cookies that reference a destroyed
- * session/grant, crashing in consent.js getOIDCScopeEncountered().
- */
-function expireSessionCookies(reply) {
-  const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly';
-  reply.header('Set-Cookie', [
-    `_session=; ${expired}`,
-    `_session.sig=; ${expired}`,
-    `_session.legacy=; ${expired}`,
-    `_session.legacy.sig=; ${expired}`,
-  ]);
 }
 
 /**
