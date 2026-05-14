@@ -63,8 +63,13 @@
 
     <div class="actions">
       <a href="https://jss.live/docs/getting-started/introduction" class="btn btn-primary">Get started →</a>
-      <a href="/idp/register" class="btn btn-secondary" data-cond="register" hidden>Sign up</a>
-      <a href="/idp" class="btn btn-secondary" data-cond="login" hidden>Sign in</a>
+      <!-- IdP links are written page-relative (no leading slash) so they
+           resolve against document base, surviving reverse-proxy mounts
+           at a path prefix (e.g. https://example/jss/). Origin-root
+           absolute paths like /idp would jump out of the mount point.
+           Same rationale as the relative ACL targets from #428. -->
+      <a href="./idp/register" class="btn btn-secondary" data-cond="register" hidden>Sign up</a>
+      <a href="./idp" class="btn btn-secondary" data-cond="login" hidden>Sign in</a>
     </div>
 
     <div class="info">
@@ -103,7 +108,9 @@
     //         Sign in only
     //   404 / network error → no IDP: hide both
     (function () {
-      fetch('/idp/register', { method: 'HEAD', cache: 'no-store' })
+      // Relative URL resolves against document base, same as the
+      // anchor hrefs above — preserves the path-prefix mount point.
+      fetch('./idp/register', { method: 'HEAD', cache: 'no-store' })
         .then(function (res) {
           var register = document.querySelector('[data-cond="register"]');
           var login = document.querySelector('[data-cond="login"]');

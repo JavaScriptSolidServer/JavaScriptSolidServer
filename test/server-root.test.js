@@ -139,10 +139,17 @@ describe('renderServerRoot', () => {
     assert.match(html, /Get started/);
   });
 
-  it('emits Sign up + Sign in buttons hidden for the HEAD probe to reveal', () => {
+  it('emits Sign up + Sign in buttons hidden for the HEAD probe to reveal, with page-relative hrefs', () => {
     const html = renderServerRoot({ version: '1.0.0' });
-    assert.match(html, /<a href="\/idp\/register"[^>]*data-cond="register"[^>]*hidden/);
-    assert.match(html, /<a href="\/idp"[^>]*data-cond="login"[^>]*hidden/);
+    // Page-relative (./idp/...) so a reverse-proxy mount under a path
+    // prefix sends visitors into the correct prefix instead of the
+    // origin root. Same rationale as the ./ ACL targets from #428.
+    assert.match(html, /<a href="\.\/idp\/register"[^>]*data-cond="register"[^>]*hidden/);
+    assert.match(html, /<a href="\.\/idp"[^>]*data-cond="login"[^>]*hidden/);
+    assert.doesNotMatch(html, /<a href="\/idp\/register"/,
+      'Sign up href must be page-relative for path-prefix portability');
+    assert.doesNotMatch(html, /<a href="\/idp"/,
+      'Sign in href must be page-relative for path-prefix portability');
     assert.match(html, /Sign up/);
     assert.match(html, /Sign in/);
   });
@@ -156,9 +163,12 @@ describe('renderServerRoot', () => {
     assert.match(html, /\[hidden\]\s*\{[^}]*display:\s*none\s*!important/);
   });
 
-  it('includes the HEAD-adaptive script targeting /idp/register', () => {
+  it('includes the HEAD-adaptive script targeting ./idp/register (page-relative)', () => {
     const html = renderServerRoot({ version: '1.0.0' });
-    assert.match(html, /fetch\(['"]\/idp\/register['"]/);
+    // Same path-prefix portability concern as the anchor hrefs.
+    assert.match(html, /fetch\(['"]\.\/idp\/register['"]/);
+    assert.doesNotMatch(html, /fetch\(['"]\/idp\/register['"]/,
+      'HEAD probe URL must be page-relative for path-prefix portability');
     assert.match(html, /method:\s*['"]HEAD['"]/);
     assert.match(html, /res\.status === 200/);
     assert.match(html, /res\.status === 403/);
