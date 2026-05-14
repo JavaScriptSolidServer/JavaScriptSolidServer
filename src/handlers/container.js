@@ -193,34 +193,33 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
   const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
   await storage.write(`${podPath}settings/privateTypeIndex.jsonld`, serialize(privateTypeIndex));
 
-  // Create default ACL files
-  // Pod root: owner full control, public read
-  const rootAcl = generateOwnerAcl(podUri, webId, true);
+  // Create default ACL files. Each .acl is written inside the container it
+  // protects, so the resource it refers to is always './' (resolved against
+  // the .acl's own URL by the parser — see #428). This keeps pods portable
+  // across hostnames; the absolute podUri is no longer baked in.
+  const rootAcl = generateOwnerAcl('./', webId, true);
   await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
 
-  // Private folder: owner only (no public)
-  const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
+  const privateAcl = generatePrivateAcl('./', webId);
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
-  // settings folder: owner only (contains private preferences)
-  const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+  const settingsAcl = generatePrivateAcl('./', webId);
   await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
 
-  // publicTypeIndex: public read, overrides the private default inherited from /settings/
-  const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+  // publicTypeIndex: public read, overrides the private default inherited
+  // from /settings/. This is a resource ACL (lives at .../publicTypeIndex.jsonld.acl),
+  // so the resource is './publicTypeIndex.jsonld' relative to the parent.
+  const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', webId, false);
   await storage.write(`${podPath}settings/publicTypeIndex.jsonld.acl`, serializeAcl(publicTypeIndexAcl));
 
-  // Inbox: owner full, public append
-  const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
+  const inboxAcl = generateInboxAcl('./', webId);
   await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
 
-  // Public folder: owner full, public read (with inheritance)
-  const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
+  const publicAcl = generatePublicFolderAcl('./', webId);
   await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
 
-  // Profile folder: owner full, public read (with inheritance)
   // Profile documents must be publicly readable for WebID verification
-  const profileAcl = generatePublicFolderAcl(`${podUri}profile/`, webId);
+  const profileAcl = generatePublicFolderAcl('./', webId);
   await storage.write(`${podPath}profile/.acl`, serializeAcl(profileAcl));
 
   // Initialize storage quota if configured

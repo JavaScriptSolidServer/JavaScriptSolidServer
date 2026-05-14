@@ -212,7 +212,10 @@ function normalizeMode(mode) {
 
 /**
  * Generate a default public read ACL
- * @param {string} resourceUrl - URL of the resource
+ * @param {string} resourceUrl - URL of the resource. May be relative (e.g.
+ *   './' for the .acl's own container) — the parser resolves it against
+ *   the .acl's URL at check time, which keeps the document portable across
+ *   hostnames. See #428.
  * @returns {object} JSON-LD ACL document
  */
 export function generatePublicReadAcl(resourceUrl) {
@@ -237,8 +240,10 @@ export function generatePublicReadAcl(resourceUrl) {
 
 /**
  * Generate a full owner ACL (owner has full control, public read)
- * @param {string} resourceUrl - URL of the resource
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the resource. May be relative (see
+ *   `generatePublicReadAcl`).
+ * @param {string} ownerWebId - WebID of the owner. Currently absolute;
+ *   relative agent WebIDs are tracked in #427 Phase 2.
  * @param {boolean} isContainer - Whether this is a container
  * @returns {object} JSON-LD ACL document
  */
