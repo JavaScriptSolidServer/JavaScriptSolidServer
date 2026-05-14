@@ -964,27 +964,30 @@ export function createServer(options = {}) {
     const privateTypeIndex = generateTypeIndex(`${podUri}settings/privateTypeIndex.jsonld`, { listed: false });
     await storage.write('/settings/privateTypeIndex.jsonld', serialize(privateTypeIndex));
 
-    // ACL files
-    const rootAcl = generateOwnerAcl(podUri, webId, true);
+    // ACL files. Each .acl uses './' (or a relative basename for resource
+    // ACLs) so the pod isn't host-locked to whichever interface the server
+    // happened to bind on first start. The parser resolves these against
+    // the .acl's own request URL — see #428.
+    const rootAcl = generateOwnerAcl('./', webId, true);
     await storage.write('/.acl', serializeAcl(rootAcl));
 
-    const privateAcl = generatePrivateAcl(`${podUri}private/`, webId);
+    const privateAcl = generatePrivateAcl('./', webId);
     await storage.write('/private/.acl', serializeAcl(privateAcl));
 
-    const settingsAcl = generatePrivateAcl(`${podUri}settings/`, webId);
+    const settingsAcl = generatePrivateAcl('./', webId);
     await storage.write('/settings/.acl', serializeAcl(settingsAcl));
 
     // publicTypeIndex: public read, overrides the private default inherited from /settings/
-    const publicTypeIndexAcl = generateOwnerAcl(`${podUri}settings/publicTypeIndex.jsonld`, webId, false);
+    const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', webId, false);
     await storage.write('/settings/publicTypeIndex.jsonld.acl', serializeAcl(publicTypeIndexAcl));
 
-    const inboxAcl = generateInboxAcl(`${podUri}inbox/`, webId);
+    const inboxAcl = generateInboxAcl('./', webId);
     await storage.write('/inbox/.acl', serializeAcl(inboxAcl));
 
-    const publicAcl = generatePublicFolderAcl(`${podUri}public/`, webId);
+    const publicAcl = generatePublicFolderAcl('./', webId);
     await storage.write('/public/.acl', serializeAcl(publicAcl));
 
-    const profileAcl = generatePublicFolderAcl(`${podUri}profile/`, webId);
+    const profileAcl = generatePublicFolderAcl('./', webId);
     await storage.write('/profile/.acl', serializeAcl(profileAcl));
 
     // Note: Quota not initialized for root-level pods (no user directory)

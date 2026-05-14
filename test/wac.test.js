@@ -13,7 +13,16 @@ import {
   assertHeader,
   getBaseUrl
 } from './helpers.js';
-import { parseAcl, AccessMode, generateOwnerAcl, serializeAcl } from '../src/wac/parser.js';
+import {
+  parseAcl,
+  AccessMode,
+  generateOwnerAcl,
+  generatePrivateAcl,
+  generateInboxAcl,
+  generatePublicFolderAcl,
+  generatePublicReadAcl,
+  serializeAcl
+} from '../src/wac/parser.js';
 import { checkAccess, getRequiredMode } from '../src/wac/checker.js';
 
 describe('WAC Parser', () => {
@@ -238,6 +247,73 @@ describe('WAC Parser', () => {
       assert.ok(publicAuth);
     });
   });
+
+  // Phase 1 of #427 (#428): generators should preserve relative resourceUrls
+  // verbatim so callers can emit host-portable ACLs. The parser already
+  // resolves them at check time against the .acl's URL.
+  describe('relative resourceUrl portability (#428)', () => {
+    const webId = 'https://alice.example/profile/card.jsonld#me';
+
+    it('generateOwnerAcl preserves "./" in accessTo and default', () => {
+      const acl = generateOwnerAcl('./', webId, true);
+      const owner = acl['@graph'].find(a => a['@id'] === '#owner');
+      const pub = acl['@graph'].find(a => a['@id'] === '#public');
+      assert.strictEqual(owner['acl:accessTo']['@id'], './');
+      assert.strictEqual(owner['acl:default']['@id'], './');
+      assert.strictEqual(pub['acl:accessTo']['@id'], './');
+      // #public intentionally has no default — child resources require auth
+      assert.strictEqual(pub['acl:default'], undefined);
+    });
+
+    it('generatePrivateAcl preserves "./"', () => {
+      const acl = generatePrivateAcl('./', webId);
+      const owner = acl['@graph'][0];
+      assert.strictEqual(owner['acl:accessTo']['@id'], './');
+      assert.strictEqual(owner['acl:default']['@id'], './');
+    });
+
+    it('generateInboxAcl preserves "./"', () => {
+      const acl = generateInboxAcl('./', webId);
+      for (const auth of acl['@graph']) {
+        assert.strictEqual(auth['acl:accessTo']['@id'], './');
+        assert.strictEqual(auth['acl:default']['@id'], './');
+      }
+    });
+
+    it('generatePublicFolderAcl preserves "./"', () => {
+      const acl = generatePublicFolderAcl('./', webId);
+      for (const auth of acl['@graph']) {
+        assert.strictEqual(auth['acl:accessTo']['@id'], './');
+        assert.strictEqual(auth['acl:default']['@id'], './');
+      }
+    });
+
+    it('generatePublicReadAcl preserves a relative resource basename', () => {
+      const acl = generatePublicReadAcl('./publicTypeIndex.jsonld');
+      assert.strictEqual(
+        acl['@graph'][0]['acl:accessTo']['@id'],
+        './publicTypeIndex.jsonld'
+      );
+    });
+
+    it('round-trip: relative "./" resolves to the .acl base URL on parse', async () => {
+      const generated = generateOwnerAcl('./', webId, true);
+      const wire = serializeAcl(generated);
+
+      // Parse the same .acl document under two different host URLs and
+      // assert accessTo resolves to whichever host asked. This is what
+      // makes the on-disk pod portable across interfaces.
+      const auths1 = await parseAcl(wire, 'http://localhost:4444/.acl');
+      const auths2 = await parseAcl(wire, 'http://0.0.0.0:4444/.acl');
+
+      const pub1 = auths1.find(a => a.agentClasses.includes('foaf:Agent'));
+      const pub2 = auths2.find(a => a.agentClasses.includes('foaf:Agent'));
+      assert.ok(pub1.accessTo.includes('http://localhost:4444/'),
+        `Expected localhost resolution, got: ${JSON.stringify(pub1.accessTo)}`);
+      assert.ok(pub2.accessTo.includes('http://0.0.0.0:4444/'),
+        `Expected 0.0.0.0 resolution, got: ${JSON.stringify(pub2.accessTo)}`);
+    });
+  });
 });
 
 describe('WAC Checker', () => {
@@ -322,6 +398,27 @@ describe('WAC Integration', () => {
       const modes = publicAuth['acl:mode'].map(m => m['@id']);
       assert.ok(modes.includes('acl:Append'), 'Public should have Append');
       assert.ok(!modes.includes('acl:Read'), 'Public should not have Read');
+    });
+  });
+
+  describe('Cross-host ACL portability (#428)', () => {
+    // The .acl is written with a relative `./` so the public-read rule
+    // matches whichever host the request comes in on. Before #428, the
+    // .acl baked the bind-time host into accessTo and any other host
+    // returned 401. We exercise this by varying the Host: header.
+    it('serves public-read resources regardless of Host header', async () => {
+      // Profile is public-read by default (#427 Phase 1).
+      const baseHost = new URL(getBaseUrl()).host;
+      const profileUrl = `${getBaseUrl()}/wactest/profile/`;
+      const hostsToTry = [baseHost, 'localhost:9999', 'pod.example:443', 'pod.invalid'];
+
+      for (const host of hostsToTry) {
+        const res = await fetch(profileUrl, { headers: { Host: host } });
+        assert.strictEqual(
+          res.status, 200,
+          `Public-read should succeed for Host: ${host} (got ${res.status})`
+        );
+      }
     });
   });
 
