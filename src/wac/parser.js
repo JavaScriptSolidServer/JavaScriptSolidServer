@@ -242,8 +242,10 @@ export function generatePublicReadAcl(resourceUrl) {
  * Generate a full owner ACL (owner has full control, public read)
  * @param {string} resourceUrl - URL of the resource. May be relative (see
  *   `generatePublicReadAcl`).
- * @param {string} ownerWebId - WebID of the owner. Currently absolute;
- *   relative agent WebIDs are tracked in #427 Phase 2.
+ * @param {string} ownerWebId - WebID of the owner. May also be relative
+ *   (e.g. './profile/card.jsonld#me' for an in-pod owner) — the parser
+ *   resolves it against the .acl URL at check time. The profile document
+ *   itself still publishes the absolute WebID. See #430.
  * @param {boolean} isContainer - Whether this is a container
  * @returns {object} JSON-LD ACL document
  */
@@ -290,8 +292,10 @@ export function generateOwnerAcl(resourceUrl, ownerWebId, isContainer = false) {
 
 /**
  * Generate a private ACL (owner only, no public access)
- * @param {string} resourceUrl - URL of the resource
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the resource (may be relative — see
+ *   `generatePublicReadAcl`).
+ * @param {string} ownerWebId - WebID of the owner (may be relative — see
+ *   `generateOwnerAcl`).
  * @param {boolean} isContainer - Whether this is a container
  * @returns {object} JSON-LD ACL document
  */
@@ -323,8 +327,8 @@ export function generatePrivateAcl(resourceUrl, ownerWebId, isContainer = true) 
 
 /**
  * Generate an inbox ACL (owner full control, public append)
- * @param {string} resourceUrl - URL of the inbox
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the inbox (may be relative).
+ * @param {string} ownerWebId - WebID of the owner (may be relative).
  * @returns {object} JSON-LD ACL document
  */
 export function generateInboxAcl(resourceUrl, ownerWebId) {
@@ -363,8 +367,8 @@ export function generateInboxAcl(resourceUrl, ownerWebId) {
 /**
  * Generate a public folder ACL (owner full control, public read with inheritance)
  * Used for /public/ folders where content should be publicly readable
- * @param {string} resourceUrl - URL of the folder
- * @param {string} ownerWebId - WebID of the owner
+ * @param {string} resourceUrl - URL of the folder (may be relative).
+ * @param {string} ownerWebId - WebID of the owner (may be relative).
  * @returns {object} JSON-LD ACL document
  */
 export function generatePublicFolderAcl(resourceUrl, ownerWebId) {

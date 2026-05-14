@@ -195,31 +195,42 @@ export async function createPodStructure(name, webId, podUri, issuer, defaultQuo
 
   // Create default ACL files. Each .acl is written inside the container it
   // protects, so the resource it refers to is always './' (resolved against
-  // the .acl's own URL by the parser — see #428). This keeps pods portable
-  // across hostnames; the absolute podUri is no longer baked in.
-  const rootAcl = generateOwnerAcl('./', webId, true);
+  // the .acl's own URL by the parser — see #428).
+  //
+  // The owner WebID is also written relatively (#430). The WebID lives at
+  // <pod>/profile/card.jsonld#me, so each .acl references it relative to
+  // that .acl's container — './profile/card.jsonld#me' from the root,
+  // '../profile/card.jsonld#me' from an immediate child folder, etc.
+  // This keeps the on-disk pod portable across hostnames; the absolute
+  // podUri is no longer baked into either accessTo or agent.
+  const ownerFromRoot = './profile/card.jsonld#me';
+  const ownerFromChild = '../profile/card.jsonld#me';
+  const ownerFromProfile = './card.jsonld#me';
+
+  const rootAcl = generateOwnerAcl('./', ownerFromRoot, true);
   await storage.write(`${podPath}.acl`, serializeAcl(rootAcl));
 
-  const privateAcl = generatePrivateAcl('./', webId);
+  const privateAcl = generatePrivateAcl('./', ownerFromChild);
   await storage.write(`${podPath}private/.acl`, serializeAcl(privateAcl));
 
-  const settingsAcl = generatePrivateAcl('./', webId);
+  const settingsAcl = generatePrivateAcl('./', ownerFromChild);
   await storage.write(`${podPath}settings/.acl`, serializeAcl(settingsAcl));
 
   // publicTypeIndex: public read, overrides the private default inherited
   // from /settings/. This is a resource ACL (lives at .../publicTypeIndex.jsonld.acl),
   // so the resource is './publicTypeIndex.jsonld' relative to the parent.
-  const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', webId, false);
+  // The .acl's base URL is /settings/, so the agent is one level up.
+  const publicTypeIndexAcl = generateOwnerAcl('./publicTypeIndex.jsonld', ownerFromChild, false);
   await storage.write(`${podPath}settings/publicTypeIndex.jsonld.acl`, serializeAcl(publicTypeIndexAcl));
 
-  const inboxAcl = generateInboxAcl('./', webId);
+  const inboxAcl = generateInboxAcl('./', ownerFromChild);
   await storage.write(`${podPath}inbox/.acl`, serializeAcl(inboxAcl));
 
-  const publicAcl = generatePublicFolderAcl('./', webId);
+  const publicAcl = generatePublicFolderAcl('./', ownerFromChild);
   await storage.write(`${podPath}public/.acl`, serializeAcl(publicAcl));
 
   // Profile documents must be publicly readable for WebID verification
-  const profileAcl = generatePublicFolderAcl('./', webId);
+  const profileAcl = generatePublicFolderAcl('./', ownerFromProfile);
   await storage.write(`${podPath}profile/.acl`, serializeAcl(profileAcl));
 
   // Initialize storage quota if configured
