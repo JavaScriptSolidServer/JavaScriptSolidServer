@@ -144,4 +144,5 @@ npm test
 
 ## License
 
-AGPL-3.0-only
+Licensed under [AGPL-3.0](./LICENSE).
+Commercial licensing also available — see [LICENSING.md](./LICENSING.md).
