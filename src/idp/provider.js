@@ -408,7 +408,8 @@ export async function createProvider(issuer) {
       // starts with a clean session and succeeds. The `_stale_retry` param
       // prevents infinite redirect loops — only try once.
       const isStaleSessionCrash = out.error === 'server_error' &&
-        error?.message?.includes('getOIDCScopeEncountered');
+        error instanceof TypeError &&
+        /Cannot read properties of undefined/.test(error?.message);
       const reqUrl = ctx.req?.originalUrl || ctx.request?.url || ctx.url || '';
       const alreadyRetried = reqUrl.includes('_stale_retry=1');
 

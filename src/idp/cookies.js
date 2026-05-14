@@ -14,6 +14,12 @@ const SESSION_COOKIE_NAMES = [
   '_session.legacy.sig',
 ];
 
+function buildExpiredHeaders(secure) {
+  const attrs = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax'
+    + (secure ? '; Secure' : '');
+  return SESSION_COOKIE_NAMES.map((name) => `${name}=; ${attrs}`);
+}
+
 /**
  * Expire oidc-provider session cookies on a Fastify reply.
  *
@@ -22,12 +28,11 @@ const SESSION_COOKIE_NAMES = [
  * oidc-provider's consent check (#452).
  *
  * @param {object} reply - Fastify reply object
+ * @param {object} [request] - Fastify request (used to detect HTTPS)
  */
-export function expireSessionCookies(reply) {
-  const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax';
-  reply.header('Set-Cookie', SESSION_COOKIE_NAMES.map(
-    (name) => `${name}=; ${expired}`,
-  ));
+export function expireSessionCookies(reply, request) {
+  const secure = request?.protocol === 'https' || process.env.NODE_ENV === 'production';
+  reply.header('Set-Cookie', buildExpiredHeaders(secure));
 }
 
 /**
@@ -39,8 +44,6 @@ export function expireSessionCookies(reply) {
  * @param {object} ctx - Koa context object
  */
 export function expireSessionCookiesKoa(ctx) {
-  const expired = 'Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax';
-  ctx.set('Set-Cookie', SESSION_COOKIE_NAMES.map(
-    (name) => `${name}=; ${expired}`,
-  ));
+  const secure = ctx.secure || process.env.NODE_ENV === 'production';
+  ctx.set('Set-Cookie', buildExpiredHeaders(secure));
 }

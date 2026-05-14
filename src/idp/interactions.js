@@ -352,7 +352,7 @@ export async function handleSwitchAccount(request, reply, provider) {
     // Clear the user-agent's session cookies. Server-side state is
     // already gone via session.destroy() above — these expirations
     // are belt-and-suspenders.
-    expireSessionCookies(reply);
+    expireSessionCookies(reply, request);
 
     // 303 See Other — explicitly forces the UA to issue GET on the
     // Location target. 302 leaves it ambiguous (and some legacy UAs

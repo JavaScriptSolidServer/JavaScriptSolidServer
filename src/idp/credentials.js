@@ -367,7 +367,7 @@ export async function handleDeleteAccount(request, reply, options = {}) {
 
   // Expire OIDC session cookies so the browser doesn't send stale
   // references on the next login attempt (#452).
-  expireSessionCookies(reply);
+  expireSessionCookies(reply, request);
 
   reply.header('Cache-Control', 'no-store');
   reply.header('Pragma', 'no-cache');
@@ -554,7 +554,7 @@ export async function handleAccountDeleteForm(request, reply, options = {}) {
 
   // Expire OIDC session cookies so the browser doesn't send stale
   // references on the next login attempt (#452).
-  expireSessionCookies(reply);
+  expireSessionCookies(reply, request);
 
   // If the user asked for a purge but it didn't run (fs.remove threw,
   // path-relative check rejected, etc.), surface that on the success
