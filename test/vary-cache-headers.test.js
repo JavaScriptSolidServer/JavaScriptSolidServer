@@ -83,6 +83,65 @@ describe('Vary / Cache-Control consistency (#315)', () => {
     }
   });
 
+  it('mashlib HTML ETag differs from raw RDF ETag (#456)', async () => {
+    const htmlRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'text/html,*/*;q=0.8' }
+    });
+    const jsonRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'application/ld+json' }
+    });
+    const htmlEtag = htmlRes.headers.get('etag');
+    const jsonEtag = jsonRes.headers.get('etag');
+    assert.ok(htmlEtag, 'HTML variant should have ETag');
+    assert.ok(jsonEtag, 'JSON-LD variant should have ETag');
+    assert.notStrictEqual(htmlEtag, jsonEtag,
+      'mashlib HTML and raw JSON-LD must have different ETags');
+    assert.ok(htmlEtag.endsWith('-html"'),
+      `HTML ETag should end with -html", got: ${htmlEtag}`);
+    assert.ok(!jsonEtag.includes('-html'),
+      `JSON-LD ETag should not contain -html, got: ${jsonEtag}`);
+  });
+
+  it('If-None-Match with HTML ETag does not 304 the JSON-LD variant (#456)', async () => {
+    const htmlRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'text/html,*/*;q=0.8' }
+    });
+    const htmlEtag = htmlRes.headers.get('etag');
+    // Use the HTML ETag to request JSON-LD — should NOT get 304
+    const jsonRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'application/ld+json', 'If-None-Match': htmlEtag }
+    });
+    assert.strictEqual(jsonRes.status, 200,
+      'JSON-LD request with HTML ETag should get 200, not 304');
+  });
+
+  it('If-None-Match with JSON-LD ETag does not 304 the HTML variant (#456)', async () => {
+    const jsonRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'application/ld+json' }
+    });
+    const jsonEtag = jsonRes.headers.get('etag');
+    // Use the JSON-LD ETag to request HTML — should NOT get 304
+    const htmlRes = await request('/varytest/public/card.jsonld', {
+      headers: { Accept: 'text/html,*/*;q=0.8', 'If-None-Match': jsonEtag }
+    });
+    assert.strictEqual(htmlRes.status, 200,
+      'HTML request with JSON-LD ETag should get 200, not 304');
+  });
+
+  it('HEAD returns same ETag as GET for each variant (#456)', async () => {
+    for (const accept of ['text/html,*/*;q=0.8', 'application/ld+json']) {
+      const getRes = await request('/varytest/public/card.jsonld', {
+        headers: { Accept: accept }
+      });
+      const headRes = await request('/varytest/public/card.jsonld', {
+        method: 'HEAD',
+        headers: { Accept: accept }
+      });
+      assert.strictEqual(headRes.headers.get('etag'), getRes.headers.get('etag'),
+        `HEAD and GET ETags must match for Accept: ${accept}`);
+    }
+  });
+
   it('container index.html data-island variants also carry revalidating Cache-Control', async () => {
     // Publish an index.html with a JSON-LD data island; conneg should extract
     // and serve it as Turtle/JSON-LD. Those variants were missing
