@@ -153,9 +153,12 @@ export async function handleGet(request, reply) {
 
   const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
 
-  // Check If-None-Match for conditional GET (304 Not Modified)
+  // For non-containers, check If-None-Match early using the effective
+  // ETag. For containers, defer the check until we know which branch
+  // (index.html vs listing vs mashlib) will run — each uses a
+  // different ETag source (#456).
   const ifNoneMatch = request.headers['if-none-match'];
-  if (ifNoneMatch) {
+  if (ifNoneMatch && !stats.isDirectory) {
     const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
     if (!check.ok && check.notModified) {
       reply.header('ETag', effectiveEtag);
@@ -178,6 +181,17 @@ export async function handleGet(request, reply) {
       // Serve index.html (contains JSON-LD structured data)
       const content = await storage.read(indexPath);
       const indexStats = await storage.stat(indexPath);
+
+      // Deferred 304 check for index.html containers (#456)
+      const indexEtag = indexStats?.etag || stats.etag;
+      if (ifNoneMatch) {
+        const check = checkIfNoneMatchForGet(ifNoneMatch, indexEtag);
+        if (!check.ok && check.notModified) {
+          reply.header('ETag', indexEtag);
+          reply.header('Vary', getVaryHeader(connegEnabled, request.mashlibEnabled));
+          return reply.code(304).send();
+        }
+      }
 
       // Pick the negotiated RDF type using q-aware Accept parsing. The
       // naive `acceptHeader.includes('text/turtle')` we used to do here
@@ -272,6 +286,16 @@ export async function handleGet(request, reply) {
     }
 
     // No index.html, return JSON-LD container listing
+    // Deferred 304 check for container listings (#456)
+    if (ifNoneMatch) {
+      const check = checkIfNoneMatchForGet(ifNoneMatch, effectiveEtag);
+      if (!check.ok && check.notModified) {
+        reply.header('ETag', effectiveEtag);
+        reply.header('Vary', getVaryHeader(connegEnabled, request.mashlibEnabled));
+        return reply.code(304).send();
+      }
+    }
+
     const entries = await storage.listContainer(storagePath);
     const jsonLd = generateContainerJsonLd(resourceUrl, entries || []);
 
