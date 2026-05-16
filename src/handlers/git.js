@@ -90,11 +90,20 @@ function findGitDir(repoPath) {
 }
 
 /**
- * Auto-initialize a bare git repo at repoAbs to accept a first push, but
- * only when it's safe to do so. The caller must invoke this *after* the
- * standard ACL Write check has passed (i.e. inside the existing
- * preHandler-gated path for `git-receive-pack`), so authorization is
- * already enforced.
+ * Auto-initialize a regular (non-bare) git repo at repoAbs to accept a
+ * first push, but only when it's safe to do so. The caller must invoke
+ * this *after* the standard ACL Write check has passed (i.e. inside the
+ * existing preHandler-gated path for `git-receive-pack`), so
+ * authorization is already enforced.
+ *
+ * Regular (not bare): the repo has a `.git/` subdirectory plus a
+ * working tree. Combined with the `receive.denyCurrentBranch
+ * updateInstead` config the main handler sets on every push, the
+ * working tree is auto-extracted on each push. This means pushed files
+ * appear as static resources at the corresponding pod URL — the "apps
+ * live in pods" install pattern works end-to-end. (Bare repos store
+ * content in pack files only, so a pushed `index.html` wouldn't be
+ * servable as HTTP.)
  *
  * Safe iff one of:
  *   - the target path does not exist (we create it), or
@@ -123,7 +132,7 @@ function findGitDir(repoPath) {
  * @param {object} [log] - optional Fastify request logger for diagnostics
  * @returns {{gitDir: string, isRegular: boolean}|null}
  */
-function tryAutoInitBareRepo(repoAbs, log) {
+function tryAutoInitRepo(repoAbs, log) {
   try {
     if (existsSync(repoAbs)) {
       if (!statSync(repoAbs).isDirectory()) return null;
@@ -131,18 +140,18 @@ function tryAutoInitBareRepo(repoAbs, log) {
     } else {
       mkdirSync(repoAbs, { recursive: true });
     }
-    const result = spawnSync('git', ['init', '--bare', repoAbs], {
+    const result = spawnSync('git', ['init', repoAbs], {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     if (result.status !== 0) {
       log?.warn?.(
         { repoAbs, status: result.status, stderr: result.stderr?.toString?.().slice(0, 500) },
-        'git auto-init: `git init --bare` exited non-zero'
+        'git auto-init: `git init` exited non-zero'
       );
       return null;
     }
     const info = findGitDir(repoAbs);
-    if (info) log?.info?.({ repoAbs }, 'git auto-init: bare repo created on first push');
+    if (info) log?.info?.({ repoAbs }, 'git auto-init: repo created on first push');
     return info;
   } catch (err) {
     log?.warn?.({ err, repoAbs }, 'git auto-init: refusing to init (filesystem error)');
@@ -213,14 +222,17 @@ export async function handleGit(request, reply) {
   }
 
   // Find git directory. On a push (`git-receive-pack`) to a path that
-  // doesn't yet contain a repo, auto-init a bare one if the location is
-  // safe to claim — the standard preHandler has already verified ACL
-  // Write on this path, so authorization is enforced. See
-  // tryAutoInitBareRepo for the safety conditions (empty / non-existent
-  // path only; refuses to clobber existing files).
+  // doesn't yet contain a repo, auto-init one if the location is safe
+  // to claim — the standard preHandler has already verified ACL Write
+  // on this path, so authorization is enforced. See tryAutoInitRepo
+  // for the safety conditions (empty / non-existent path only; refuses
+  // to clobber existing files). Auto-init creates a regular (non-bare)
+  // repo so the `denyCurrentBranch updateInstead` config below
+  // auto-extracts the working tree on each push — pushed files become
+  // static resources at the corresponding pod URL.
   let gitInfo = findGitDir(repoAbs);
   if (!gitInfo && isGitWriteOperation(request.url)) {
-    gitInfo = tryAutoInitBareRepo(repoAbs, request.log);
+    gitInfo = tryAutoInitRepo(repoAbs, request.log);
   }
   if (!gitInfo) {
     setGitCorsHeaders(reply);
