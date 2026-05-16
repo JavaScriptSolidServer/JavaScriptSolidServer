@@ -56,7 +56,7 @@ describe('Git auto-init on first push', () => {
     await fs.remove(DATA_DIR);
   });
 
-  it('auto-inits a bare repo on push-advertise to a non-existent path', async () => {
+  it('auto-inits a regular repo on push-advertise to a non-existent path', async () => {
     const repoPath = 'public/apps/penny';
     const url = `${baseUrl}/${repoPath}/info/refs?service=git-receive-pack`;
 
@@ -66,13 +66,18 @@ describe('Git auto-init on first push', () => {
     const repoAbs = path.resolve(DATA_DIR, repoPath);
     assert.ok(existsSync(repoAbs), 'directory must be created');
     assert.ok(statSync(repoAbs).isDirectory(), 'created path must be a directory');
-    // Bare repo: HEAD + objects/ + refs/ live at the path itself.
-    assert.ok(existsSync(path.join(repoAbs, 'HEAD')), 'bare repo HEAD must exist');
-    assert.ok(existsSync(path.join(repoAbs, 'objects')), 'bare repo objects/ must exist');
-    assert.ok(existsSync(path.join(repoAbs, 'refs')), 'bare repo refs/ must exist');
+    // Regular (non-bare) repo: .git/ subdirectory holds the internals.
+    // Working tree lives at the path itself so pushed files become
+    // static resources.
+    const dotGit = path.join(repoAbs, '.git');
+    assert.ok(existsSync(dotGit), '.git subdirectory must exist');
+    assert.ok(statSync(dotGit).isDirectory(), '.git must be a directory');
+    assert.ok(existsSync(path.join(dotGit, 'HEAD')), '.git/HEAD must exist');
+    assert.ok(existsSync(path.join(dotGit, 'objects')), '.git/objects must exist');
+    assert.ok(existsSync(path.join(dotGit, 'refs')), '.git/refs must exist');
   });
 
-  it('auto-inits a bare repo when the target directory exists but is empty', async () => {
+  it('auto-inits a regular repo when the target directory exists but is empty', async () => {
     const repoPath = 'public/empty-dir';
     await fs.ensureDir(path.resolve(DATA_DIR, repoPath));
 
@@ -81,7 +86,7 @@ describe('Git auto-init on first push', () => {
     assert.strictEqual(res.status, 200);
 
     const repoAbs = path.resolve(DATA_DIR, repoPath);
-    assert.ok(existsSync(path.join(repoAbs, 'HEAD')), 'bare repo HEAD must exist');
+    assert.ok(existsSync(path.join(repoAbs, '.git', 'HEAD')), '.git/HEAD must exist');
   });
 
   it('refuses to auto-init when the target directory contains user content', async () => {
@@ -96,8 +101,7 @@ describe('Git auto-init on first push', () => {
 
     // User's file must be intact and no .git should have been created.
     assert.ok(existsSync(path.join(repoAbs, 'index.html')), 'user file must survive');
-    assert.ok(!existsSync(path.join(repoAbs, 'HEAD')), 'no bare-repo files should appear');
-    assert.ok(!existsSync(path.join(repoAbs, 'objects')), 'no bare-repo objects/ should appear');
+    assert.ok(!existsSync(path.join(repoAbs, '.git')), 'no .git directory should appear');
   });
 
   it('does NOT auto-init on a fetch (`git-upload-pack`)', async () => {
@@ -151,8 +155,8 @@ describe('Git auto-init on first push', () => {
     const repoPath = 'public/apps/penny';
     const repoAbs = path.resolve(DATA_DIR, repoPath);
     // Repo was created by the first test in this suite; capture its
-    // initial HEAD inode/mtime to verify we don't recreate the repo.
-    const headPath = path.join(repoAbs, 'HEAD');
+    // initial HEAD inode to verify we don't recreate the repo.
+    const headPath = path.join(repoAbs, '.git', 'HEAD');
     assert.ok(existsSync(headPath), 'prereq: repo from earlier test still exists');
     const before = statSync(headPath);
 
