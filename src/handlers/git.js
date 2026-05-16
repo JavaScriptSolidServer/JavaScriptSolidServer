@@ -140,7 +140,13 @@ function tryAutoInitRepo(repoAbs, log) {
     } else {
       mkdirSync(repoAbs, { recursive: true });
     }
-    const result = spawnSync('git', ['init', repoAbs], {
+    // Pin the initial branch to `main` regardless of the server's
+    // `init.defaultBranch` config. `receive.denyCurrentBranch
+    // updateInstead` only extracts the working tree when the push
+    // targets the branch HEAD points at, so a deterministic default
+    // keeps `git push pod HEAD:main` working on every deployment. See
+    // #471.
+    const result = spawnSync('git', ['init', '-b', 'main', repoAbs], {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     if (result.status !== 0) {
