@@ -1,5 +1,5 @@
-import { spawn, execSync } from 'child_process';
-import { existsSync, statSync, mkdirSync, writeFileSync } from 'fs';
+import { spawn, spawnSync, execSync } from 'child_process';
+import { existsSync, statSync, mkdirSync, readdirSync, writeFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { getDataRoot } from '../utils/url.js';
 
@@ -89,6 +89,46 @@ function findGitDir(repoPath) {
   return null;
 }
 
+/**
+ * Auto-initialize a bare git repo at repoAbs to accept a first push, but
+ * only when it's safe to do so. The caller must invoke this *after* the
+ * standard ACL Write check has passed (i.e. inside the existing
+ * preHandler-gated path for `git-receive-pack`), so authorization is
+ * already enforced.
+ *
+ * Safe iff one of:
+ *   - the target path does not exist (we create it), or
+ *   - the target path exists, is a directory, and is empty.
+ *
+ * Refuses (returns null) for any other state — most importantly when the
+ * directory contains non-`.git` files, so we don't risk corrupting a
+ * user-content directory (e.g. /public/apps/foo with regular files) by
+ * promoting it into a git repo.
+ *
+ * Uses spawnSync with an arg array (no shell interpolation) and swallows
+ * exceptions; on any failure the caller falls through to the normal 404.
+ *
+ * @param {string} repoAbs - absolute path to the candidate repo
+ * @returns {{gitDir: string, isRegular: boolean}|null}
+ */
+function tryAutoInitBareRepo(repoAbs) {
+  try {
+    if (existsSync(repoAbs)) {
+      if (!statSync(repoAbs).isDirectory()) return null;
+      if (readdirSync(repoAbs).length > 0) return null;
+    } else {
+      mkdirSync(repoAbs, { recursive: true });
+    }
+    const result = spawnSync('git', ['init', '--bare', repoAbs], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (result.status !== 0) return null;
+    return findGitDir(repoAbs);
+  } catch {
+    return null;
+  }
+}
+
 // CORS headers for git responses. Single source of truth — used by the
 // success path (Fastify reply on the OPTIONS preflight, raw stream on
 // http-backend output) and by every 4xx early-return. Without these,
@@ -151,8 +191,16 @@ export async function handleGit(request, reply) {
     return reply.code(403).send({ error: 'Path traversal detected' });
   }
 
-  // Find git directory
-  const gitInfo = findGitDir(repoAbs);
+  // Find git directory. On a push (`git-receive-pack`) to a path that
+  // doesn't yet contain a repo, auto-init a bare one if the location is
+  // safe to claim — the standard preHandler has already verified ACL
+  // Write on this path, so authorization is enforced. See
+  // tryAutoInitBareRepo for the safety conditions (empty / non-existent
+  // path only; refuses to clobber existing files).
+  let gitInfo = findGitDir(repoAbs);
+  if (!gitInfo && isGitWriteOperation(request.url)) {
+    gitInfo = tryAutoInitBareRepo(repoAbs);
+  }
   if (!gitInfo) {
     setGitCorsHeaders(reply);
     return reply.code(404).send({ error: 'Not a git repository' });
