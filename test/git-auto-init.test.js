@@ -15,7 +15,7 @@ import { createServer } from '../src/server.js';
 import { createServer as createNetServer } from 'net';
 import fs from 'fs-extra';
 import path from 'path';
-import { existsSync, statSync, writeFileSync } from 'fs';
+import { existsSync, statSync, writeFileSync, readFileSync } from 'fs';
 
 const TEST_HOST = 'localhost';
 const DATA_DIR = './test-data-git-auto-init';
@@ -75,6 +75,21 @@ describe('Git auto-init on first push', () => {
     assert.ok(existsSync(path.join(dotGit, 'HEAD')), '.git/HEAD must exist');
     assert.ok(existsSync(path.join(dotGit, 'objects')), '.git/objects must exist');
     assert.ok(existsSync(path.join(dotGit, 'refs')), '.git/refs must exist');
+  });
+
+  it('pins the initial branch to `main` regardless of server config', async () => {
+    // `updateInstead` only extracts the working tree when the push
+    // targets the branch HEAD points at. If `git init` honoured the
+    // server's `init.defaultBranch`, a server configured for e.g.
+    // `gh-pages` would silently fail to extract files pushed to `main`.
+    // Pin the auto-init'd HEAD so `git push pod HEAD:main` works
+    // everywhere. See #471.
+    const repoPath = 'public/apps/penny';
+    const headPath = path.resolve(DATA_DIR, repoPath, '.git', 'HEAD');
+    assert.ok(existsSync(headPath), 'prereq: repo from earlier test still exists');
+    const head = readFileSync(headPath, 'utf8').trim();
+    assert.strictEqual(head, 'ref: refs/heads/main',
+      `HEAD must point at refs/heads/main, got: ${head}`);
   });
 
   it('auto-inits a regular repo when the target directory exists but is empty', async () => {
