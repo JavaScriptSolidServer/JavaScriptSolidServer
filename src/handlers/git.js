@@ -105,13 +105,25 @@ function findGitDir(repoPath) {
  * user-content directory (e.g. /public/apps/foo with regular files) by
  * promoting it into a git repo.
  *
- * Uses spawnSync with an arg array (no shell interpolation) and swallows
- * exceptions; on any failure the caller falls through to the normal 404.
+ * Uses spawnSync with an arg array (no shell interpolation). On any
+ * failure (missing `git`, permission denied, init exits non-zero) the
+ * caller falls through to the normal 404, with the underlying cause
+ * surfaced to the request logger so operators can diagnose.
+ *
+ * SYMLINK CAVEAT: this function relies on the caller's path-string
+ * containment check (isPathWithinDataRoot) which does not follow
+ * symlinks. If an attacker with Write ACL has placed a symlink under
+ * dataRoot pointing outside, statSync/readdirSync/spawnSync here will
+ * dereference it. That's a pre-existing weakness of the JSS handler,
+ * not introduced by auto-init — fixing it requires realpath
+ * normalisation across every write path in the handler, out of scope
+ * for this PR. Hardening tracked for a follow-up.
  *
  * @param {string} repoAbs - absolute path to the candidate repo
+ * @param {object} [log] - optional Fastify request logger for diagnostics
  * @returns {{gitDir: string, isRegular: boolean}|null}
  */
-function tryAutoInitBareRepo(repoAbs) {
+function tryAutoInitBareRepo(repoAbs, log) {
   try {
     if (existsSync(repoAbs)) {
       if (!statSync(repoAbs).isDirectory()) return null;
@@ -122,9 +134,18 @@ function tryAutoInitBareRepo(repoAbs) {
     const result = spawnSync('git', ['init', '--bare', repoAbs], {
       stdio: ['ignore', 'pipe', 'pipe']
     });
-    if (result.status !== 0) return null;
-    return findGitDir(repoAbs);
-  } catch {
+    if (result.status !== 0) {
+      log?.warn?.(
+        { repoAbs, status: result.status, stderr: result.stderr?.toString?.().slice(0, 500) },
+        'git auto-init: `git init --bare` exited non-zero'
+      );
+      return null;
+    }
+    const info = findGitDir(repoAbs);
+    if (info) log?.info?.({ repoAbs }, 'git auto-init: bare repo created on first push');
+    return info;
+  } catch (err) {
+    log?.warn?.({ err, repoAbs }, 'git auto-init: refusing to init (filesystem error)');
     return null;
   }
 }
@@ -199,7 +220,7 @@ export async function handleGit(request, reply) {
   // path only; refuses to clobber existing files).
   let gitInfo = findGitDir(repoAbs);
   if (!gitInfo && isGitWriteOperation(request.url)) {
-    gitInfo = tryAutoInitBareRepo(repoAbs);
+    gitInfo = tryAutoInitBareRepo(repoAbs, request.log);
   }
   if (!gitInfo) {
     setGitCorsHeaders(reply);
