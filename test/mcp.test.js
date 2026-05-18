@@ -19,6 +19,7 @@ import {
   getBaseUrl,
   getPodToken
 } from './helpers.js';
+import { emitChange } from '../src/notifications/events.js';
 
 let token;
 
@@ -235,6 +236,276 @@ describe('MCP server (--mcp enabled)', () => {
   it('rejects unknown method', async () => {
     const { body } = await rpc({ jsonrpc: '2.0', id: 99, method: 'doesnt/exist' });
     assert.strictEqual(body.error?.code, -32601);
+  });
+
+  // --- read_acl / write_acl (#496) ---
+
+  it('read_acl returns existing authorizations for /mcptest/public/', async () => {
+    const { body } = await rpc({
+      jsonrpc: '2.0', id: 200, method: 'tools/call',
+      params: { name: 'read_acl', arguments: { path: '/mcptest/public/' } }
+    }, { token });
+    assert.strictEqual(body.result.isError, false, body.result.content?.[0]?.text);
+    const payload = JSON.parse(body.result.content[0].text);
+    assert.strictEqual(payload.exists, true);
+    assert.ok(Array.isArray(payload.authorizations));
+    assert.ok(payload.authorizations.length > 0, 'should have at least owner auth');
+    // Owner auth should include Read, Write, Control
+    const ownerAuth = payload.authorizations.find(a => a.modes.includes('Control'));
+    assert.ok(ownerAuth, 'owner auth with Control should exist');
+  });
+
+  it('write_acl + read_acl round-trip', async () => {
+    const auths = [
+      {
+        agents: ['/mcptest/profile/card.jsonld#me'],
+        modes: ['Read', 'Write', 'Control'],
+        isDefault: true
+      },
+      {
+        agentClasses: ['acl:AuthenticatedAgent'],
+        modes: ['Read', 'Append'],
+        isDefault: true
+      },
+      {
+        agentClasses: ['foaf:Agent'],
+        modes: ['Read'],
+        isDefault: true
+      }
+    ];
+    const wr = await rpc({
+      jsonrpc: '2.0', id: 201, method: 'tools/call',
+      params: { name: 'write_acl', arguments: { path: '/mcptest/public/', authorizations: auths } }
+    }, { token });
+    assert.strictEqual(wr.body.result.isError, false, wr.body.result.content?.[0]?.text);
+
+    const rd = await rpc({
+      jsonrpc: '2.0', id: 202, method: 'tools/call',
+      params: { name: 'read_acl', arguments: { path: '/mcptest/public/' } }
+    }, { token });
+    const payload = JSON.parse(rd.body.result.content[0].text);
+    assert.strictEqual(payload.authorizations.length, 3);
+    const classes = payload.authorizations.flatMap(a => a.agentClasses || []);
+    assert.ok(classes.includes('acl:AuthenticatedAgent'));
+    assert.ok(classes.includes('foaf:Agent'));
+  });
+
+  it('write_acl denied without Control', async () => {
+    const { body } = await rpc({
+      jsonrpc: '2.0', id: 203, method: 'tools/call',
+      params: { name: 'write_acl', arguments: {
+        path: '/mcptest/public/',
+        authorizations: [{ agentClasses: ['foaf:Agent'], modes: ['Read'] }]
+      } }
+    });  // no token
+    assert.ok(body.result.isError);
+    assert.match(body.result.content[0].text, /control/i);
+  });
+
+  // --- call_remote_pod (#495) ---
+
+  it('call_remote_pod denied without federation gate access', async () => {
+    const { body } = await rpc({
+      jsonrpc: '2.0', id: 210, method: 'tools/call',
+      params: {
+        name: 'call_remote_pod',
+        arguments: {
+          pod_url: 'http://example.invalid',
+          tool: 'pod_info',
+          arguments: {}
+        }
+      }
+    });  // no token
+    assert.ok(body.result.isError);
+    // Anonymous → "local WebID identity" error; authenticated-but-not-gated → "federation gate"
+    assert.match(body.result.content[0].text, /federation/i);
+  });
+
+  it('call_remote_pod hits its own /mcp when gated open', async () => {
+    // Federation gate lives at <agent-pod>/private/federation/. For the
+    // mcptest pod owner that's /mcptest/private/federation/. Create the
+    // container, then grant AuthenticatedAgent Write there.
+    await rpc({
+      jsonrpc: '2.0', id: 220, method: 'tools/call',
+      params: {
+        name: 'create_resource',
+        arguments: { container: '/mcptest/private/', slug: 'federation', isContainer: true }
+      }
+    }, { token });
+    await rpc({
+      jsonrpc: '2.0', id: 221, method: 'tools/call',
+      params: {
+        name: 'write_acl',
+        arguments: {
+          path: '/mcptest/private/federation/',
+          authorizations: [
+            {
+              agents: ['/mcptest/profile/card.jsonld#me'],
+              modes: ['Read', 'Write', 'Control'],
+              isDefault: true
+            }
+          ]
+        }
+      }
+    }, { token });
+
+    // Now call our own MCP back at /mcp invoking pod_info
+    const base = getBaseUrl();
+    const { body } = await rpc({
+      jsonrpc: '2.0', id: 222, method: 'tools/call',
+      params: {
+        name: 'call_remote_pod',
+        arguments: {
+          pod_url: base,
+          tool: 'pod_info',
+          arguments: {}
+        }
+      }
+    }, { token });
+    assert.strictEqual(body.result.isError, false, body.result.content?.[0]?.text);
+    const payload = JSON.parse(body.result.content[0].text);
+    assert.strictEqual(payload.depth, 1);
+    assert.ok(payload.remote_result);
+  });
+
+  it('call_remote_pod enforces depth cap', async () => {
+    // Force an inbound MCP-Federation-Depth header so the next hop trips MAX
+    const res = await request('/mcp', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'MCP-Federation-Depth': '3'  // already at max → next hop would be 4
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 230, method: 'tools/call',
+        params: {
+          name: 'call_remote_pod',
+          arguments: {
+            pod_url: getBaseUrl(),
+            tool: 'pod_info',
+            arguments: {}
+          }
+        }
+      })
+    });
+    const data = await res.json();
+    assert.ok(data.result.isError);
+    assert.match(data.result.content[0].text, /depth exceeded/);
+  });
+
+  // --- subscribe (#494) ---
+
+  it('subscribe streams SSE events on resourceEvents change', async () => {
+    // Open the SSE stream
+    const res = await fetch(`${getBaseUrl()}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 300, method: 'tools/call',
+        params: { name: 'subscribe', arguments: { path: '/mcptest/public/' } }
+      })
+    });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+
+    // Read the initial "subscribed" event then trigger a change
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let events = [];
+
+    async function readUntil(predicate, timeoutMs = 3000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const { value, done } = await Promise.race([
+          reader.read(),
+          new Promise(r => setTimeout(() => r({ value: null, done: false }), 200))
+        ]);
+        if (done) break;
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          // Parse complete SSE events (terminated by \n\n)
+          let idx;
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const chunk = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const dataLine = chunk.split('\n').find(l => l.startsWith('data: '));
+            if (dataLine) {
+              events.push(JSON.parse(dataLine.slice(6)));
+            }
+          }
+          if (predicate(events)) return;
+        }
+      }
+    }
+
+    await readUntil(e => e.length >= 1);  // wait for "subscribed" event
+    assert.ok(events.length >= 1);
+    assert.strictEqual(events[0].method, 'notifications/tool_event');
+    assert.strictEqual(events[0].params.event.type, 'subscribed');
+
+    // Trigger a change inside scope
+    emitChange(`${getBaseUrl()}/mcptest/public/triggered.txt`);
+
+    await readUntil(e => e.some(ev => ev.params?.event?.type === 'resource_changed'), 3000);
+    const change = events.find(ev => ev.params?.event?.type === 'resource_changed');
+    assert.ok(change, `expected resource_changed event; got ${JSON.stringify(events)}`);
+    assert.strictEqual(change.params.event.path, '/mcptest/public/triggered.txt');
+
+    // Clean up: cancel stream
+    await reader.cancel();
+  });
+
+  it('subscribe filters by scope', async () => {
+    const res = await fetch(`${getBaseUrl()}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 301, method: 'tools/call',
+        params: { name: 'subscribe', arguments: { path: '/mcptest/public/' } }
+      })
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let events = [];
+
+    async function read(ms = 800) {
+      const deadline = Date.now() + ms;
+      while (Date.now() < deadline) {
+        const { value, done } = await Promise.race([
+          reader.read(),
+          new Promise(r => setTimeout(() => r({ value: null, done: false }), 100))
+        ]);
+        if (done) break;
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const chunk = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            const dataLine = chunk.split('\n').find(l => l.startsWith('data: '));
+            if (dataLine) events.push(JSON.parse(dataLine.slice(6)));
+          }
+        }
+      }
+    }
+
+    await read(500);  // pick up "subscribed"
+    // Out-of-scope change — should NOT trigger an event
+    emitChange(`${getBaseUrl()}/mcptest/private/notes/x.txt`);
+    await read(500);
+    const changes = events.filter(e => e.params?.event?.type === 'resource_changed');
+    assert.strictEqual(changes.length, 0, 'out-of-scope change should not emit');
+
+    await reader.cancel();
   });
 
   it('rejects unknown tool', async () => {
