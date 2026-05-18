@@ -152,6 +152,8 @@ program
   .option('--no-mongo', 'Disable MongoDB-backed /db/ route')
   .option('--mongo-url <url>', 'MongoDB connection URL (default: mongodb://localhost:27017)')
   .option('--mongo-database <name>', 'MongoDB database name (default: solid)')
+  .option('--mcp', 'Enable MCP (Model Context Protocol) server at /mcp — pod as a tool surface for agents (#490)')
+  .option('--no-mcp', 'Disable MCP server')
   .option('-q, --quiet', 'Suppress log output')
   .option('--log-level <level>', 'Log level: error, warn, info, debug (default: info)')
   .option('--print-config', 'Print configuration and exit')
@@ -234,6 +236,7 @@ program
         mongo: config.mongo,
         mongoUrl: config.mongoUrl,
         mongoDatabase: config.mongoDatabase,
+        mcp: config.mcp,
       });
 
       await server.listen({ port: config.port, host: config.host });
