@@ -25,8 +25,8 @@
  */
 
 import { spawnSync } from 'child_process';
-import { existsSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join, isAbsolute } from 'path';
 import { nip98Token } from '../nostr/event.js';
 
 // ANSI helpers — keep zero-dep so this works in any embedded usage.
@@ -85,6 +85,111 @@ function parseAppSpec(input) {
     return { error: `invalid ref "${ref}"` };
   }
   return { source, name, ref };
+}
+
+/**
+ * Resolve a `--bundle` source string to either a fully-qualified URL
+ * or an absolute local-file path.
+ *
+ *   --bundle media                  → github.com/solid-apps/bundles/main/media.jsonld
+ *   --bundle <org>/<repo>           → github.com/<org>/<repo>/main/bundle.jsonld
+ *   --bundle https://...            → as-is (must end in a JSON-LD doc)
+ *   --bundle ./path or /abs/path    → absolute local-file path
+ *
+ * Returns { url } or { path } or { error }.
+ */
+function resolveBundleSource(input) {
+  if (!input || typeof input !== 'string') {
+    return { error: 'bundle source is required' };
+  }
+  if (/^https?:\/\//.test(input)) {
+    return { url: input };
+  }
+  if (input.startsWith('./') || input.startsWith('../') || isAbsolute(input) || input.startsWith('~/')) {
+    const path = input.startsWith('~/')
+      ? join(process.env.HOME || '', input.slice(2))
+      : (isAbsolute(input) ? input : join(process.cwd(), input));
+    return { path };
+  }
+  // Bare names + <org>/<repo> shorthand. We hit raw.githubusercontent.com
+  // so the response is the raw JSON-LD body (no HTML wrapper).
+  if (input.includes('/')) {
+    const cleaned = input.replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
+    if (cleaned.split('/').length !== 2) {
+      return { error: 'expected <org>/<repo> shorthand for bundle source' };
+    }
+    return { url: `https://raw.githubusercontent.com/${cleaned}/main/bundle.jsonld` };
+  }
+  if (!/^[a-z0-9][a-z0-9_.-]*$/i.test(input)) {
+    return { error: `invalid bundle name "${input}"` };
+  }
+  return { url: `https://raw.githubusercontent.com/solid-apps/bundles/main/${input}.jsonld` };
+}
+
+/**
+ * Fetch + parse a bundle into a normalized list of app-spec strings.
+ *
+ * Returns { name, description, items } or { error }.
+ *
+ * Items are normalized: each becomes the string-form spec the caller
+ * feeds to `parseAppSpec`. Object items with `app:spec` are unwrapped
+ * to their spec string; the optional label/description are ignored
+ * by the install path (they're for UI tooling that consumes bundles).
+ */
+async function loadBundle(resolved) {
+  let body;
+  try {
+    if (resolved.path) {
+      if (!existsSync(resolved.path)) {
+        return { error: `bundle file not found: ${resolved.path}` };
+      }
+      body = readFileSync(resolved.path, 'utf8');
+    } else {
+      const r = await fetch(resolved.url);
+      if (!r.ok) return { error: `bundle fetch failed: HTTP ${r.status} on ${resolved.url}` };
+      body = await r.text();
+    }
+  } catch (e) {
+    return { error: `could not read bundle: ${e.message}` };
+  }
+
+  let doc;
+  try {
+    doc = JSON.parse(body);
+  } catch (e) {
+    return { error: `bundle is not valid JSON: ${e.message}` };
+  }
+
+  // Items live under `schema:itemListElement` (preferred) or the
+  // un-prefixed `itemListElement` (common when @context aliases it).
+  const rawItems = doc['schema:itemListElement']
+    ?? doc['itemListElement']
+    ?? doc['items']  // also accept a loose `items` key for hand-written bundles
+    ?? null;
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    return { error: 'bundle has no items (expected schema:itemListElement array)' };
+  }
+
+  const items = [];
+  for (const it of rawItems) {
+    if (typeof it === 'string') {
+      items.push(it);
+    } else if (it && typeof it === 'object') {
+      const spec = it['app:spec'] || it['spec'] || it['urn:jss:app:spec'];
+      if (typeof spec !== 'string') {
+        return { error: `bundle item missing app:spec: ${JSON.stringify(it).slice(0, 100)}` };
+      }
+      items.push(spec);
+    } else {
+      return { error: `bundle item must be a string or object, got: ${typeof it}` };
+    }
+  }
+
+  return {
+    name: doc['schema:name'] || doc.name || null,
+    description: doc['schema:description'] || doc.description || null,
+    items
+  };
 }
 
 /**
@@ -207,20 +312,41 @@ export async function runInstall(names, options) {
   const password = options.password || process.env.JSS_SINGLE_USER_PASSWORD || 'me';
   const nostrPrivkey = options.nostrPrivkey || process.env.NOSTR_PRIVKEY || null;
 
-  if (!names || names.length === 0) {
-    throw new Error('expected at least one app name. Try: `jss install chrome`');
-  }
-
   // Validate Nostr privkey if supplied (64 lowercase-hex chars).
   if (nostrPrivkey && !/^[0-9a-f]{64}$/i.test(nostrPrivkey)) {
     console.error(red('✗ --nostr-privkey must be 64 hex chars'));
     throw new Error('invalid --nostr-privkey');
   }
 
+  // Bundle mode: resolve, fetch, parse, then concatenate items with
+  // any positional ad-hoc apps. `--bundle <src> chrome` installs the
+  // bundle + chrome; same auth + target flags apply to all.
+  let bundleMeta = null;
+  let allNames = [...(names || [])];
+  if (options.bundle) {
+    const resolved = resolveBundleSource(options.bundle);
+    if (resolved.error) {
+      console.error(red(`✗ --bundle: ${resolved.error}`));
+      throw new Error(resolved.error);
+    }
+    const bundle = await loadBundle(resolved);
+    if (bundle.error) {
+      console.error(red(`✗ --bundle: ${bundle.error}`));
+      throw new Error(bundle.error);
+    }
+    bundleMeta = { name: bundle.name, description: bundle.description, count: bundle.items.length };
+    // Bundle items go first; positional names appended afterwards.
+    allNames = [...bundle.items, ...allNames];
+  }
+
+  if (allNames.length === 0) {
+    throw new Error('expected at least one app name or a --bundle. Try: `jss install chrome`');
+  }
+
   // Validate every spec up front so we report invalid names before
   // doing any network work.
   const specs = [];
-  for (const n of names) {
+  for (const n of allNames) {
     const spec = parseAppSpec(n);
     if (spec.error) {
       console.error(red(`✗ ${n}: ${spec.error}`));
@@ -229,7 +355,15 @@ export async function runInstall(names, options) {
     specs.push(spec);
   }
 
-  console.log(bold(`\nInstalling ${specs.length} app${specs.length === 1 ? '' : 's'} → `) + green(pod));
+  if (bundleMeta) {
+    const label = bundleMeta.name
+      ? `bundle "${bundleMeta.name}"`
+      : 'bundle';
+    console.log(bold(`\nInstalling ${specs.length} app${specs.length === 1 ? '' : 's'} from ${label} → `) + green(pod));
+    if (bundleMeta.description) console.log(dim(`  ${bundleMeta.description}`));
+  } else {
+    console.log(bold(`\nInstalling ${specs.length} app${specs.length === 1 ? '' : 's'} → `) + green(pod));
+  }
   if (nostrPrivkey) console.log(dim('  (signing with Nostr privkey — NIP-98)'));
   console.log('');
 
