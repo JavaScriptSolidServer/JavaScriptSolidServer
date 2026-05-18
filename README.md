@@ -105,6 +105,7 @@ Full options: [docs/configuration.md](docs/configuration.md)
 | Mashlib / SolidOS UI | [docs/mashlib.md](docs/mashlib.md) |
 | WebSocket Notifications | [docs/notifications.md](docs/notifications.md) |
 | Git Support | [docs/git-support.md](docs/git-support.md) |
+| Installing Apps | [docs/app-install.md](docs/app-install.md) |
 | Nostr Relay | [docs/nostr.md](docs/nostr.md) |
 | ActivityPub & Mastodon API | [docs/activitypub.md](docs/activitypub.md) |
 | remoteStorage | [docs/remotestorage.md](docs/remotestorage.md) |
