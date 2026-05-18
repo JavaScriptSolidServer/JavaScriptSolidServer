@@ -290,6 +290,26 @@ describe('MCP server (--mcp enabled)', () => {
     assert.ok(classes.includes('foaf:Agent'));
   });
 
+  it('write_acl refuses to lock caller out (safety)', async () => {
+    // Try to write an ACL that grants Control only to a foreign WebID
+    // — would lock the caller (mcptest owner) out. Safety should refuse.
+    const { body } = await rpc({
+      jsonrpc: '2.0', id: 204, method: 'tools/call',
+      params: { name: 'write_acl', arguments: {
+        path: '/mcptest/public/',
+        authorizations: [
+          {
+            agents: ['https://stranger.example/profile#me'],
+            modes: ['Read', 'Write', 'Control'],
+            isDefault: true
+          }
+        ]
+      } }
+    }, { token });
+    assert.ok(body.result.isError);
+    assert.match(body.result.content[0].text, /lock the caller out|would not grant Control/i);
+  });
+
   it('write_acl denied without Control', async () => {
     const { body } = await rpc({
       jsonrpc: '2.0', id: 203, method: 'tools/call',

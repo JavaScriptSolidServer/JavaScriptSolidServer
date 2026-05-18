@@ -12,7 +12,7 @@
 import * as storage from '../storage/filesystem.js';
 import { checkAccess } from '../wac/checker.js';
 import { AccessMode, parseAcl, serializeAcl } from '../wac/parser.js';
-import { resourceEvents } from '../notifications/events.js';
+import { resourceEvents, emitChange } from '../notifications/events.js';
 import { toolText, toolError, toolJson } from './protocol.js';
 import { discoverSkills, readSkill, readPodSkill } from './skills.js';
 import { readFile, readdir, stat as fsStat } from 'fs/promises';
@@ -139,6 +139,7 @@ async function write_resource({ path, content, contentType }, ctx) {
   await storage.write(path, Buffer.from(content, 'utf8'), {
     contentType: contentType || 'text/plain'
   });
+  emitChange(buildUrl(ctx, path));
   return toolText(`wrote ${path} (${Buffer.byteLength(content, 'utf8')} bytes)`);
 }
 
@@ -156,11 +157,13 @@ async function create_resource({ container, slug, content, contentType, isContai
   const childPath = `${container}${name}${isContainer ? '/' : ''}`;
   if (isContainer) {
     await storage.createContainer(childPath);
+    emitChange(buildUrl(ctx, childPath));
     return toolText(`created container ${childPath}`);
   }
   await storage.write(childPath, Buffer.from(content || '', 'utf8'), {
     contentType: contentType || 'text/plain'
   });
+  emitChange(buildUrl(ctx, childPath));
   return toolText(`created ${childPath}`);
 }
 
@@ -173,6 +176,7 @@ async function delete_resource({ path }, ctx) {
     return toolError(`not found: ${path}`);
   }
   await storage.remove(path);
+  emitChange(buildUrl(ctx, path));
   return toolText(`deleted ${path}`);
 }
 
@@ -337,9 +341,37 @@ async function write_acl({ path, authorizations }, ctx) {
   }
   const aclPath = aclUrlFor(path);
   const doc = buildAclDoc({ authorizations });
-  await storage.write(aclPath, Buffer.from(serializeAcl(doc), 'utf8'), {
+  const serialized = serializeAcl(doc);
+
+  // Safety: refuse to write an ACL that would lock the caller out of
+  // future Control. This is the most common write_acl footgun —
+  // typically caused by relative WebID paths in `agents` resolving
+  // against the .acl URL to a different absolute URI than the caller's
+  // actual WebID. Parse the proposed ACL with its real URL so relative
+  // agents resolve correctly, then check whether any authorization
+  // grants Control to the caller.
+  const aclAbsUrl = buildUrl(ctx, aclPath);
+  const proposed = await parseAcl(serialized, aclAbsUrl);
+  const callerHasControl = proposed.some(auth => {
+    if (!(auth.modes || []).includes(AccessMode.CONTROL)) return false;
+    if (ctx.webId && (auth.agents || []).includes(ctx.webId)) return true;
+    if ((auth.agentClasses || []).includes(FOAF_AGENT)) return true;
+    if (ctx.webId && (auth.agentClasses || []).includes(ACL_AUTH_AGENT)) return true;
+    return false;
+  });
+  if (!callerHasControl) {
+    return toolError(
+      `write_acl refused: the proposed ACL would not grant Control to the caller (${ctx.webId || 'anonymous'}). ` +
+      'This is typically caused by relative WebID paths in agents resolving against the .acl URL — use absolute WebIDs. ' +
+      'If you really want to remove your own access (e.g. transferring ownership), do it in two steps: ' +
+      'first grant Control to the new owner, then have the new owner write_acl without you.'
+    );
+  }
+
+  await storage.write(aclPath, Buffer.from(serialized, 'utf8'), {
     contentType: 'application/ld+json'
   });
+  emitChange(buildUrl(ctx, aclPath));
   return toolText(`wrote ${aclPath} (${authorizations.length} authorization${authorizations.length === 1 ? '' : 's'})`);
 }
 

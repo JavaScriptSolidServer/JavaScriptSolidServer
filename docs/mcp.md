@@ -171,6 +171,40 @@ http://localhost:4443/mcp
 
 For authenticated access, configure the client to send `Authorization: Bearer <token>`. Tokens come from `POST /idp/credentials` (username/password) or from any compatible OIDC/DPoP flow.
 
+## Footguns
+
+A short list of real gotchas to know about, learned from live-fire use:
+
+### Use absolute WebIDs in `write_acl` agents
+
+The `agents` array in a `write_acl` authorization is interpreted as a list of URIs. Relative paths (e.g. `../profile/card.jsonld#me`) resolve against the **.acl file's URL**, not the pod root — and the .acl URL changes depending on which resource the ACL applies to. Two pitfalls:
+
+```json
+// Pod owner WebID: http://example.com/profile/card.jsonld#me
+// Writing this ACL to /public/forum/.acl:
+{
+  "agents": ["../profile/card.jsonld#me"],          // wrong — resolves to /public/profile/card.jsonld#me
+  "agents": ["./profile/card.jsonld#me"],           // wrong — resolves to /public/forum/profile/card.jsonld#me
+  "agents": ["/profile/card.jsonld#me"],            // right — absolute path, resolves to /profile/card.jsonld#me
+  "agents": ["http://example.com/profile/card.jsonld#me"]  // right — absolute URL, host-portable
+}
+```
+
+**Always use absolute WebID URLs unless you know exactly what relative-URL resolution will give you.** Absolute URLs also make the ACL portable across hostnames.
+
+### `write_acl` will refuse if you'd lock yourself out
+
+If the proposed ACL doesn't grant `Control` to the caller (typically a relative-URL mistake), `write_acl` refuses with an explanatory error. This is a safety, not a permission check — it's stopping you from breaking your own access.
+
+If you really want to transfer ownership (remove your own access), do it in two steps:
+
+1. First `write_acl` granting Control to the new owner *in addition to* yourself
+2. Then the new owner calls `write_acl` removing you
+
+### Subscribe over long-running connections needs a keep-alive client
+
+The `subscribe` tool keeps an HTTP+SSE connection open indefinitely. Some HTTP clients, proxies, or load balancers will time out idle streams. If you're subscribing for hours, ensure your client handles SSE reconnect (most do; raw `curl` does not).
+
 ## What's not included (yet)
 
 The current cut ships CRUD, structured ACL editing, subscribe, federation, skills, docs, and introspection. Deferred:
