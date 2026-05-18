@@ -69,10 +69,10 @@ async function list_resources({ path }, ctx) {
   const entries = await storage.listContainer(path);
   return toolJson({
     container: path,
-    items: entries.map(e => ({
+    items: (entries || []).map(e => ({
       name: e.name,
-      path: `${path}${e.name}${e.isContainer ? '/' : ''}`,
-      isContainer: e.isContainer,
+      path: `${path}${e.name}${e.isDirectory ? '/' : ''}`,
+      isContainer: e.isDirectory,
       size: e.size ?? null,
       modified: e.modified ?? null
     }))
