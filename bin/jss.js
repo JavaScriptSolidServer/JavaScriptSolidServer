@@ -321,6 +321,7 @@ program
   .option('--pod <url>', 'Target pod URL', 'http://localhost:4443')
   .option('--user <name>', 'Username for IDP auth', 'me')
   .option('--password <pw>', 'Password (default: $JSS_SINGLE_USER_PASSWORD or "me")')
+  .option('--nostr-privkey <hex>', 'Sign install pushes with NIP-98 using this 64-char hex Nostr privkey instead of fetching a bearer token (default: $NOSTR_PRIVKEY)')
   .action(async (names, options) => {
     try {
       const { runInstall } = await import('../src/cli/install.js');
