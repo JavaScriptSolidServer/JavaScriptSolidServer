@@ -37,18 +37,53 @@ const dim = c(2);
 const bold = c(1);
 
 /**
- * Parse a Phase-1 app name. Strict: lowercase alphanumeric with
- * underscore / dot / dash, must start with alphanumeric. Phase 2 will
- * relax this to accept `<org>/<repo>`, URLs, `#ref`, `=rename`.
+ * Parse an app spec. Accepts (Phase 2 of #464):
+ *   - bare name              → github.com/solid-apps/<name>  (default registry)
+ *   - "<org>/<repo>"         → github.com/<org>/<repo>
+ *   - "https://..." full URL → as-is (must point at a git repo)
+ * Each form may carry an optional "#<ref>" suffix to pin a tag or branch:
+ *   chrome#v1.2 / solid-apps/chrome#main / https://...#v2
+ * And an optional "=<name>" suffix to override the pod-path name:
+ *   litecut/litecut.github.io=litecut
  */
 function parseAppSpec(input) {
-  if (!/^[a-z0-9][a-z0-9_.-]*$/i.test(input)) {
-    return { error: `invalid app name "${input}" (expected lowercase alphanumeric, dots, dashes, underscores)` };
+  // Pull off the rename suffix first, then the ref suffix.
+  let base = input;
+  let renameName = null;
+  const eqIx = base.lastIndexOf('=');
+  if (eqIx > 0) {
+    renameName = base.slice(eqIx + 1);
+    base = base.slice(0, eqIx);
   }
-  return {
-    source: `https://github.com/solid-apps/${input}`,
-    name: input
-  };
+  let ref = null;
+  const hashIx = base.lastIndexOf('#');
+  if (hashIx > 0) {
+    ref = base.slice(hashIx + 1) || null;
+    base = base.slice(0, hashIx);
+  }
+  let source, name;
+  if (/^https?:\/\//.test(base)) {
+    source = base.replace(/\.git$/, '').replace(/\/$/, '');
+    name = source.split('/').pop();
+  } else if (base.includes('/')) {
+    const cleaned = base.replace(/\.git$/, '').replace(/^\/+|\/+$/g, '');
+    if (cleaned.split('/').length !== 2) {
+      return { error: 'expected <org>/<repo> shorthand' };
+    }
+    source = `https://github.com/${cleaned}`;
+    name = cleaned.split('/').pop();
+  } else {
+    source = `https://github.com/solid-apps/${base}`;
+    name = base;
+  }
+  if (renameName) name = renameName;
+  if (!/^[a-z0-9][a-z0-9_.-]*$/i.test(name)) {
+    return { error: `invalid pod-path name "${name}"` };
+  }
+  if (ref && !/^[a-z0-9][a-z0-9_./-]*$/i.test(ref)) {
+    return { error: `invalid ref "${ref}"` };
+  }
+  return { source, name, ref };
 }
 
 /**
@@ -85,7 +120,7 @@ async function fetchToken({ pod, user, password }) {
  * uses for per-app output + exit-code aggregation.
  */
 async function installOne({ spec, pod, token }) {
-  const { source, name } = spec;
+  const { source, name, ref } = spec;
   const dest = `${pod}/public/apps/${name}`;
   const tmp = join('/tmp', `jss-install-${name}-${process.pid}`);
 
@@ -93,7 +128,11 @@ async function installOne({ spec, pod, token }) {
   if (existsSync(tmp)) spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
 
   // Clone (no --depth: shallow pushes are rejected by JSS git-receive).
-  const clone = spawnSync('git', ['clone', '--quiet', source, tmp], {
+  // --branch picks a tag or branch when pinned (e.g. `foo/bar#v2`).
+  const cloneArgs = ['clone', '--quiet'];
+  if (ref) cloneArgs.push('--branch', ref);
+  cloneArgs.push(source, tmp);
+  const clone = spawnSync('git', cloneArgs, {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   if (clone.status !== 0) {
