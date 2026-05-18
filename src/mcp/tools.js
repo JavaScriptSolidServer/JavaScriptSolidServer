@@ -11,12 +11,37 @@
 
 import * as storage from '../storage/filesystem.js';
 import { checkAccess } from '../wac/checker.js';
-import { AccessMode } from '../wac/parser.js';
+import { AccessMode, parseAcl, serializeAcl } from '../wac/parser.js';
+import { resourceEvents } from '../notifications/events.js';
 import { toolText, toolError, toolJson } from './protocol.js';
 import { discoverSkills, readSkill, readPodSkill } from './skills.js';
 import { readFile, readdir, stat as fsStat } from 'fs/promises';
 import { join, dirname, resolve as pathResolve } from 'path';
 import { fileURLToPath } from 'url';
+
+const ACL_NS = 'http://www.w3.org/ns/auth/acl#';
+const FOAF_AGENT = 'http://xmlns.com/foaf/0.1/Agent';
+const ACL_AUTH_AGENT = 'http://www.w3.org/ns/auth/acl#AuthenticatedAgent';
+const SHORT_MODE = {
+  [`${ACL_NS}Read`]: 'Read',
+  [`${ACL_NS}Write`]: 'Write',
+  [`${ACL_NS}Append`]: 'Append',
+  [`${ACL_NS}Control`]: 'Control'
+};
+const SHORT_AGENT_CLASS = {
+  [FOAF_AGENT]: 'foaf:Agent',
+  [ACL_AUTH_AGENT]: 'acl:AuthenticatedAgent'
+};
+const FULL_MODE = {
+  Read: `${ACL_NS}Read`,
+  Write: `${ACL_NS}Write`,
+  Append: `${ACL_NS}Append`,
+  Control: `${ACL_NS}Control`
+};
+const FULL_AGENT_CLASS = {
+  'foaf:Agent': FOAF_AGENT,
+  'acl:AuthenticatedAgent': ACL_AUTH_AGENT
+};
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const JSS_DOCS_DIR = pathResolve(__dirname, '..', '..', 'docs');
@@ -220,6 +245,268 @@ async function read_docs({ name }, _ctx) {
   }
 }
 
+// --- ACL tools (#496) ---
+
+function aclUrlFor(path) {
+  // For containers, ACL is <container>.acl
+  // For resources, ACL is <resource>.acl
+  if (path.endsWith('/')) return path + '.acl';
+  return path + '.acl';
+}
+
+function shortMode(mode) {
+  return SHORT_MODE[mode] || mode;
+}
+
+function shortAgentClass(uri) {
+  return SHORT_AGENT_CLASS[uri] || uri;
+}
+
+function fullMode(mode) {
+  return FULL_MODE[mode] || mode;
+}
+
+function fullAgentClass(value) {
+  return FULL_AGENT_CLASS[value] || value;
+}
+
+async function read_acl({ path }, ctx) {
+  if (!path) return toolError('path required');
+  // Reading the ACL document itself requires Control on the resource.
+  if (!(await wac(ctx, path, AccessMode.CONTROL))) {
+    return toolError(`access denied: control ${path}`);
+  }
+  const aclPath = aclUrlFor(path);
+  if (!(await storage.exists(aclPath))) {
+    return toolJson({ path, aclPath, exists: false, authorizations: [] });
+  }
+  const content = await storage.read(aclPath);
+  const aclUrl = buildUrl(ctx, aclPath);
+  const auths = await parseAcl(content.toString('utf8'), aclUrl);
+  return toolJson({
+    path,
+    aclPath,
+    exists: true,
+    authorizations: auths.map(a => ({
+      agents: a.agents || [],
+      agentClasses: (a.agentClasses || []).map(shortAgentClass),
+      modes: (a.modes || []).map(shortMode),
+      isDefault: !!a.default
+    }))
+  });
+}
+
+function buildAclDoc(structured) {
+  const graph = structured.authorizations.map((auth, i) => {
+    const node = {
+      '@id': `#auth${i}`,
+      '@type': 'acl:Authorization',
+      'acl:accessTo': { '@id': './' },
+      'acl:mode': (auth.modes || []).map(m => ({ '@id': `acl:${m}` }))
+    };
+    if (auth.agents && auth.agents.length) {
+      node['acl:agent'] = auth.agents.map(a => ({ '@id': a }));
+    }
+    if (auth.agentClasses && auth.agentClasses.length) {
+      node['acl:agentClass'] = auth.agentClasses.map(c => ({
+        '@id': fullAgentClass(c)
+      }));
+    }
+    if (auth.isDefault) {
+      node['acl:default'] = { '@id': './' };
+    }
+    return node;
+  });
+  return {
+    '@context': {
+      acl: ACL_NS,
+      foaf: 'http://xmlns.com/foaf/0.1/'
+    },
+    '@graph': graph
+  };
+}
+
+async function write_acl({ path, authorizations }, ctx) {
+  if (!path) return toolError('path required');
+  if (!Array.isArray(authorizations)) {
+    return toolError('authorizations must be an array');
+  }
+  // Writing the ACL document requires Control on the resource.
+  if (!(await wac(ctx, path, AccessMode.CONTROL))) {
+    return toolError(`access denied: control ${path}`);
+  }
+  const aclPath = aclUrlFor(path);
+  const doc = buildAclDoc({ authorizations });
+  await storage.write(aclPath, Buffer.from(serializeAcl(doc), 'utf8'), {
+    contentType: 'application/ld+json'
+  });
+  return toolText(`wrote ${aclPath} (${authorizations.length} authorization${authorizations.length === 1 ? '' : 's'})`);
+}
+
+// --- subscribe (#494) ---
+//
+// `subscribe` is a streaming tool. The handler signals its streaming
+// shape by returning { stream: true, init, run }. The MCP plugin
+// switches the HTTP response to SSE when it sees this shape and calls
+// `init` first (for the initial event) then `run(send, signal)` to push
+// notifications until the client disconnects.
+
+function pathMatchesScope(eventUrl, scopePath, origin) {
+  if (!eventUrl.startsWith(origin)) return false;
+  const eventPath = eventUrl.slice(origin.length);
+  if (scopePath === '/') return true;
+  if (scopePath.endsWith('/')) return eventPath.startsWith(scopePath);
+  return eventPath === scopePath;
+}
+
+function subscribe({ path }, ctx) {
+  const scope = path || '/';
+  return {
+    stream: true,
+    async init() {
+      return {
+        type: 'subscribed',
+        scope,
+        origin: ctx.origin,
+        identity: ctx.webId || null
+      };
+    },
+    async run(send, signal) {
+      const onChange = async (eventUrl) => {
+        if (signal.aborted) return;
+        if (!pathMatchesScope(eventUrl, scope, ctx.origin)) return;
+
+        // Per-event WAC filter — don't leak resources the subscriber
+        // can't see. The check is best-effort: if the resource was just
+        // deleted we may not have storage to read its ACL from, so we
+        // err on the side of not emitting.
+        const eventPath = eventUrl.slice(ctx.origin.length);
+        try {
+          const allowed = await wac(ctx, eventPath, AccessMode.READ);
+          if (!allowed) return;
+        } catch {
+          return;
+        }
+        send({
+          type: 'resource_changed',
+          path: eventPath,
+          url: eventUrl
+        });
+      };
+      resourceEvents.on('change', onChange);
+      const cleanup = () => resourceEvents.off('change', onChange);
+      signal.addEventListener('abort', cleanup, { once: true });
+      // Resolve when aborted — keeps the stream open until client disconnect
+      await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+      cleanup();
+    }
+  };
+}
+
+// --- federation (#495) ---
+
+// Conservative defaults locked in for v1. Future PRs may add more flexibility.
+//
+//   1. Federation gate is `<agent-pod>/private/federation/` — caller must
+//      have acl:Write there to initiate outbound federation. The agent's
+//      pod is derived from their WebID. Foreign WebIDs are denied (no
+//      local path to gate against).
+//   2. No pod-resident credential storage — every call carries its own
+//      credentials in the `auth` argument (or none for anonymous reads).
+//   3. Depth cap via MCP-Federation-Depth header, max 3.
+const MAX_FEDERATION_DEPTH = 3;
+
+function federationGatePathFor(webId, origin) {
+  if (!webId || !origin) return null;
+  if (!webId.startsWith(origin)) return null;  // foreign WebID — deny
+  const localPath = webId.slice(origin.length);
+  // Extract pod root: everything up to and including the segment before /profile/
+  const profileIdx = localPath.indexOf('/profile/');
+  const podPath = profileIdx > 0 ? localPath.slice(0, profileIdx + 1) : '/';
+  return podPath + 'private/federation/';
+}
+
+async function call_remote_pod({ pod_url, tool, arguments: remoteArgs, auth }, ctx) {
+  if (!pod_url || typeof pod_url !== 'string') {
+    return toolError('pod_url required');
+  }
+  if (!tool || typeof tool !== 'string') {
+    return toolError('tool required');
+  }
+  try {
+    new URL(pod_url);
+  } catch {
+    return toolError(`pod_url is not a valid URL: ${pod_url}`);
+  }
+
+  // Local WAC gate — derived from the agent's WebID. Foreign or
+  // anonymous identities can't federate.
+  const gatePath = federationGatePathFor(ctx.webId, ctx.origin);
+  if (!gatePath) {
+    return toolError(
+      'access denied: federation requires a local WebID identity (anonymous and foreign identities cannot initiate outbound federation)'
+    );
+  }
+  if (!(await wac(ctx, gatePath, AccessMode.WRITE))) {
+    return toolError(
+      `access denied: write ${gatePath} (federation gate). Owner must grant acl:Write at this path to delegate outbound federation.`
+    );
+  }
+
+  // Depth cap
+  const depth = (ctx.federationDepth ?? 0) + 1;
+  if (depth > MAX_FEDERATION_DEPTH) {
+    return toolError(`federation depth exceeded (max ${MAX_FEDERATION_DEPTH})`);
+  }
+
+  // Build remote MCP request
+  const remoteEndpoint = pod_url.replace(/\/+$/, '') + '/mcp';
+  const body = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: tool, arguments: remoteArgs || {} }
+  };
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'MCP-Federation-Depth': String(depth)
+  };
+  if (auth && typeof auth === 'object') {
+    if (auth.type === 'bearer' && auth.token) {
+      headers.Authorization = `Bearer ${auth.token}`;
+    } else if (auth.type === 'header' && auth.name && auth.value) {
+      headers[auth.name] = auth.value;
+    }
+  }
+
+  let response, payload;
+  try {
+    response = await fetch(remoteEndpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000)
+    });
+  } catch (e) {
+    return toolError(`remote pod unreachable: ${e.message}`);
+  }
+  try {
+    payload = await response.json();
+  } catch (e) {
+    return toolError(`remote response not JSON (${response.status}): ${e.message}`);
+  }
+  if (payload.error) {
+    return toolError(`remote MCP error ${payload.error.code}: ${payload.error.message}`);
+  }
+  return toolJson({
+    pod_url,
+    tool,
+    depth,
+    remote_result: payload.result || null
+  });
+}
+
 // --- pod info ---
 
 async function pod_info(_args, ctx) {
@@ -345,6 +632,72 @@ export const TOOLS = {
     description: 'Basic pod identity and MCP capabilities.',
     inputSchema: { type: 'object', properties: {} },
     handler: pod_info
+  },
+  read_acl: {
+    description: 'Read the WAC ACL for a resource as a structured list of authorizations. Requires acl:Control.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+      required: ['path']
+    },
+    handler: read_acl
+  },
+  write_acl: {
+    description: 'Write a structured ACL for a resource. authorizations: [{ agents?, agentClasses?, modes, isDefault? }]. Requires acl:Control.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        authorizations: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              agents: { type: 'array', items: { type: 'string' } },
+              agentClasses: { type: 'array', items: { type: 'string', enum: ['foaf:Agent', 'acl:AuthenticatedAgent'] } },
+              modes: { type: 'array', items: { type: 'string', enum: ['Read', 'Write', 'Append', 'Control'] } },
+              isDefault: { type: 'boolean' }
+            },
+            required: ['modes']
+          }
+        }
+      },
+      required: ['path', 'authorizations']
+    },
+    handler: write_acl
+  },
+  subscribe: {
+    description: 'Subscribe to change events on a resource or container subtree. Returns an SSE stream of MCP notifications as resources change. WAC-filtered per event.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Container path (with trailing /) to watch a subtree, or exact resource path. Default: / (whole pod, filtered by Read access).' }
+      }
+    },
+    handler: subscribe
+  },
+  call_remote_pod: {
+    description: 'Invoke an MCP tool on another pod. Caller must have acl:Write on /private/federation/ on this pod. Depth-capped at 3.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pod_url: { type: 'string', description: 'Origin of the remote pod (e.g. https://alice.example.com)' },
+        tool: { type: 'string', description: 'Tool name to invoke on the remote' },
+        arguments: { type: 'object', description: 'Arguments to pass to the remote tool' },
+        auth: {
+          type: 'object',
+          description: 'Auth for the remote call. Currently { type: "bearer", token } or { type: "header", name, value }. Omit for anonymous.',
+          properties: {
+            type: { type: 'string', enum: ['bearer', 'header'] },
+            token: { type: 'string' },
+            name: { type: 'string' },
+            value: { type: 'string' }
+          }
+        }
+      },
+      required: ['pod_url', 'tool']
+    },
+    handler: call_remote_pod
   }
 };
 

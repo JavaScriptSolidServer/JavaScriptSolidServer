@@ -82,6 +82,79 @@ Both `SKILL.md` (Anthropic markdown format) and `SKILL.jsonld` (typed JSON-LD de
 
 Pod-resident docs (`/docs/`, `/public/apps/<name>/docs/`) are reachable via the regular CRUD tools — no separate surface.
 
+### ACL editing (#496)
+
+The most common owner operation is delegating an agent access to a resource. The MCP server exposes ACL editing as first-class tools so bots don't need to hand-roll JSON-LD.
+
+| Tool | Effect | WAC check |
+|---|---|---|
+| `read_acl` | Return the ACL for a resource as a structured list (agents, agentClasses, modes, isDefault) | Control on resource |
+| `write_acl` | Persist a structured ACL to the resource's `.acl` file | Control on resource |
+
+```json
+// write_acl arguments
+{
+  "path": "/private/notes/",
+  "authorizations": [
+    {
+      "agents": ["did:nostr:abc...", "https://alice.example.com/profile#me"],
+      "modes": ["Read", "Append"],
+      "isDefault": true
+    },
+    {
+      "agentClasses": ["acl:AuthenticatedAgent"],
+      "modes": ["Read"]
+    }
+  ]
+}
+```
+
+The structured form abstracts away JSON-LD shape (`acl:agent` vs `acl:agentClass`, mode URI prefixes, `acl:default` propagation). New WAC vocabulary additions extend the structure without breaking existing bots.
+
+### Subscribe — live change notifications (#494)
+
+`subscribe` is a streaming tool. The response switches to SSE (`text/event-stream`) and emits MCP notifications as resources change. WAC-filtered per event so subscribers only see resources they have Read access to.
+
+| Tool | Effect |
+|---|---|
+| `subscribe` | Stream resource_changed events for a container subtree or specific path |
+
+```bash
+curl -N http://localhost:4443/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"subscribe","arguments":{"path":"/forum/channels/general/"}}}'
+```
+
+Events arrive as:
+```
+event: notification
+data: {"jsonrpc":"2.0","method":"notifications/tool_event","params":{"tool":"subscribe","event":{"type":"resource_changed","path":"/forum/channels/general/abc.jsonld"}}}
+```
+
+For chat-style bots, replace polling with `subscribe` and react to events as they land.
+
+### Federation — bot-to-bot (#495)
+
+`call_remote_pod` lets a bot on this pod invoke MCP tools on another pod. WAC-gated on both ends; depth-capped at 3 hops.
+
+| Tool | Effect | Gating |
+|---|---|---|
+| `call_remote_pod` | Forward an MCP `tools/call` to another pod | Caller needs acl:Write on `<their-pod>/private/federation/` on this pod |
+
+```json
+{
+  "pod_url": "https://alice.example.com",
+  "tool": "read_resource",
+  "arguments": { "path": "/public/notes/shared.md" },
+  "auth": { "type": "bearer", "token": "..." }
+}
+```
+
+To delegate outbound federation to a specific agent, grant them `acl:Write` on your `/private/federation/` container. Owners control which agents can initiate calls; remote pods control what they expose.
+
+Foreign WebIDs (identities hosted on other pods) cannot initiate federation from this pod — there's no local path for the gate to live at. Multi-pod federation chains compose by hopping between pods, each gated locally.
+
 ### Introspection
 
 | Tool | Returns |
@@ -100,11 +173,11 @@ For authenticated access, configure the client to send `Authorization: Bearer <t
 
 ## What's not included (yet)
 
-The first cut ships CRUD, ACL-as-resource (you can read/write `.acl` files via the regular tools), skills, docs, and introspection. Deferred:
+The current cut ships CRUD, structured ACL editing, subscribe, federation, skills, docs, and introspection. Deferred:
 
 - **`update_resource` (PATCH)** — SPARQL Update / N3 patches. Read-modify-write through the CRUD tools is the workaround.
-- **`subscribe`** — wrap JSS's WebSocket notifications as MCP events over SSE. Today, agents can `read_resource` + poll.
-- **`call_remote_pod`** — federation primitive for bot-to-bot. Today, an agent can talk to two pods by registering both as MCP servers in its client.
+- **Discovery layer** — no DNS SRV / Solid Type Index entry for "this pod offers MCP". Owners share URLs explicitly today.
+- **Pod-resident federation credentials** — every `call_remote_pod` carries its own auth. A vault for storing remote-pod credentials is a separate security surface worth its own design pass.
 
 These are tracked as follow-ups on issue #490.
 
