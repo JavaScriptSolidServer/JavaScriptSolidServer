@@ -50,7 +50,7 @@ async function listContainerNames(containerPath) {
   try {
     const entries = await storage.listContainer(containerPath);
     return entries
-      .filter(e => e.isContainer)
+      .filter(e => e.isDirectory)
       .map(e => e.name);
   } catch {
     return [];
