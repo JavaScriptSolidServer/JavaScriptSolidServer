@@ -91,8 +91,8 @@ function parseAppSpec(input) {
  * Resolve a `--bundle` source string to either a fully-qualified URL
  * or an absolute local-file path.
  *
- *   --bundle media                  → github.com/solid-apps/bundles/main/media.jsonld
- *   --bundle <org>/<repo>           → github.com/<org>/<repo>/main/bundle.jsonld
+ *   --bundle media                  → github.com/solid-apps/bundles/HEAD/media.jsonld
+ *   --bundle <org>/<repo>           → github.com/<org>/<repo>/HEAD/bundle.jsonld
  *   --bundle https://...            → as-is (must end in a JSON-LD doc)
  *   --bundle ./path or /abs/path    → absolute local-file path
  *
@@ -118,12 +118,12 @@ function resolveBundleSource(input) {
     if (cleaned.split('/').length !== 2) {
       return { error: 'expected <org>/<repo> shorthand for bundle source' };
     }
-    return { url: `https://raw.githubusercontent.com/${cleaned}/main/bundle.jsonld` };
+    return { url: `https://raw.githubusercontent.com/${cleaned}/HEAD/bundle.jsonld` };
   }
   if (!/^[a-z0-9][a-z0-9_.-]*$/i.test(input)) {
     return { error: `invalid bundle name "${input}"` };
   }
-  return { url: `https://raw.githubusercontent.com/solid-apps/bundles/main/${input}.jsonld` };
+  return { url: `https://raw.githubusercontent.com/solid-apps/bundles/HEAD/${input}.jsonld` };
 }
 
 /**
