@@ -308,6 +308,30 @@ program
   });
 
 /**
+ * Install command — install a Solid app from the default registry
+ * (`github.com/solid-apps/<name>`) into a running pod.
+ *
+ * Phase 1 of #464 / scoped in #478. Hardcodes the default registry;
+ * later phases add <org>/<repo>, full URLs, refs, renames, did:nostr
+ * resolution, NIP-98 auth, curated default sets, and --bundle.
+ */
+program
+  .command('install <names...>')
+  .description('Install a Solid app from github.com/solid-apps/<name> into a running pod')
+  .option('--pod <url>', 'Target pod URL', 'http://localhost:4443')
+  .option('--user <name>', 'Username for IDP auth', 'me')
+  .option('--password <pw>', 'Password (default: $JSS_SINGLE_USER_PASSWORD or "me")')
+  .action(async (names, options) => {
+    try {
+      const { runInstall } = await import('../src/cli/install.js');
+      await runInstall(names, options);
+    } catch (err) {
+      // runInstall prints its own per-app error lines; we just exit non-zero.
+      process.exit(1);
+    }
+  });
+
+/**
  * Init command - interactive configuration
  */
 program
