@@ -127,6 +127,9 @@ export const defaults = {
   mongoUrl: 'mongodb://localhost:27017',
   mongoDatabase: 'solid',
 
+  // MCP (Model Context Protocol) server — pod as a tool surface for agents (#490)
+  mcp: false,
+
   // Logging
   logger: true,
   quiet: false,
@@ -197,6 +200,7 @@ const envMap = {
   JSS_MONGO: 'mongo',
   JSS_MONGO_URL: 'mongoUrl',
   JSS_MONGO_DATABASE: 'mongoDatabase',
+  JSS_MCP: 'mcp',
 };
 
 /**
@@ -242,6 +246,7 @@ const BOOLEAN_KEYS = new Set([
   'liveReload',
   'pay',
   'mongo',
+  'mcp',
   'idp',
   'notifications',
   'logger',

@@ -25,6 +25,7 @@ import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
+import { mcpPlugin } from './mcp/index.js';
 import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
@@ -139,6 +140,10 @@ export function createServer(options = {}) {
   const liveReloadEnabled = options.liveReload ?? false;
   // MongoDB-backed /db/ route is OFF by default
   const mongoEnabled = options.mongo ?? false;
+  // MCP (Model Context Protocol) server — exposes the pod as a tool
+  // surface for agents (Claude Desktop, Cursor, etc.). OFF by default.
+  // See docs/mcp.md and #490.
+  const mcpEnabled = options.mcp ?? false;
   // Provision a Schnorr secp256k1 owner key in /private/privkey.jsonld
   // when a single-user pod is first created. Phase 1 of #437. Off by
   // default: keys-on-disk is a real security tradeoff, opt-in keeps
@@ -392,6 +397,11 @@ export function createServer(options = {}) {
   // Register MongoDB /db/ route if enabled
   if (mongoEnabled) {
     fastify.register(dbPlugin, { mongoUrl, mongoDatabase, singleUser });
+  }
+
+  // Register MCP server if enabled (issue #490)
+  if (mcpEnabled) {
+    fastify.register(mcpPlugin);
   }
 
   // Register rate limiting plugin
@@ -648,6 +658,7 @@ export function createServer(options = {}) {
         request.url.startsWith('/storage/') ||
         (payEnabled && isPayRequest(request.url)) ||
         (mongoEnabled && (request.url === '/db' || request.url.startsWith('/db/'))) ||
+        (mcpEnabled && (request.url === '/mcp' || request.url.startsWith('/mcp?'))) ||
         (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
         (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||

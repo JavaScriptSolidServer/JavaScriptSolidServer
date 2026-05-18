@@ -34,6 +34,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **Tunnel Proxy** — Decentralized ngrok through your pod
 - **Terminal** — WebSocket shell access via `--terminal`
 - **Password CLI** — `jss passwd` for user password management
+- **MCP Server** — Expose the pod as a tool surface for agents (Claude Desktop, Cursor, custom bots) via `--mcp` ([docs](docs/mcp.md))
 - **HTTP 402 Payments** — Monetize endpoints with per-request sat payments
 - **Mashlib / SolidOS UI** — Optional data browser (CDN, local, or ES module)
 - **Storage Quotas** — Per-user limits with CLI management
@@ -92,7 +93,7 @@ jss quota <cmd>        # Manage storage quotas
 jss passwd <username>  # Manage user passwords
 ```
 
-Key options: `--port`, `--idp`, `--conneg`, `--mashlib`, `--git`, `--nostr`, `--activitypub`, `--webrtc`, `--tunnel`, `--terminal`, `--mongo`, `--pay`, `--public`, `--single-user`
+Key options: `--port`, `--idp`, `--conneg`, `--mashlib`, `--git`, `--nostr`, `--mcp`, `--activitypub`, `--webrtc`, `--tunnel`, `--terminal`, `--mongo`, `--pay`, `--public`, `--single-user`
 
 Full options: [docs/configuration.md](docs/configuration.md)
 
@@ -106,6 +107,7 @@ Full options: [docs/configuration.md](docs/configuration.md)
 | WebSocket Notifications | [docs/notifications.md](docs/notifications.md) |
 | Git Support | [docs/git-support.md](docs/git-support.md) |
 | Installing Apps | [docs/app-install.md](docs/app-install.md) |
+| MCP (pod as agent tool surface) | [docs/mcp.md](docs/mcp.md) |
 | Nostr Relay | [docs/nostr.md](docs/nostr.md) |
 | ActivityPub & Mastodon API | [docs/activitypub.md](docs/activitypub.md) |
 | remoteStorage | [docs/remotestorage.md](docs/remotestorage.md) |
