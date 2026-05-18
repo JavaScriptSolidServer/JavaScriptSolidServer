@@ -27,6 +27,7 @@
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { nip98Token } from '../nostr/event.js';
 
 // ANSI helpers — keep zero-dep so this works in any embedded usage.
 const c = (n) => (s) => `\x1b[${n}m${s}\x1b[0m`;
@@ -119,7 +120,7 @@ async function fetchToken({ pod, user, password }) {
  * Install one app spec to one pod. Returns a status object the caller
  * uses for per-app output + exit-code aggregation.
  */
-async function installOne({ spec, pod, token }) {
+async function installOne({ spec, pod, token, nostrPrivkey }) {
   const { source, name, ref } = spec;
   const dest = `${pod}/public/apps/${name}`;
   const tmp = join('/tmp', `jss-install-${name}-${process.pid}`);
@@ -140,12 +141,35 @@ async function installOne({ spec, pod, token }) {
     return { name, status: 'failed', reason: `clone failed${err ? `: ${err.slice(0, 300)}` : ''}` };
   }
 
+  // Build the Authorization header for the push. NIP-98 (Phase 4)
+  // signs a Nostr event with the user's Schnorr key — no IDP creds
+  // needed; JSS verifies via src/auth/token.js and returns a
+  // did:nostr:<hex> identity for ACL matching.
+  //
+  // Git makes BOTH an advertise GET (`info/refs?service=git-receive-pack`)
+  // and a receive POST (`git-receive-pack`) on the same http.extraHeader.
+  // JSS is lenient for git clients (src/auth/nostr.js): it accepts a
+  // NIP-98 event whose `u` is a prefix of the request URL, and whose
+  // `method` is `*` as a wildcard. Sign the base URL with method `*`
+  // so the same event passes auth on both requests.
+  const authHeader = () => {
+    if (nostrPrivkey) {
+      const b64 = nip98Token(dest, '*', nostrPrivkey);
+      return `Authorization: Nostr ${b64}`;
+    }
+    if (token) return `Authorization: Bearer ${token}`;
+    return null;
+  };
+
   // Dual push: HEAD:main and HEAD:gh-pages. Whichever matches server-
   // side HEAD triggers updateInstead and extracts the working tree.
   // The other just creates a stranded ref (harmless). Idempotent.
+  // Each push gets a freshly-signed NIP-98 event (the signature is
+  // tied to a specific u + method + timestamp window).
   const pushArgs = (branch) => {
     const args = ['-C', tmp];
-    if (token) args.push('-c', `http.extraHeader=Authorization: Bearer ${token}`);
+    const auth = authHeader();
+    if (auth) args.push('-c', `http.extraHeader=${auth}`);
     args.push('push', dest, `HEAD:${branch}`);
     return args;
   };
@@ -181,9 +205,16 @@ export async function runInstall(names, options) {
   const pod = (options.pod || 'http://localhost:4443').replace(/\/$/, '');
   const user = options.user || 'me';
   const password = options.password || process.env.JSS_SINGLE_USER_PASSWORD || 'me';
+  const nostrPrivkey = options.nostrPrivkey || process.env.NOSTR_PRIVKEY || null;
 
   if (!names || names.length === 0) {
     throw new Error('expected at least one app name. Try: `jss install chrome`');
+  }
+
+  // Validate Nostr privkey if supplied (64 lowercase-hex chars).
+  if (nostrPrivkey && !/^[0-9a-f]{64}$/i.test(nostrPrivkey)) {
+    console.error(red('✗ --nostr-privkey must be 64 hex chars'));
+    throw new Error('invalid --nostr-privkey');
   }
 
   // Validate every spec up front so we report invalid names before
@@ -199,10 +230,13 @@ export async function runInstall(names, options) {
   }
 
   console.log(bold(`\nInstalling ${specs.length} app${specs.length === 1 ? '' : 's'} → `) + green(pod));
+  if (nostrPrivkey) console.log(dim('  (signing with Nostr privkey — NIP-98)'));
   console.log('');
 
-  let token;
-  try {
+  // With --nostr-privkey we sign each push as NIP-98; no bearer token
+  // needed. Otherwise fetch the bearer token from the pod's IDP.
+  let token = null;
+  if (!nostrPrivkey) try {
     token = await fetchToken({ pod, user, password });
   } catch (e) {
     console.error(red(`✗ ${e.message}`));
@@ -210,10 +244,15 @@ export async function runInstall(names, options) {
     throw e;
   }
 
+  // Decode hex privkey once for installOne (nip98Token wants bytes).
+  const privkeyBytes = nostrPrivkey
+    ? Uint8Array.from(Buffer.from(nostrPrivkey, 'hex'))
+    : null;
+
   let okCount = 0;
   let failCount = 0;
   for (const spec of specs) {
-    const result = await installOne({ spec, pod, token });
+    const result = await installOne({ spec, pod, token, nostrPrivkey: privkeyBytes });
     switch (result.status) {
       case 'installed':
         console.log(green(`✓ ${result.name}`) + dim(` → ${result.dest}`));
