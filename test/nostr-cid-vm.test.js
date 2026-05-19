@@ -210,9 +210,12 @@ describe('NIP-98 + CID verificationMethod lookup (#399)', () => {
 
   it('rejects a JWK with the right x but wrong y (curve-point integrity)', async () => {
     const goodJwk = evenYJwk(pk);
-    // Flip the y to invalid — same x, different y → not on canonical
-    // BIP-340 point, so should NOT match the Nostr key.
-    const badJwk = { ...goodJwk, y: goodJwk.y.slice(0, -1) + (goodJwk.y.endsWith('A') ? 'B' : 'A') };
+    // Force y = 0 (43 'A's = 32 zero bytes). (x, 0) is on secp256k1
+    // iff x³ ≡ -7 mod p, which has exactly 3 solutions in ~2²⁵⁶ — so
+    // for any practical x this is provably off-curve. Avoids the flake
+    // where a single-char flip in y was either a base64url padding-bit
+    // no-op or, far more rarely, landed on the negation -y mod p.
+    const badJwk = { ...goodJwk, y: 'A'.repeat(43) };
     nextProfile = buildProfile({ pubkey: pk, jwk: badJwk });
     const url = `https://${POD_HOST}/private/data.ttl`;
     const { authHeader } = nip98Authorization({ method: 'GET', url, secretKey: sk });
