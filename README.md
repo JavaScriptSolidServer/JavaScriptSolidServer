@@ -145,6 +145,10 @@ Full options: [docs/configuration.md](docs/configuration.md)
 npm test
 ```
 
+## Maintainers
+
+JSS is maintained by [@melvincarvalho](https://github.com/melvincarvalho) and [@jjohare](https://github.com/jjohare). See [MAINTAINERS.md](MAINTAINERS.md).
+
 ## License
 
 Licensed under [AGPL-3.0](./LICENSE).
