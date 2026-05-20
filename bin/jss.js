@@ -87,8 +87,8 @@ program
   .option('-c, --config <file>', 'Config file path')
   .option('--ssl-key <path>', 'Path to SSL private key (PEM)')
   .option('--ssl-cert <path>', 'Path to SSL certificate (PEM)')
-  .option('--multiuser', 'Enable multi-user mode')
-  .option('--no-multiuser', 'Disable multi-user mode')
+  .option('--multi-user', 'Enable multi-user mode')
+  .option('--no-multi-user', 'Disable multi-user mode')
   .option('--conneg', 'Enable content negotiation (Turtle support)')
   .option('--no-conneg', 'Disable content negotiation')
   .option('--notifications', 'Enable WebSocket notifications')
@@ -159,6 +159,12 @@ program
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
     try {
+      // Normalize --multi-user (Commander camelCase: multiUser) to internal key
+      if (options.multiUser !== undefined) {
+        options.multiuser = options.multiUser;
+        delete options.multiUser;
+      }
+
       const config = await loadConfig(options, options.config);
 
       // Set DATA_ROOT env var so all modules use the same data directory
