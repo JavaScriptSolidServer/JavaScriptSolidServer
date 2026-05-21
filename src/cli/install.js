@@ -27,6 +27,7 @@
 import { spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { join, isAbsolute } from 'path';
+import { tmpdir } from 'os';
 import { nip98Token } from '../nostr/event.js';
 
 // ANSI helpers — keep zero-dep so this works in any embedded usage.
@@ -228,7 +229,10 @@ async function fetchToken({ pod, user, password }) {
 async function installOne({ spec, pod, token, nostrPrivkey }) {
   const { source, name, ref } = spec;
   const dest = `${pod}/public/apps/${name}`;
-  const tmp = join('/tmp', `jss-install-${name}-${process.pid}`);
+  // Respect the platform's tmp dir — '/tmp' is hardcoded out on
+  // Termux (Android), where the writable tmp is at $PREFIX/tmp.
+  // os.tmpdir() respects $TMPDIR and falls back sensibly everywhere.
+  const tmp = join(tmpdir(), `jss-install-${name}-${process.pid}`);
 
   // Clean any stale tmp from a prior failed run.
   if (existsSync(tmp)) spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
