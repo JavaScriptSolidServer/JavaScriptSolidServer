@@ -1067,12 +1067,15 @@ export function createServer(options = {}) {
           password = password.slice(0, -1);
           return;
         }
-        // Only accept printable input — \P{C} excludes control codes,
-        // so escape sequences from arrow keys, function keys, etc. don't
-        // sneak invisible bytes into the password buffer.
+        // Only accept printable input — reject C0/C1 control codes, so
+        // escape sequences from arrow keys, function keys, etc. don't
+        // sneak invisible bytes into the password buffer. Uses an explicit
+        // ASCII/C1 control range rather than the \p{C} Unicode property
+        // escape, which requires a full-ICU build and throws at parse time
+        // on no-ICU runtimes (e.g. nodejs-mobile). See #520.
         if (!key.ctrl && !key.meta &&
             typeof str === 'string' && str.length > 0 &&
-            /^\P{C}+$/u.test(str)) {
+            /^[^\u0000-\u001f\u007f-\u009f]+$/.test(str)) {
           password += str;
         }
       };
