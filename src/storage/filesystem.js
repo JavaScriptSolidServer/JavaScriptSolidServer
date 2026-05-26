@@ -181,6 +181,13 @@ export async function listContainer(urlPath) {
       };
       try {
         const stat = await fs.stat(path.join(filePath, entry.name));
+        // Dirent.isDirectory() uses lstat semantics, so it is false for
+        // *any* symlink — even one targeting a directory. Reclassify from
+        // the dereferenced stat so symlinked directories list as containers
+        // (trailing slash + ldp:BasicContainer), matching how they behave
+        // on a direct GET. A dangling symlink throws here and keeps the
+        // lstat-based isDirectory: false. (#531)
+        if (entry.isSymbolicLink()) result.isDirectory = stat.isDirectory();
         result.size = stat.size;
         result.modified = stat.mtime.toISOString();
       } catch { /* stat failed, skip metadata */ }
