@@ -57,6 +57,14 @@ export async function tunnelPlugin(fastify, options = {}) {
   fastify.get(wsPath, { websocket: true }, async (connection, request) => {
     const socket = connection.socket;
 
+    // Browser WebSockets can't set an Authorization header, so accept the
+    // bearer token as a ?token= query param too — mirrors the /.webrtc
+    // endpoint. Lets browser-based tunnel clients authenticate. (#528)
+    const queryToken = request.query?.token;
+    if (queryToken && !request.headers.authorization) {
+      request.headers.authorization = `Bearer ${queryToken}`;
+    }
+
     // Authenticate
     const { webId } = await getWebIdFromRequestAsync(request);
     if (!webId) {
