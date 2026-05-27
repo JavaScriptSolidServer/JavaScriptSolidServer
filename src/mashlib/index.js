@@ -356,8 +356,12 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     }
   }
 
-  // Only serve mashlib for RDF content types
-  const rdfTypes = [
+  // Serve the mashlib shell only for content types that have a pane to
+  // render them. RDF + markdown + playlists, plus any single audio type
+  // (the audio pane). Do NOT add video/image types here until panes exist
+  // for them — wrapping them would show "No data found" instead of the
+  // browser's native inline render. See #533.
+  const viewableTypes = [
     'text/turtle',
     'application/ld+json',
     'application/json',
@@ -365,13 +369,15 @@ export function shouldServeMashlib(request, mashlibEnabled, contentType) {
     'application/n-triples',
     'application/rdf+xml',
     'text/markdown',
-    'audio/mpegurl',
-    'application/vnd.apple.mpegurl',
-    'audio/x-scpls'
+    'application/vnd.apple.mpegurl'
   ];
 
   const baseType = contentType.split(';')[0].trim().toLowerCase();
-  return rdfTypes.includes(baseType);
+  // Any audio/* type (mpeg, ogg, wave, x-flac, mpegurl playlists, ...) has a
+  // pane (audio or playlist), so match the whole family rather than enumerate
+  // the exact spellings the mime-types db happens to use.
+  if (baseType.startsWith('audio/')) return true;
+  return viewableTypes.includes(baseType);
 }
 
 /**
