@@ -94,7 +94,28 @@ describe('getContentType', () => {
       assert.strictEqual(getContentType('/x/card.ttl'), 'text/turtle');
     });
     it('falls back to application/octet-stream for unknown extensions', () => {
-      assert.strictEqual(getContentType('/x/file.xyz'), 'application/octet-stream');
+      // .zzz is not in the mime-types db (unlike .xyz → chemical/x-xyz)
+      assert.strictEqual(getContentType('/x/file.zzz'), 'application/octet-stream');
+    });
+  });
+
+  describe('media types via mime-types db (#533)', () => {
+    it('maps .mp3 → audio/mpeg (was octet-stream → forced download)', () => {
+      assert.strictEqual(getContentType('/music/song.mp3'), 'audio/mpeg');
+    });
+    it('maps common audio extensions to audio/*', () => {
+      for (const f of ['a.ogg', 'a.wav', 'a.m4a', 'a.flac', 'a.opus', 'a.aac']) {
+        assert.ok(getContentType(f).startsWith('audio/'), f + ' should be audio/*, got ' + getContentType(f));
+      }
+    });
+    it('maps video and other common types', () => {
+      assert.strictEqual(getContentType('v.mp4'), 'video/mp4');
+      assert.strictEqual(getContentType('d.pdf'), 'application/pdf');
+    });
+    it('keeps Solid overrides ahead of the mime-types db', () => {
+      assert.strictEqual(getContentType('card.ttl'), 'text/turtle');
+      assert.strictEqual(getContentType('x.jsonld'), 'application/ld+json');
+      assert.strictEqual(getContentType('p.m3u'), 'audio/mpegurl');
     });
   });
 

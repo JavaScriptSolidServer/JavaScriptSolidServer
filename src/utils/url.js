@@ -1,4 +1,5 @@
 import path from 'path';
+import * as mime from 'mime-types';
 
 // Base directory for storing all pods
 // Use a getter function to read env var at runtime (not import time)
@@ -218,28 +219,19 @@ function getPodNameFromPath(urlPath) {
  */
 export function getContentType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
-  const types = {
+
+  // Solid-specific overrides — types the `mime-types` db doesn't know, or
+  // where Solid semantics differ. Checked before falling back to mime-types
+  // (which covers the long tail: audio/video/fonts/archives/office/etc.).
+  const overrides = {
     '.jsonld': 'application/ld+json',
-    '.json': 'application/json',
-    '.html': 'text/html',
-    '.txt': 'text/plain',
-    '.css': 'text/css',
-    '.js': 'application/javascript',
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.svg': 'image/svg+xml',
-    '.pdf': 'application/pdf',
     '.ttl': 'text/turtle',
     '.n3': 'text/n3',
     '.nt': 'application/n-triples',
     '.rdf': 'application/rdf+xml',
     '.nq': 'application/n-quads',
     '.trig': 'application/trig',
-    '.md': 'text/markdown',
     '.m3u': 'audio/mpegurl',
-    '.m3u8': 'application/vnd.apple.mpegurl',
     '.pls': 'audio/x-scpls',
     // Solid ACL/meta as extensions (e.g. publicTypeIndex.jsonld.acl)
     '.acl': 'application/ld+json',
@@ -255,7 +247,10 @@ export function getContentType(filePath) {
   const base = path.basename(filePath);
   if (base === '.acl' || base === '.meta') return 'application/ld+json';
 
-  return types[ext] || 'application/octet-stream';
+  // Overrides first, then the comprehensive mime-types database (as CSS and
+  // NSS do), then octet-stream. This is what makes audio/video/etc. resolve
+  // to a real type instead of forcing a download. See #533.
+  return overrides[ext] || mime.lookup(filePath) || 'application/octet-stream';
 }
 
 /**
