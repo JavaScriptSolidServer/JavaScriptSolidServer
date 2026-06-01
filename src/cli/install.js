@@ -25,7 +25,7 @@
  */
 
 import { spawnSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, rmSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { nip98Token } from '../nostr/event.js';
@@ -222,6 +222,18 @@ async function fetchToken({ pod, user, password }) {
   }
 }
 
+// Best-effort recursive cleanup of the scratch clone dir. fs.rmSync
+// with `force: true` silently ignores ENOENT (so no existsSync guard
+// is needed), and the try/catch absorbs the rare EBUSY / EACCES that
+// can fire on Windows when an editor or antivirus still holds a
+// handle inside the tree. Mirrors the original `spawnSync('rm',
+// '-rf', ..., { stdio: 'ignore' })` contract: an install must not
+// fail after a successful clone/push just because tmp cleanup didn't
+// go through. Portable: no shell-out, no /tmp assumptions.
+function cleanupTmp(tmp) {
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ }
+}
+
 /**
  * Install one app spec to one pod. Returns a status object the caller
  * uses for per-app output + exit-code aggregation.
@@ -235,7 +247,7 @@ async function installOne({ spec, pod, token, nostrPrivkey }) {
   const tmp = join(tmpdir(), `jss-install-${name}-${process.pid}`);
 
   // Clean any stale tmp from a prior failed run.
-  if (existsSync(tmp)) spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
+  cleanupTmp(tmp);
 
   // Clone (no --depth: shallow pushes are rejected by JSS git-receive).
   // --branch picks a tag or branch when pinned (e.g. `foo/bar#v2`).
@@ -289,7 +301,7 @@ async function installOne({ spec, pod, token, nostrPrivkey }) {
   // Auto-init refuses on a non-empty target dir → 404 / "not found".
   // Distinguish "path already in use" from real errors.
   if (pushMain.status !== 0 && (errMain.includes('not found') || errMain.includes('404'))) {
-    spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
+    cleanupTmp(tmp);
     return { name, status: 'skipped', reason: 'path already in use' };
   }
 
@@ -297,11 +309,11 @@ async function installOne({ spec, pod, token, nostrPrivkey }) {
 
   if (pushMain.status !== 0 && pushPages.status !== 0) {
     const err = (errMain + '\n' + (pushPages.stderr?.toString?.() || '')).trim();
-    spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
+    cleanupTmp(tmp);
     return { name, status: 'failed', reason: `push failed: ${err.slice(0, 400)}` };
   }
 
-  spawnSync('rm', ['-rf', tmp], { stdio: 'ignore' });
+  cleanupTmp(tmp);
   return { name, status: 'installed', dest: `${dest}/` };
 }
 
