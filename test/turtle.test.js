@@ -12,7 +12,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { fromJsonLd } from '../src/rdf/conneg.js';
+import { fromJsonLd, toJsonLd } from '../src/rdf/conneg.js';
 
 describe('turtle converter — unit (#320 follow-ups)', () => {
   it('expandUri does not recurse forever on a cyclic context (a → b → a)', async () => {
@@ -257,5 +257,46 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
     assert.ok(typeof content === 'string');
     assert.ok(content.includes('https://example.test/a'), 'node a should appear');
     assert.ok(content.includes('https://example.test/b'), 'node b should appear');
+  });
+
+  describe('blank-node subject roundtrip (#536)', () => {
+    const baseUri = 'https://example.test/u/c/bn.ttl';
+    const input = '@prefix ex: <http://example.org/> .\n<#s> ex:p [ ex:a 1 ; ex:b 2 ] .\n';
+
+    it('Turtle → JSON-LD emits blank-node SUBJECTS with the "_:" prefix', async () => {
+      // Previously the subject side dropped "_:", producing a bare label
+      // ("n3-0") that resolved as a relative IRI on read; the object side
+      // (termToJsonLd) already kept "_:". Result: severed graph.
+      const doc = await toJsonLd(input, 'text/turtle', baseUri, true);
+      const nodes = Array.isArray(doc) ? doc : [doc];
+      // The blank-node subject is the one carrying ex:a / ex:b.
+      const bn = nodes.find(n => 'ex:a' in n);
+      assert.ok(bn, 'expected a node carrying ex:a');
+      assert.ok(typeof bn['@id'] === 'string' && bn['@id'].startsWith('_:'),
+        `blank-node subject @id should start with "_:", got ${JSON.stringify(bn['@id'])}`);
+    });
+
+    it('Turtle → JSON-LD → Turtle preserves the blank-node connection', async () => {
+      // End-to-end: parse output Turtle and verify the blank node carrying
+      // ex:a / ex:b is the SAME node that <#s> ex:p points at — i.e. the
+      // graph is not severed.
+      const doc = await toJsonLd(input, 'text/turtle', baseUri, true);
+      const { content: outTurtle } = await fromJsonLd(doc, 'text/turtle', baseUri, true);
+
+      const { Parser } = await import('n3');
+      const quads = new Parser({ baseIRI: baseUri }).parse(outTurtle);
+
+      const pQuad = quads.find(q => q.predicate.value === 'http://example.org/p');
+      assert.ok(pQuad, 'ex:p triple should be present');
+      assert.strictEqual(pQuad.object.termType, 'BlankNode',
+        'ex:p object must remain a blank node, not be promoted to a named IRI');
+
+      const aQuad = quads.find(q => q.predicate.value === 'http://example.org/a');
+      assert.ok(aQuad, 'ex:a triple should be present');
+      assert.strictEqual(aQuad.subject.termType, 'BlankNode',
+        'ex:a subject must remain a blank node');
+      assert.strictEqual(aQuad.subject.value, pQuad.object.value,
+        'the blank node carrying ex:a must be the same one ex:p references');
+    });
   });
 });
