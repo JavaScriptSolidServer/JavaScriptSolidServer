@@ -15,6 +15,70 @@ import { expireSessionCookies } from './cookies.js';
 const MAX_BODY_SIZE = 1024 * 1024;
 
 /**
+ * Defensive wrapper around provider.interactionFinished for handlers
+ * that hijack the reply and let oidc-provider write the continuation
+ * redirect directly to the raw socket.
+ *
+ * The naive pattern is:
+ *
+ *   reply.hijack();
+ *   return provider.interactionFinished(request.raw, reply.raw, result, opts);
+ *
+ * If interactionFinished throws (most commonly `SessionNotFound` from
+ * oidc-provider's `#getInteraction` when the `_interaction` cookie is
+ * missing — URL pasted into a different browser, third-party cookies
+ * blocked, long idle past the cookie TTL), the hijacked reply can no
+ * longer be written by Fastify and the connection hangs until the
+ * gateway 504s. This helper turns that hang into a bounded 4xx instead.
+ *
+ *   - SessionNotFound → 400 with a "session expired, please restart
+ *     login from the beginning" page.
+ *   - Anything else → 500 with a generic message. Raw err.message is
+ *     never surfaced — adapter / provider error strings on an auth
+ *     endpoint are a soft info-leak (mirrors handleSwitchAccount).
+ *   - The full Error (including stack) is logged via request.log.warn
+ *     under the `err` key so Pino serializes it properly.
+ *
+ * If interactionFinished managed a partial write before throwing
+ * (`reply.raw.headersSent === true`), the socket is past recovery —
+ * the error is re-thrown so the caller's outer catch logs it.
+ *
+ * Foundation work for #526. The auto-healing 303-to-retry behaviour
+ * that #526 ultimately wants can layer on top of this helper without
+ * touching the five call sites again.
+ *
+ * @param {object} request - Fastify request (uses .raw and .log)
+ * @param {object} reply - Fastify reply; will be hijacked
+ * @param {object} provider - oidc-provider instance
+ * @param {object} result - the interaction result to commit
+ * @param {object} opts - forwarded to interactionFinished
+ *   (e.g. { mergeWithLastSubmission: true } for consent)
+ * @param {object} [logContext] - extra structured fields for the warn
+ *   log on failure (e.g. { uid, accountId })
+ */
+async function finishInteractionDefensively(request, reply, provider, result, opts, logContext = {}) {
+  reply.hijack();
+  try {
+    await provider.interactionFinished(request.raw, reply.raw, result, opts);
+    return;
+  } catch (err) {
+    if (reply.raw.headersSent) throw err;
+    // Spread logContext first so a caller-supplied `err` field can't
+    // clobber the real Error — Pino needs the actual Error under `err`
+    // to serialize name/message/stack/structured fields.
+    request.log.warn({ ...logContext, err }, 'interactionFinished failed after hijack');
+    const isSessionMissing = err.name === 'SessionNotFound';
+    const status = isSessionMissing ? 400 : 500;
+    const title = isSessionMissing ? 'Session expired' : 'Login error';
+    const message = isSessionMissing
+      ? 'Your login session cookie is missing or expired. This usually means the link was opened in a different browser, third-party cookies are blocked, or too much time passed between steps. Please restart the login from the beginning.'
+      : 'Unexpected error completing login. Please try signing in again.';
+    reply.raw.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+    reply.raw.end(errorPage(title, message));
+  }
+}
+
+/**
  * Handle GET /idp/interaction/:uid
  * Shows login or consent page based on interaction state
  */
@@ -160,10 +224,11 @@ export async function handleLogin(request, reply, provider) {
     interaction.result = result;
     await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
 
-    // For browsers (mashlib, etc): do a proper HTTP redirect
+    // For browsers (mashlib, etc): do a proper HTTP redirect.
+    // Defensive wrapper guards against SessionNotFound / other throws
+    // after hijack — see finishInteractionDefensively at top of file.
     if (wantsBrowserRedirect) {
-      reply.hijack();
-      return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+      return finishInteractionDefensively(request, reply, provider, result, { mergeWithLastSubmission: false }, { uid });
     }
 
     // For CTH and programmatic clients: return JSON with location
@@ -282,16 +347,10 @@ export async function handleConsent(request, reply, provider) {
       },
     };
 
-    // Mark reply as sent since interactionFinished will handle the response
-    reply.hijack();
-
-    // Use interactionFinished which handles the redirect directly
-    return provider.interactionFinished(
-      request.raw,
-      reply.raw,
-      result,
-      { mergeWithLastSubmission: true }
-    );
+    // Defensive wrapper guards against SessionNotFound / other throws
+    // after hijack — see finishInteractionDefensively at top of file.
+    // `mergeWithLastSubmission: true` is consent-specific.
+    return finishInteractionDefensively(request, reply, provider, result, { mergeWithLastSubmission: true }, { uid });
   } catch (err) {
     request.log.error(err, 'Consent error');
     return reply.code(500).type('text/html').send(errorPage('Consent failed', err.message));
@@ -602,8 +661,8 @@ export async function handlePasskeyComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Passkey login completed');
 
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    // Defensive wrapper — see finishInteractionDefensively at top of file.
+    return finishInteractionDefensively(request, reply, provider, result, { mergeWithLastSubmission: false }, { uid, accountId: account.id });
   } catch (err) {
     request.log.error(err, 'Passkey complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -639,9 +698,9 @@ export async function handlePasskeySkip(request, reply, provider) {
 
     request.log.info({ accountId: result.login.accountId, uid }, 'Passkey prompt skipped');
 
-    // Complete the OIDC interaction
-    reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, result, { mergeWithLastSubmission: false });
+    // Complete the OIDC interaction. Defensive wrapper — see
+    // finishInteractionDefensively at top of file.
+    return finishInteractionDefensively(request, reply, provider, result, { mergeWithLastSubmission: false }, { uid, accountId: result.login.accountId });
   } catch (err) {
     request.log.error(err, 'Passkey skip error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
@@ -819,44 +878,11 @@ export async function handleSchnorrComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Schnorr login completed');
 
-    // Hijack so oidc-provider can write the OIDC continue redirect
-    // straight to the underlying socket. Wrap the call so a throw
-    // doesn't leave the hijacked reply unsent — the common failure is
-    // SessionNotFound from oidc-provider's `#getInteraction` when the
-    // `_interaction` cookie is missing (URL pasted into a different
-    // browser, third-party cookies blocked, long idle past the cookie
-    // TTL). Without this guard, hijack-then-throw leaves Fastify unable
-    // to send a response and the connection hangs until the gateway
-    // 504s. See #412.
-    reply.hijack();
-    try {
-      await provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
-      return;
-    } catch (err) {
-      // If interactionFinished managed to write headers before throwing,
-      // the socket is past recovery — propagate so the outer catch logs.
-      if (reply.raw.headersSent) throw err;
-      // Pass the Error itself under `err` — Pino (via Fastify) serializes
-      // it properly (name, message, stack, structured fields). Logging
-      // err.message + err.name as flat strings would drop the stack.
-      request.log.warn(
-        { err, uid, accountId },
-        'Schnorr complete: interactionFinished failed after hijack'
-      );
-      // Don't surface raw err.message — adapter/provider errors and
-      // stack-leaking strings on an auth endpoint are a soft info-leak
-      // (mirrors handleSwitchAccount's guidance above). The full error
-      // (with stack) is in request.log.warn above.
-      const isSessionMissing = err.name === 'SessionNotFound';
-      const status = isSessionMissing ? 400 : 500;
-      const title = isSessionMissing ? 'Session expired' : 'Login error';
-      const message = isSessionMissing
-        ? 'Your login session cookie is missing or expired. This usually means the link was opened in a different browser, third-party cookies are blocked, or too much time passed between steps. Please restart the login from the beginning.'
-        : 'Unexpected error completing login. Please try signing in again.';
-      reply.raw.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
-      reply.raw.end(errorPage(title, message));
-      return;
-    }
+    // Defensive wrapper — see finishInteractionDefensively at top of
+    // file. Originally inlined in #539 to fix #412 (the 504 hang on
+    // missing _interaction cookie); now shared with the four other
+    // hijack-then-throw sites in this module.
+    return finishInteractionDefensively(request, reply, provider, interaction.result, { mergeWithLastSubmission: false }, { uid, accountId: account.id });
   } catch (err) {
     request.log.error(err, 'Schnorr complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
