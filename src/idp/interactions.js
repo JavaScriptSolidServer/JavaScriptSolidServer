@@ -836,14 +836,17 @@ export async function handleSchnorrComplete(request, reply, provider) {
       // If interactionFinished managed to write headers before throwing,
       // the socket is past recovery — propagate so the outer catch logs.
       if (reply.raw.headersSent) throw err;
+      // Pass the Error itself under `err` — Pino (via Fastify) serializes
+      // it properly (name, message, stack, structured fields). Logging
+      // err.message + err.name as flat strings would drop the stack.
       request.log.warn(
-        { err: err.message, errName: err.name, uid, accountId },
+        { err, uid, accountId },
         'Schnorr complete: interactionFinished failed after hijack'
       );
       // Don't surface raw err.message — adapter/provider errors and
       // stack-leaking strings on an auth endpoint are a soft info-leak
-      // (mirrors handleSwitchAccount's guidance above). Full error is
-      // already in request.log.warn above.
+      // (mirrors handleSwitchAccount's guidance above). The full error
+      // (with stack) is in request.log.warn above.
       const isSessionMissing = err.name === 'SessionNotFound';
       const status = isSessionMissing ? 400 : 500;
       const title = isSessionMissing ? 'Session expired' : 'Login error';

@@ -27,15 +27,19 @@ function makeFakeReplyAndCapture() {
   let status = null;
   let headers = null;
   const bodyChunks = [];
-  let ended = false;
+  // Mirror Node's http.ServerResponse: `headersSent` flips to true the
+  // moment writeHead() commits the status line + headers to the socket,
+  // not only after end(). Modelling it any other way would let the
+  // `if (reply.raw.headersSent) throw err;` guard pass when it shouldn't.
+  let headersWritten = false;
   return {
     reply: {
       hijack: () => { hijacked = true; },
       code: () => { throw new Error('reply.code called after hijack — should not happen'); },
       raw: {
-        get headersSent() { return ended; },
-        writeHead: (s, h) => { status = s; headers = h; },
-        end: (body) => { ended = true; if (body) bodyChunks.push(body); },
+        get headersSent() { return headersWritten; },
+        writeHead: (s, h) => { status = s; headers = h; headersWritten = true; },
+        end: (body) => { headersWritten = true; if (body) bodyChunks.push(body); },
       },
     },
     captured: () => ({ hijacked, status, headers, body: bodyChunks.join('') }),
