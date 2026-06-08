@@ -840,12 +840,16 @@ export async function handleSchnorrComplete(request, reply, provider) {
         { err: err.message, errName: err.name, uid, accountId },
         'Schnorr complete: interactionFinished failed after hijack'
       );
+      // Don't surface raw err.message — adapter/provider errors and
+      // stack-leaking strings on an auth endpoint are a soft info-leak
+      // (mirrors handleSwitchAccount's guidance above). Full error is
+      // already in request.log.warn above.
       const isSessionMissing = err.name === 'SessionNotFound';
       const status = isSessionMissing ? 400 : 500;
       const title = isSessionMissing ? 'Session expired' : 'Login error';
       const message = isSessionMissing
         ? 'Your login session cookie is missing or expired. This usually means the link was opened in a different browser, third-party cookies are blocked, or too much time passed between steps. Please restart the login from the beginning.'
-        : (err.message || 'Unexpected error completing login.');
+        : 'Unexpected error completing login. Please try signing in again.';
       reply.raw.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
       reply.raw.end(errorPage(title, message));
       return;
