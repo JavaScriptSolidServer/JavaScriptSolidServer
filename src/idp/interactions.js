@@ -819,8 +819,37 @@ export async function handleSchnorrComplete(request, reply, provider) {
 
     request.log.info({ accountId: account.id, uid }, 'Schnorr login completed');
 
+    // Hijack so oidc-provider can write the OIDC continue redirect
+    // straight to the underlying socket. Wrap the call so a throw
+    // doesn't leave the hijacked reply unsent — the common failure is
+    // SessionNotFound from oidc-provider's `#getInteraction` when the
+    // `_interaction` cookie is missing (URL pasted into a different
+    // browser, third-party cookies blocked, long idle past the cookie
+    // TTL). Without this guard, hijack-then-throw leaves Fastify unable
+    // to send a response and the connection hangs until the gateway
+    // 504s. See #412.
     reply.hijack();
-    return provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
+    try {
+      await provider.interactionFinished(request.raw, reply.raw, interaction.result, { mergeWithLastSubmission: false });
+      return;
+    } catch (err) {
+      // If interactionFinished managed to write headers before throwing,
+      // the socket is past recovery — propagate so the outer catch logs.
+      if (reply.raw.headersSent) throw err;
+      request.log.warn(
+        { err: err.message, errName: err.name, uid, accountId },
+        'Schnorr complete: interactionFinished failed after hijack'
+      );
+      const isSessionMissing = err.name === 'SessionNotFound';
+      const status = isSessionMissing ? 400 : 500;
+      const title = isSessionMissing ? 'Session expired' : 'Login error';
+      const message = isSessionMissing
+        ? 'Your login session cookie is missing or expired. This usually means the link was opened in a different browser, third-party cookies are blocked, or too much time passed between steps. Please restart the login from the beginning.'
+        : (err.message || 'Unexpected error completing login.');
+      reply.raw.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+      reply.raw.end(errorPage(title, message));
+      return;
+    }
   } catch (err) {
     request.log.error(err, 'Schnorr complete error');
     return reply.code(500).type('text/html').send(errorPage('Error', err.message));
