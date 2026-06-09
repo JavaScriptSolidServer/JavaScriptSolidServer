@@ -23,6 +23,7 @@ import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
+import { defaults } from './config.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
 import { mcpPlugin } from './mcp/index.js';
@@ -875,7 +876,7 @@ export function createServer(options = {}) {
       // Determine base URL for pod URIs
       const protocol = options.ssl ? 'https' : 'http';
       const host = options.host === '0.0.0.0' ? 'localhost' : (options.host || 'localhost');
-      const port = options.port || 3000;
+      const port = options.port || defaults.port;
       const baseUrl = idpIssuer?.replace(/\/$/, '') || `${protocol}://${host}:${port}`;
       const issuer = idpIssuer || `${baseUrl}/`;
 
@@ -1220,7 +1221,7 @@ export function createServer(options = {}) {
     const dataRoot = options.root || process.env.DATA_ROOT || './data';
     const protocol = options.ssl ? 'https' : 'http';
     // Use configured port, or default; actual URL will be localhost
-    const port = options.port || 3000;
+    const port = options.port || defaults.port;
     const baseUrl = `${protocol}://localhost:${port}`;
     startFileWatcher(dataRoot, baseUrl);
   }
@@ -1231,7 +1232,7 @@ export function createServer(options = {}) {
 /**
  * Start the server
  */
-export async function startServer(port = 3000, host = '0.0.0.0') {
+export async function startServer(port = defaults.port, host = '0.0.0.0') {
   const server = createServer();
 
   try {
