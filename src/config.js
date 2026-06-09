@@ -19,6 +19,12 @@ export const defaults = {
   port: 4443,
   host: '0.0.0.0',
   root: './data',
+  // Maximum request body size in bytes (or a size string when supplied
+  // via CLI / config file, e.g. "100MB"). Default 10 MiB matches the
+  // previous hard-coded Fastify limit. Operators hosting personal pods
+  // may want to raise this so that large `git push` of an established
+  // app repo doesn't 413 — see #474.
+  bodyLimit: 10 * 1024 * 1024,
 
   // SSL
   sslKey: null,
@@ -167,6 +173,7 @@ const envMap = {
   JSS_CORS_PROXY_MAX_BYTES: 'corsProxyMaxBytes',
   JSS_CORS_PROXY_TIMEOUT_MS: 'corsProxyTimeoutMs',
   JSS_CORS_PROXY_MAX_REDIRECTS: 'corsProxyMaxRedirects',
+  JSS_BODY_LIMIT: 'bodyLimit',
   JSS_NOSTR: 'nostr',
   JSS_NOSTR_PATH: 'nostrPath',
   JSS_NOSTR_MAX_EVENTS: 'nostrMaxEvents',
@@ -278,8 +285,8 @@ function parseEnvValue(value, key) {
     return parseInt(value, 10);
   }
 
-  // Size values (quota)
-  if (key === 'defaultQuota') {
+  // Size values (quota, body limit)
+  if (key === 'defaultQuota' || key === 'bodyLimit') {
     return parseSize(value);
   }
 

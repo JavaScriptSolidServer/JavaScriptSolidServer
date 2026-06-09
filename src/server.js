@@ -23,7 +23,7 @@ import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
 import { createPayHandler, isPayRequest } from './handlers/pay.js';
 import { activityPubPlugin, getActorHandler } from './ap/index.js';
-import { defaults } from './config.js';
+import { defaults, parseSize } from './config.js';
 import { remoteStoragePlugin } from './remotestorage.js';
 import { dbPlugin } from './db/index.js';
 import { mcpPlugin } from './mcp/index.js';
@@ -183,14 +183,24 @@ export function createServer(options = {}) {
 
   // Fastify options
   const loggerEnabled = options.logger ?? true;
+  // Resolve bodyLimit from options. Numbers (programmatic, or env values
+  // already coerced by parseEnvValue) pass through unchanged; strings
+  // ("100MB" from CLI / config files) go through parseSize for
+  // size-shorthand support. The typeof check matters because parseSize
+  // calls `.match` on its input and would throw on a raw number. Default
+  // matches the previous hard-coded 10 MiB cap. See #474.
+  const bodyLimit = options.bodyLimit == null
+    ? defaults.bodyLimit
+    : (typeof options.bodyLimit === 'number' ? options.bodyLimit : parseSize(options.bodyLimit));
   const fastifyOptions = {
     logger: loggerEnabled ? { level: options.logLevel || 'info' } : false,
     disableRequestLogging: true,
     trustProxy: true,
     // Force close connections on server.close() (useful for tests with WebSockets)
     forceCloseConnections: options.forceCloseConnections ?? false,
-    // Handle raw body for non-JSON content
-    bodyLimit: 10 * 1024 * 1024, // 10MB
+    // Cap raw body size (see resolution above; configurable via
+    // --body-limit / JSS_BODY_LIMIT / createServer({ bodyLimit })).
+    bodyLimit,
     // Gracefully handle client TCP errors (ECONNRESET, EPIPE, etc.)
     clientErrorHandler: (err, socket) => {
       if (err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ECONNABORTED') {
