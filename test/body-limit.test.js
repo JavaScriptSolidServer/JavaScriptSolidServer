@@ -16,7 +16,7 @@
  * implicitly by every other test in the suite continuing to pass.
  */
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from '../src/server.js';
 import fs from 'fs-extra';
@@ -25,6 +25,7 @@ const TEST_DATA_DIR = './test-data-body-limit';
 
 let server;
 let baseUrl;
+let originalDataRoot;
 
 async function startWith(bodyLimit) {
   await fs.emptyDir(TEST_DATA_DIR);
@@ -40,12 +41,25 @@ async function startWith(bodyLimit) {
 }
 
 describe('configurable bodyLimit (#474)', () => {
+  before(() => {
+    // createServer({ root }) mutates process.env.DATA_ROOT
+    // (src/server.js:180). Snapshot the previous value so we can
+    // restore it after the suite — otherwise the test directory
+    // leaks into any subsequent test that reads DATA_ROOT.
+    originalDataRoot = process.env.DATA_ROOT;
+  });
+
   afterEach(async () => {
     if (server) {
       await server.close();
       server = null;
     }
     await fs.remove(TEST_DATA_DIR);
+  });
+
+  after(() => {
+    if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = originalDataRoot;
   });
 
   it('rejects requests larger than a numeric bodyLimit with 413', async () => {

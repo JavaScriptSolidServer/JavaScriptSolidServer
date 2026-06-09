@@ -183,10 +183,12 @@ export function createServer(options = {}) {
 
   // Fastify options
   const loggerEnabled = options.logger ?? true;
-  // Resolve bodyLimit from options. Accept either a number (programmatic
-  // / env-parsed) or a size string ("100MB" from CLI / config files);
-  // parseSize handles both forms uniformly. Default matches the previous
-  // hard-coded 10 MiB cap. See #474.
+  // Resolve bodyLimit from options. Numbers (programmatic, or env values
+  // already coerced by parseEnvValue) pass through unchanged; strings
+  // ("100MB" from CLI / config files) go through parseSize for
+  // size-shorthand support. The typeof check matters because parseSize
+  // calls `.match` on its input and would throw on a raw number. Default
+  // matches the previous hard-coded 10 MiB cap. See #474.
   const bodyLimit = options.bodyLimit == null
     ? defaults.bodyLimit
     : (typeof options.bodyLimit === 'number' ? options.bodyLimit : parseSize(options.bodyLimit));
