@@ -622,11 +622,163 @@ export async function handleGet(request, reply) {
   return reply.send(content);
 }
 
+// Cap on how many bytes HEAD will FULLY read to decide a content type.
+// GET reads the whole file regardless (it has to send the body anyway),
+// but a HEAD on a multi-GB file must not slurp it into memory just to
+// report a header. Above the cap, HEAD degrades gracefully per-case
+// (see negotiateHeadFileContentType) instead of reading. Bounded
+// first-bytes sniffs (HEAD_SNIFF_CHUNK_BYTES via a ranged read) are
+// allowed at ANY size — they cost O(1).
+const HEAD_FULL_READ_MAX_BYTES = 1024 * 1024;
+const HEAD_SNIFF_CHUNK_BYTES = 1024;
+
+// Read the first `bytes` of a file via a ranged stream — O(1) cost
+// regardless of file size. Used by HEAD to run GET's "does it look
+// like HTML?" sniffs without reading whole files.
+function readFirstBytes(storagePath, bytes) {
+  return new Promise((resolve) => {
+    const result = storage.createReadStream(storagePath, { start: 0, end: bytes - 1 });
+    if (!result) return resolve(null);
+    const chunks = [];
+    result.stream.on('data', (c) => chunks.push(c));
+    result.stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    result.stream.on('error', () => resolve(null));
+  });
+}
+
+/**
+ * Mirror handleGet's content-type decision for a FILE so HEAD emits the
+ * same Content-Type a GET with the same Accept header would (#552 —
+ * RFC 9110 §9.3.2: HEAD should send the same header fields as GET).
+ *
+ * GET's decision depends on file CONTENT in three places — the
+ * HTML-data-island sniff, the JSON-parse-success gate before conneg
+ * conversion, and the extensionless-file HTML sniff — so this may read
+ * the file, but only when the stored type makes content relevant and
+ * the file is within HEAD_FULL_READ_MAX_BYTES.
+ *
+ * Returns `{ contentType, converted }`. `converted: true` means GET
+ * would RE-SERIALIZE the body (Turtle conversion, or JSON-LD
+ * re-serialization through fromJsonLd) — its Content-Length would NOT
+ * be the on-disk size, so HEAD must omit Content-Length rather than
+ * claim stats.size for a body GET never sends. The extensionless HTML
+ * sniff only relabels the bytes (served as-is), so it is NOT a
+ * conversion.
+ *
+ * Large files (> HEAD_FULL_READ_MAX_BYTES) degrade per-case instead of
+ * being read in full:
+ *   - RDF-stored: return the negotiated type WITHOUT the parse gate
+ *     (optimistic). The gate only mirrors GET's corrupt-file fallback;
+ *     a corrupt >1 MiB RDF document is far rarer than a valid one, so
+ *     optimism keeps parity for the common case and confines the
+ *     divergence to that corner.
+ *   - HTML-looking content (any stored type) + Turtle-preferring
+ *     Accept: stay at the stored type (conservative) — the data
+ *     island can sit anywhere in the file, so its presence can't be
+ *     checked without the full read this cap exists to avoid.
+ *   - Extensionless: the HTML sniff only needs the first bytes, so it
+ *     runs at ANY size via a bounded ranged read.
+ *
+ * Known residual divergences (deliberate, all need unusual documents):
+ * a parseable-but-unconvertible document (GET's fromJsonLd fails after
+ * JSON.parse succeeds → GET falls back to raw bytes), a corrupt
+ * >1 MiB RDF file (optimistic path above), and a >1 MiB HTML-looking
+ * file carrying a data island (conservative path above).
+ */
+async function negotiateHeadFileContentType({ storagePath, urlPath, stats, acceptHeader, connegEnabled }) {
+  const storedContentType = getContentType(storagePath);
+  const fitsFullRead = stats.size <= HEAD_FULL_READ_MAX_BYTES;
+
+  if (connegEnabled) {
+    // Same negotiation as handleGet's file branch (#325 q-aware).
+    const negotiated = selectContentType(acceptHeader, true);
+    const wantsTurtle = urlPath.endsWith('.ttl')
+      || negotiated === RDF_TYPES.TURTLE
+      || negotiated === RDF_TYPES.N3
+      || negotiated === 'application/n-triples';
+
+    if (isRdfContentType(storedContentType)) {
+      const targetType = wantsTurtle ? 'text/turtle' : selectContentType(acceptHeader, connegEnabled);
+      if (!fitsFullRead) {
+        // Optimistic large-file path — see docstring.
+        return { contentType: targetType, converted: true };
+      }
+      const content = await storage.read(storagePath);
+      if (content !== null) {
+        try {
+          JSON.parse(content.toString()); // GET only converts when the body parses
+          return { contentType: targetType, converted: true };
+        } catch { /* not valid JSON-LD → GET serves as-is; fall through */ }
+      }
+      return { contentType: storedContentType, converted: false };
+    }
+
+    // GET's data-island branch is gated on CONTENT ONLY — any file
+    // whose body starts with <!DOCTYPE/<html gets the island→Turtle
+    // conversion, regardless of stored type (.html, extensionless,
+    // .xhtml, …). Mirror that: a 1 KiB ranged sniff decides HTML-ness
+    // for O(1) cost on any file, and only HTML-looking content pays
+    // the full read for the island check.
+    if (wantsTurtle && fitsFullRead) {
+      const head = await readFirstBytes(storagePath, HEAD_SNIFF_CHUNK_BYTES);
+      const headTrimmed = head === null ? '' : head.trimStart();
+      let looksHtml = headTrimmed.startsWith('<!DOCTYPE') || headTrimmed.startsWith('<html');
+      let contentStr = null;
+      if (!looksHtml && head !== null && headTrimmed === '' && stats.size > HEAD_SNIFF_CHUNK_BYTES) {
+        // The chunk was entirely whitespace and the file continues past
+        // it — GET trims the FULL body, so the HTML marker may sit
+        // beyond the chunk. The file already fits the full-read budget;
+        // read it and decide exactly like GET does.
+        const content = await storage.read(storagePath);
+        if (content !== null) {
+          contentStr = content.toString();
+          const trimmed = contentStr.trimStart();
+          looksHtml = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html');
+        }
+      }
+      if (looksHtml) {
+        // GET converts an HTML data island to Turtle only when the
+        // island exists AND its JSON parses; otherwise it serves the
+        // document as-is.
+        if (contentStr === null) {
+          const content = await storage.read(storagePath);
+          contentStr = content === null ? null : content.toString();
+        }
+        if (contentStr !== null) {
+          const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+          if (jsonLdMatch) {
+            try {
+              JSON.parse(jsonLdMatch[1]);
+              return { contentType: 'text/turtle', converted: true };
+            } catch { /* unparseable island → GET serves as-is; fall through */ }
+          }
+        }
+      }
+      // No island conversion → fall through to the as-is path below
+      // (HTML-looking extensionless files still get the relabel sniff).
+    }
+  }
+
+  // As-is path: GET sniffs extensionless files for HTML by content.
+  // Only the first bytes matter, so the sniff runs at any file size
+  // via a bounded ranged read. Relabel only — no conversion.
+  if (storedContentType === 'application/octet-stream') {
+    const head = await readFirstBytes(storagePath, HEAD_SNIFF_CHUNK_BYTES);
+    if (head !== null) {
+      const t = head.trimStart();
+      if (t.startsWith('<!DOCTYPE') || t.startsWith('<html')) {
+        return { contentType: 'text/html', converted: false };
+      }
+    }
+  }
+  return { contentType: storedContentType, converted: false };
+}
+
 /**
  * Handle HEAD request
  */
 export async function handleHead(request, reply) {
-  const { storagePath, resourceUrl } = getRequestPaths(request);
+  const { urlPath, storagePath, resourceUrl } = getRequestPaths(request);
   const stats = await storage.stat(storagePath);
 
   if (!stats) {
@@ -687,7 +839,9 @@ export async function handleHead(request, reply) {
     const { willServeMashlib, effectiveEtag } = getMashlibEtag(request, stats, storagePath);
     headEtag = effectiveEtag;
     isMashlibResponse = willServeMashlib;
-    contentType = willServeMashlib ? 'text/html' : getContentType(storagePath);
+    // contentType for files is negotiated AFTER the If-None-Match check
+    // below — negotiation may read the file (#552), and GET 304s files
+    // before any read, so HEAD must not pay I/O a 304 will discard.
   }
 
   // Check If-None-Match using the final ETag (#456)
@@ -701,6 +855,26 @@ export async function handleHead(request, reply) {
     }
   }
 
+  let negotiationConverted = false;
+  if (!stats.isDirectory) {
+    // Mirror GET's content-type for files — including the negotiated
+    // Turtle/JSON-LD forms and the extensionless HTML sniff — so HEAD
+    // and GET agree (#552, RFC 9110 §9.3.2).
+    if (isMashlibResponse) {
+      contentType = 'text/html';
+    } else {
+      const negotiation = await negotiateHeadFileContentType({
+        storagePath,
+        urlPath,
+        stats,
+        acceptHeader: request.headers.accept || '',
+        connegEnabled,
+      });
+      contentType = negotiation.contentType;
+      negotiationConverted = negotiation.converted;
+    }
+  }
+
   const headers = getAllHeaders({
     isContainer: stats.isDirectory,
     etag: headEtag,
@@ -711,9 +885,19 @@ export async function handleHead(request, reply) {
     mashlibEnabled: request.mashlibEnabled
   });
 
+  // Mirror GET's Cache-Control for RDF responses (#552 header parity).
+  // GET applies RDF_CACHE_CONTROL uniformly wherever the response
+  // content type is RDF — container listings (Turtle/JSON-LD) and
+  // files (converted or as-is) alike; HTML responses don't get it.
+  if (isRdfContentType(contentType)) {
+    headers['Cache-Control'] = RDF_CACHE_CONTROL;
+  }
+
   // Content-Length: only set when the file size matches the response body.
-  // Mashlib HTML and containers are dynamically generated.
-  if (!stats.isDirectory && !isMashlibResponse) {
+  // Mashlib HTML and containers are dynamically generated, and a
+  // conneg-converted body (Turtle / re-serialized JSON-LD, #552) has a
+  // different length than the on-disk file — omit rather than lie.
+  if (!stats.isDirectory && !isMashlibResponse && !negotiationConverted) {
     headers['Content-Length'] = stats.size;
   }
 
