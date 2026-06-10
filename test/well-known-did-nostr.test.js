@@ -830,6 +830,20 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
       `expected ${expected}; got ${paths.join(', ')}`);
   });
 
+  it('root-path WebID in subdomain mode does NOT probe the root pod profile (#451 cross-account guard)', () => {
+    // When the subdomain gate matches, <dataRoot>/profile/card.jsonld
+    // is the ROOT pod's document — a different account. A relative
+    // subject there ("@id": "#me") would absolutize against the
+    // probing account's WebID and pass the rebuild loop's @id check,
+    // binding the root pod's pubkeys to the subdomain account. The
+    // root-level fallback must therefore be suppressed when the gate
+    // matches.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://melvin.solid.social/#me', 'melvin');
+    const rootPodProfile = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    assert.ok(!paths.includes(rootPodProfile),
+      `cross-account window: ${rootPodProfile} must not be probed for a subdomain account; got ${paths.join(', ')}`);
+  });
+
   it('pod-root WebID with trailing slash probes <pod>/profile/card.jsonld (#451)', () => {
     // Path-mode sibling of the root-path case: pathname `/alice/`
     // also resolves to a directory without the fallback.

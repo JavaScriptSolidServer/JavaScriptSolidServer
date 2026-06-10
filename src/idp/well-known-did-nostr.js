@@ -347,6 +347,16 @@ export function profilePathCandidates(dataRoot, webId, podName = null) {
     }
     if (!paths.includes(r)) paths.push(r);
   };
+  // Subdomain gate: the WebID host's first DNS label must match the
+  // account's podName (case-insensitive — DNS is). Computed up front
+  // because the root-path fallback below keys off it too.
+  const subdomainMatch =
+    typeof podName === 'string' && podName.length > 0 &&
+    url.hostname.toLowerCase().startsWith(podName.toLowerCase() + '.');
+  // Pod-root WebID shape (#451): pathname `/` (→ pathnameRel '') or a
+  // trailing slash like `/alice/`.
+  const isPodRoot = pathnameRel === '' || pathnameRel.endsWith('/');
+
   // Path-mode named pod OR root pod.
   consider(pathnameRel);
   // Root-path / pod-root WebID (#451): a WebID like
@@ -357,25 +367,28 @@ export function profilePathCandidates(dataRoot, webId, podName = null) {
   // profile location underneath it. Only `profile/card.jsonld`: the
   // rebuild loop reads candidates with JSON.parse, so the Turtle
   // conventions (`profile/card`, `profile/card.ttl`) could never
-  // match anyway. Cross-account safety is preserved — the rebuild
-  // loop accepts a candidate only when the document's declared `@id`
-  // equals account.webId exactly.
-  const isPodRoot = pathnameRel === '' || pathnameRel.endsWith('/');
-  if (isPodRoot) {
+  // match anyway.
+  //
+  // Gated on !subdomainMatch: when the host carries the account's
+  // podName label, the profile lives under the pod dir (the
+  // subdomain fallback below) and `<dataRoot>/profile/card.jsonld`
+  // is a DIFFERENT account's document — the root pod's. The rebuild
+  // loop's @id check absolutizes a relative subject (`"@id": "#me"`,
+  // a supported shape — see collectAuthenticationIds) against the
+  // PROBING account's WebID, so the root pod's profile could pass
+  // the check and bind the root pod's pubkeys to the subdomain
+  // account. Suppressing the root-level fallback here closes that
+  // cross-account window; no legitimate deployment serves a
+  // subdomain account's profile from the dataRoot root.
+  if (isPodRoot && !subdomainMatch) {
     // path.resolve skips empty segments, so pathnameRel === '' lands
     // on `<dataRoot>/profile/card.jsonld` (root pod) as intended.
     consider(pathnameRel, 'profile/card.jsonld');
   }
-  // Subdomain mode: only when the WebID host's first DNS label
-  // matches the account's podName (case-insensitive — DNS is).
-  if (typeof podName === 'string' && podName.length > 0) {
-    const host = url.hostname.toLowerCase();
-    const expected = podName.toLowerCase() + '.';
-    if (host.startsWith(expected)) {
-      consider(podName, pathnameRel);
-      if (isPodRoot) {
-        consider(podName, pathnameRel, 'profile/card.jsonld');
-      }
+  if (subdomainMatch) {
+    consider(podName, pathnameRel);
+    if (isPodRoot) {
+      consider(podName, pathnameRel, 'profile/card.jsonld');
     }
   }
   return { paths, skipped };
