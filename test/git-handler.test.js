@@ -13,10 +13,10 @@
  *     them a browser git client sees a CORS error, not the 404)
  *   - path traversal attempts are blocked (never 200, never 500)
  *     with CORS headers
- *   - unauthenticated push advertise → 401 + WWW-Authenticate
- *     (NOTE: this 401 is emitted by the server.js WAC preHandler,
- *     which does NOT currently set the git CORS headers — that gap is
- *     tracked separately; the test asserts what is true today)
+ *   - unauthenticated push advertise → 401 + WWW-Authenticate + the
+ *     git CORS headers (the preHandler's 401/403 path lacked them
+ *     until #548; this 401 is emitted by the server.js WAC
+ *     preHandler, not by handleGit)
  *   - a real end-to-end `git push` succeeds and the pushed file is
  *     served as a static resource (receive-pack POST through
  *     http-backend + updateInstead extraction)
@@ -179,7 +179,7 @@ describe('git handler HTTP contract (#375)', () => {
     assertGitCors(res, 'traversal block');
   });
 
-  it('unauthenticated push advertise returns 401 with WWW-Authenticate (non-public server)', async () => {
+  it('unauthenticated push advertise returns 401 with WWW-Authenticate and git CORS headers (non-public server, #548)', async () => {
     // Second server WITHOUT public:true so the WAC preHandler gates
     // the push. Snapshot/restore DATA_ROOT — createServer({ root })
     // mutates it process-wide and the main suite's server reads it
@@ -198,9 +198,10 @@ describe('git handler HTTP contract (#375)', () => {
         `unauthenticated push advertise must be 401, got ${res.status}`);
       assert.ok(res.headers.get('www-authenticate'),
         'WWW-Authenticate must be present so git CLI clients prompt for credentials');
-      // Deliberately NOT asserting CORS here: the WAC preHandler's
-      // 401 path does not currently set the git CORS headers (tracked
-      // as a follow-up). Assert truth, not aspiration.
+      // #548: the WAC preHandler's 401/403 path must carry the git
+      // CORS headers, or browser git clients see a generic CORS error
+      // instead of the auth challenge.
+      assertGitCors(res, 'unauthenticated push 401');
     } finally {
       await authServer.close();
       if (originalDataRoot === undefined) delete process.env.DATA_ROOT;

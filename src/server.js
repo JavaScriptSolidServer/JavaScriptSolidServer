@@ -17,7 +17,7 @@ import { idpPlugin } from './idp/index.js';
 // below so non-IdP deployments don't pull in the IdP accounts module
 // (bcryptjs etc.) just to register Fastify routes. The same lazy-load
 // pattern is used in src/auth/nostr.js for the NIP-98 verifier.
-import { isGitRequest, isGitWriteOperation, handleGit } from './handlers/git.js';
+import { isGitRequest, isGitWriteOperation, handleGit, setGitCorsHeaders } from './handlers/git.js';
 import { handleCorsProxy, isCorsProxyRequest, setProxyCorsHeaders } from './handlers/cors-proxy.js';
 import { AccessMode } from './wac/parser.js';
 import { registerNostrRelay } from './nostr/relay.js';
@@ -533,11 +533,20 @@ export function createServer(options = {}) {
       request.wacAllow = wacAllow;
 
       if (paymentRequired) {
+        // Git CORS headers on the early return — same reasoning as the
+        // 401/403 below: a browser git client must see the 402, not a
+        // generic CORS/network error. See #548 / #371.
+        setGitCorsHeaders(reply);
         return reply.code(402).send({ type: 'PaymentRequired', ...paymentRequired });
       }
 
       if (!authorized) {
         const message = needsWrite ? 'Write access required for push' : 'Read access required for clone';
+        // Without the git CORS headers, browser-based git clients (e.g.
+        // jss.live/git/) hitting an auth-gated repo saw a generic CORS
+        // error instead of this 401/403 — the same failure mode #371
+        // fixed inside handleGit. See #548.
+        setGitCorsHeaders(reply);
         reply.header('WAC-Allow', wacAllow);
         if (!webId) {
           // No authentication - request Basic auth for git clients

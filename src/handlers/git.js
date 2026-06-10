@@ -167,16 +167,18 @@ function tryAutoInitRepo(repoAbs, log) {
 
 // CORS headers for git responses. Single source of truth — used by the
 // success path (Fastify reply on the OPTIONS preflight, raw stream on
-// http-backend output) and by every 4xx early-return. Without these,
-// browser-based git clients (e.g. jss.live/git/) see a generic
-// CORS/network error instead of the actual status, undermining #371.
+// http-backend output), by every 4xx early-return in this module, and
+// by the WAC preHandler's 401/402/403 returns in src/server.js (#548).
+// Without these, browser-based git clients (e.g. jss.live/git/) see a
+// generic CORS/network error instead of the actual status,
+// undermining #371.
 const GIT_CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, Git-Protocol',
 };
 
-function setGitCorsHeaders(reply) {
+export function setGitCorsHeaders(reply) {
   for (const [k, v] of Object.entries(GIT_CORS_HEADERS)) {
     reply.header(k, v);
   }
