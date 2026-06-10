@@ -91,6 +91,17 @@ async function fetchClientDocument(clientId) {
  * @returns {Promise<Provider>} - Configured oidc-provider instance
  */
 export async function createProvider(issuer) {
+  // Normalize to the trailing-slash form — the SAME normalization the
+  // discovery handler applies to the `issuer` field of
+  // /.well-known/openid-configuration (src/idp/index.js, "Ensure
+  // issuer has trailing slash"). The provider's issuer feeds the
+  // RFC 9207 `iss` authorization-response parameter and the `iss`
+  // claim in issued tokens; RFC 9207 requires the param to be
+  // byte-identical to the advertised issuer, and strict clients
+  // (e.g. solid-oidc's handleRedirectFromLogin) reject the callback
+  // on mismatch — sign-in silently bounces before the token request
+  // ever fires. Keep the two normalizations in sync. See #524.
+  issuer = issuer.endsWith('/') ? issuer : issuer + '/';
   const jwks = await getJwks();
   const cookieKeys = await getCookieKeys();
 

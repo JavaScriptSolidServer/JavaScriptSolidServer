@@ -219,7 +219,11 @@ export async function idpPlugin(fastify, options) {
 
   // /.well-known/openid-configuration
   fastify.get('/.well-known/openid-configuration', async (request, reply) => {
-    // Ensure issuer has trailing slash for CTH compatibility
+    // Ensure issuer has trailing slash for CTH compatibility. Must stay
+    // in sync with createProvider's normalization (src/idp/provider.js)
+    // — the RFC 9207 `iss` authorization-response parameter and token
+    // `iss` claims come from the provider's issuer, and strict clients
+    // byte-compare them against this discovery field. See #524.
     const normalizedIssuer = issuer.endsWith('/') ? issuer : issuer + '/';
     // Base URL without trailing slash for building endpoint URLs
     const baseUrl = issuer.endsWith('/') ? issuer.slice(0, -1) : issuer;
