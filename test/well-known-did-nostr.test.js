@@ -806,6 +806,69 @@ describe('profilePathCandidates — deployment-shape coverage (#411)', () => {
     assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'profile', 'card.jsonld')]);
   });
 
+  // Root-path WebIDs (#451): pathname `/` yields an empty pathnameRel,
+  // so the plain candidates resolve to directories (dataRoot itself /
+  // the pod dir) and the indexer ENOENT/not-a-regular-file'd every
+  // account shaped like `https://melvin.solid.social/#me`. The fix
+  // additionally probes the conventional `profile/card.jsonld`
+  // location under each directory candidate.
+
+  it('root-path WebID probes <dataRoot>/profile/card.jsonld (#451)', () => {
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/#me');
+    const expected = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
+  });
+
+  it('root-path WebID in subdomain mode probes <dataRoot>/<podName>/profile/card.jsonld (#451)', () => {
+    // The exact solid.social scenario from the issue: account `melvin`
+    // with WebID https://melvin.solid.social/#me, profile on disk at
+    // <dataRoot>/melvin/profile/card.jsonld.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://melvin.solid.social/#me', 'melvin');
+    const expected = path.join(DATA_ROOT, 'melvin', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
+  });
+
+  it('root-path WebID in subdomain mode does NOT probe the root pod profile (#451 cross-account guard)', () => {
+    // When the subdomain gate matches, <dataRoot>/profile/card.jsonld
+    // is the ROOT pod's document — a different account. A relative
+    // subject there ("@id": "#me") would absolutize against the
+    // probing account's WebID and pass the rebuild loop's @id check,
+    // binding the root pod's pubkeys to the subdomain account. The
+    // root-level fallback must therefore be suppressed when the gate
+    // matches.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://melvin.solid.social/#me', 'melvin');
+    const rootPodProfile = path.join(DATA_ROOT, 'profile', 'card.jsonld');
+    assert.ok(!paths.includes(rootPodProfile),
+      `cross-account window: ${rootPodProfile} must not be probed for a subdomain account; got ${paths.join(', ')}`);
+  });
+
+  it('pod-root WebID with trailing slash probes <pod>/profile/card.jsonld (#451)', () => {
+    // Path-mode sibling of the root-path case: pathname `/alice/`
+    // also resolves to a directory without the fallback.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/#me');
+    const expected = path.join(DATA_ROOT, 'alice', 'profile', 'card.jsonld');
+    assert.ok(paths.includes(expected),
+      `expected ${expected}; got ${paths.join(', ')}`);
+  });
+
+  it('root-path WebID does NOT probe a podName dir when the host label does not match (#451)', () => {
+    // The subdomain gate must keep applying to the fallback candidate;
+    // otherwise a root-pod WebID could probe another account's pod dir.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://melvin.solid.social/#me', 'other');
+    const leaked = path.join(DATA_ROOT, 'other', 'profile', 'card.jsonld');
+    assert.ok(!paths.includes(leaked),
+      `gate bypassed: ${leaked} should not be a candidate; got ${paths.join(', ')}`);
+  });
+
+  it('non-root WebIDs gain NO extra fallback candidates (#451)', () => {
+    // A document-shaped pathname must produce exactly the same
+    // candidate list as before the #451 fix.
+    const { paths } = profilePathCandidates(DATA_ROOT, 'https://example.com/alice/profile/card.jsonld#me');
+    assert.deepStrictEqual(paths, [path.join(DATA_ROOT, 'alice', 'profile', 'card.jsonld')]);
+  });
+
   it('returns empty paths for an unparseable webId', () => {
     assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, 'not a url'), { paths: [], skipped: [] });
     assert.deepStrictEqual(profilePathCandidates(DATA_ROOT, null), { paths: [], skipped: [] });
