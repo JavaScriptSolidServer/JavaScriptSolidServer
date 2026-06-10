@@ -310,6 +310,10 @@ export function profilePathFromWebId(dataRoot, webId, accountId = 'unknown') {
  *      → `<dataRoot>/profile/card.jsonld`
  *   3. Subdomain-mode pod   (host=`alice.example.com`, path=`/profile/card.jsonld`)
  *      → `<dataRoot>/alice/profile/card.jsonld`
+ *   4. Root-path WebID      (path=`/` or `/alice/`, e.g. `https://melvin.solid.social/#me`)
+ *      → additionally probes `profile/card.jsonld` under the
+ *      otherwise-directory candidate(s), e.g.
+ *      `<dataRoot>/melvin/profile/card.jsonld` (#451)
  *
  * The subdomain candidate (3) is gated on `podName` matching the
  * WebID host's first DNS label — without that gate, a root-pod
@@ -345,6 +349,23 @@ export function profilePathCandidates(dataRoot, webId, podName = null) {
   };
   // Path-mode named pod OR root pod.
   consider(pathnameRel);
+  // Root-path / pod-root WebID (#451): a WebID like
+  // `https://melvin.solid.social/#me` (pathname `/`) or
+  // `https://example.com/alice/#me` (pathname `/alice/`) makes the
+  // candidate above resolve to a DIRECTORY (dataRoot itself, or the
+  // pod dir) — never a profile document. Probe the conventional
+  // profile location underneath it. Only `profile/card.jsonld`: the
+  // rebuild loop reads candidates with JSON.parse, so the Turtle
+  // conventions (`profile/card`, `profile/card.ttl`) could never
+  // match anyway. Cross-account safety is preserved — the rebuild
+  // loop accepts a candidate only when the document's declared `@id`
+  // equals account.webId exactly.
+  const isPodRoot = pathnameRel === '' || pathnameRel.endsWith('/');
+  if (isPodRoot) {
+    // path.resolve skips empty segments, so pathnameRel === '' lands
+    // on `<dataRoot>/profile/card.jsonld` (root pod) as intended.
+    consider(pathnameRel, 'profile/card.jsonld');
+  }
   // Subdomain mode: only when the WebID host's first DNS label
   // matches the account's podName (case-insensitive — DNS is).
   if (typeof podName === 'string' && podName.length > 0) {
@@ -352,6 +373,9 @@ export function profilePathCandidates(dataRoot, webId, podName = null) {
     const expected = podName.toLowerCase() + '.';
     if (host.startsWith(expected)) {
       consider(podName, pathnameRel);
+      if (isPodRoot) {
+        consider(podName, pathnameRel, 'profile/card.jsonld');
+      }
     }
   }
   return { paths, skipped };
