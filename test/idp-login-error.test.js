@@ -38,9 +38,18 @@ function getAvailablePort() {
   });
 }
 
+// Headers.getSetCookie() landed in Node 18.15 / 19.7. The engines
+// field still declares >=18.0.0 (bump deferred — #541), so guard
+// explicitly rather than collecting zero cookies and failing at a
+// confusing distance. Skipping costs nothing on those runtimes: the
+// IdP itself cannot run on Node 18 at all (oidc-provider uses
+// Array#toReversed and crypto.hash — #523), so every IdP test is
+// already broken there.
+const HAS_GET_SET_COOKIE = typeof new Headers().getSetCookie === 'function';
+
 // Collect cookies from a response and merge into a name→value jar.
 function absorbCookies(jar, res) {
-  for (const c of res.headers.getSetCookie?.() || []) {
+  for (const c of res.headers.getSetCookie()) {
     const [pair] = c.split(';');
     const eq = pair.indexOf('=');
     if (eq > 0) jar.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
@@ -87,7 +96,11 @@ describe('IdP login form error rendering (#514)', () => {
     await fs.remove(DATA_DIR);
   });
 
-  it('re-renders the form WITH the error after a failed login', async () => {
+  it('re-renders the form WITH the error after a failed login', async (t) => {
+    if (!HAS_GET_SET_COOKIE) {
+      t.skip('Headers.getSetCookie unavailable (Node <18.15) — IdP requires Node 20+ anyway, see #523/#541');
+      return;
+    }
     // 1. Dynamic client registration
     const reg = await fetch(`${baseUrl}/idp/reg`, {
       method: 'POST',
