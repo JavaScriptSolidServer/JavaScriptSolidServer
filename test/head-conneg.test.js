@@ -98,7 +98,7 @@ describe('HEAD/GET content-type parity (#552)', () => {
   // artifact, not part of what negotiation decides.
   const mediaType = (res) => (res.headers.get('content-type') || '').split(';')[0].trim();
 
-  it('HEAD media type equals GET media type for every Accept variant (RFC 9110 §9.3.2)', async () => {
+  it('HEAD media type and Cache-Control equal GET\'s for every Accept variant (RFC 9110 §9.3.2)', async () => {
     for (const [accept, label] of ACCEPT_VARIANTS) {
       const headers = accept ? { Accept: accept } : {};
       const getRes = await fetch(`${baseUrl}/public/parity.jsonld`, { headers });
@@ -107,7 +107,29 @@ describe('HEAD/GET content-type parity (#552)', () => {
       assert.strictEqual(headRes.status, 200, `${label}: HEAD must 200`);
       assert.strictEqual(mediaType(headRes), mediaType(getRes),
         `${label}: HEAD media type must equal GET's`);
+      // GET applies RDF_CACHE_CONTROL to RDF responses; HEAD must agree.
+      assert.strictEqual(
+        headRes.headers.get('cache-control'),
+        getRes.headers.get('cache-control'),
+        `${label}: HEAD Cache-Control must equal GET's`,
+      );
     }
+  });
+
+  it('HEAD Cache-Control matches GET on container listings too', async () => {
+    // GET applies RDF_CACHE_CONTROL uniformly wherever the response
+    // type is RDF — including container listings, not just files.
+    const getRes = await fetch(`${baseUrl}/public/`);
+    const headRes = await fetch(`${baseUrl}/public/`, { method: 'HEAD' });
+    assert.strictEqual(getRes.status, 200);
+    assert.strictEqual(headRes.status, 200);
+    assert.strictEqual(mediaType(headRes), mediaType(getRes),
+      'container HEAD media type must equal GET\'s');
+    assert.strictEqual(
+      headRes.headers.get('cache-control'),
+      getRes.headers.get('cache-control'),
+      'container HEAD Cache-Control must equal GET\'s',
+    );
   });
 
   it('HEAD honors a Turtle-preferring Accept on a stored-JSON-LD file (the #552 bug)', async () => {

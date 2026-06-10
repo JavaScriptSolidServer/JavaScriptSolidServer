@@ -655,7 +655,7 @@ function readFirstBytes(storagePath, bytes) {
  * HTML-data-island sniff, the JSON-parse-success gate before conneg
  * conversion, and the extensionless-file HTML sniff — so this may read
  * the file, but only when the stored type makes content relevant and
- * the file is within HEAD_SNIFF_MAX_BYTES.
+ * the file is within HEAD_FULL_READ_MAX_BYTES.
  *
  * Returns `{ contentType, converted }`. `converted: true` means GET
  * would RE-SERIALIZE the body (Turtle conversion, or JSON-LD
@@ -868,6 +868,14 @@ export async function handleHead(request, reply) {
     connegEnabled,
     mashlibEnabled: request.mashlibEnabled
   });
+
+  // Mirror GET's Cache-Control for RDF responses (#552 header parity).
+  // GET applies RDF_CACHE_CONTROL uniformly wherever the response
+  // content type is RDF — container listings (Turtle/JSON-LD) and
+  // files (converted or as-is) alike; HTML responses don't get it.
+  if (isRdfContentType(contentType)) {
+    headers['Cache-Control'] = RDF_CACHE_CONTROL;
+  }
 
   // Content-Length: only set when the file size matches the response body.
   // Mashlib HTML and containers are dynamically generated, and a
