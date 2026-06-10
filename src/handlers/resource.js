@@ -622,13 +622,29 @@ export async function handleGet(request, reply) {
   return reply.send(content);
 }
 
-// Cap on how many bytes HEAD will read to decide a content type. GET
-// reads the whole file regardless (it has to send the body anyway), but
-// a HEAD on a multi-GB media file must not slurp it into memory just to
-// report a header. Above the cap HEAD falls back to the stored type —
-// for the RDF / HTML / extensionless files where content matters, 1 MiB
-// is far beyond anything realistic.
-const HEAD_SNIFF_MAX_BYTES = 1024 * 1024;
+// Cap on how many bytes HEAD will FULLY read to decide a content type.
+// GET reads the whole file regardless (it has to send the body anyway),
+// but a HEAD on a multi-GB file must not slurp it into memory just to
+// report a header. Above the cap, HEAD degrades gracefully per-case
+// (see negotiateHeadFileContentType) instead of reading. Bounded
+// first-bytes sniffs (HEAD_SNIFF_CHUNK_BYTES via a ranged read) are
+// allowed at ANY size — they cost O(1).
+const HEAD_FULL_READ_MAX_BYTES = 1024 * 1024;
+const HEAD_SNIFF_CHUNK_BYTES = 1024;
+
+// Read the first `bytes` of a file via a ranged stream — O(1) cost
+// regardless of file size. Used by HEAD to run GET's "does it look
+// like HTML?" sniffs without reading whole files.
+function readFirstBytes(storagePath, bytes) {
+  return new Promise((resolve) => {
+    const result = storage.createReadStream(storagePath, { start: 0, end: bytes - 1 });
+    if (!result) return resolve(null);
+    const chunks = [];
+    result.stream.on('data', (c) => chunks.push(c));
+    result.stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    result.stream.on('error', () => resolve(null));
+  });
+}
 
 /**
  * Mirror handleGet's content-type decision for a FILE so HEAD emits the
@@ -641,13 +657,6 @@ const HEAD_SNIFF_MAX_BYTES = 1024 * 1024;
  * the file, but only when the stored type makes content relevant and
  * the file is within HEAD_SNIFF_MAX_BYTES.
  *
- * Known residual divergence (deliberate): when GET's island/JSON-LD
- * conversion fails AFTER a successful parse (fromJsonLd error), GET
- * falls back to serving the raw bytes while this helper has already
- * committed to the negotiated type. That failure needs a parseable
- * document that still can't convert — not worth a full conversion dry
- * run on every HEAD.
- *
  * Returns `{ contentType, converted }`. `converted: true` means GET
  * would RE-SERIALIZE the body (Turtle conversion, or JSON-LD
  * re-serialization through fromJsonLd) — its Content-Length would NOT
@@ -655,23 +664,29 @@ const HEAD_SNIFF_MAX_BYTES = 1024 * 1024;
  * claim stats.size for a body GET never sends. The extensionless HTML
  * sniff only relabels the bytes (served as-is), so it is NOT a
  * conversion.
+ *
+ * Large files (> HEAD_FULL_READ_MAX_BYTES) degrade per-case instead of
+ * being read in full:
+ *   - RDF-stored: return the negotiated type WITHOUT the parse gate
+ *     (optimistic). The gate only mirrors GET's corrupt-file fallback;
+ *     a corrupt >1 MiB RDF document is far rarer than a valid one, so
+ *     optimism keeps parity for the common case and confines the
+ *     divergence to that corner.
+ *   - HTML-stored + Turtle-preferring Accept: stay at text/html
+ *     (conservative) — the data island can sit anywhere in the file,
+ *     so its presence can't be checked without a full read.
+ *   - Extensionless: the HTML sniff only needs the first bytes, so it
+ *     runs at ANY size via a bounded ranged read.
+ *
+ * Known residual divergences (deliberate, all need unusual documents):
+ * a parseable-but-unconvertible document (GET's fromJsonLd fails after
+ * JSON.parse succeeds → GET falls back to raw bytes), a corrupt
+ * >1 MiB RDF file (optimistic path above), and a >1 MiB HTML file
+ * carrying a data island (conservative path above).
  */
 async function negotiateHeadFileContentType({ storagePath, urlPath, stats, acceptHeader, connegEnabled }) {
   const storedContentType = getContentType(storagePath);
-
-  // Content only matters for: conneg over RDF/HTML-stored files, or the
-  // extensionless (octet-stream) HTML sniff that GET applies even
-  // without conneg.
-  const contentRelevant =
-    (connegEnabled && (isRdfContentType(storedContentType) || storedContentType === 'text/html')) ||
-    storedContentType === 'application/octet-stream';
-  if (!contentRelevant || stats.size > HEAD_SNIFF_MAX_BYTES) {
-    return { contentType: storedContentType, converted: false };
-  }
-
-  const content = await storage.read(storagePath);
-  if (content === null) return { contentType: storedContentType, converted: false };
-  const contentStr = content.toString();
+  const fitsFullRead = stats.size <= HEAD_FULL_READ_MAX_BYTES;
 
   if (connegEnabled) {
     // Same negotiation as handleGet's file branch (#325 q-aware).
@@ -680,36 +695,64 @@ async function negotiateHeadFileContentType({ storagePath, urlPath, stats, accep
       || negotiated === RDF_TYPES.TURTLE
       || negotiated === RDF_TYPES.N3
       || negotiated === 'application/n-triples';
-    const trimmed = contentStr.trimStart();
-    const isHtmlWithDataIsland = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html');
 
-    if (isHtmlWithDataIsland && wantsTurtle) {
-      // GET converts the island to Turtle only when it exists AND its
-      // JSON parses; otherwise it serves the HTML as-is.
-      const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
-      if (jsonLdMatch) {
-        try {
-          JSON.parse(jsonLdMatch[1]);
-          return { contentType: 'text/turtle', converted: true };
-        } catch { /* unparseable island → GET serves HTML; fall through */ }
+    if (isRdfContentType(storedContentType)) {
+      const targetType = wantsTurtle ? 'text/turtle' : selectContentType(acceptHeader, connegEnabled);
+      if (!fitsFullRead) {
+        // Optimistic large-file path — see docstring.
+        return { contentType: targetType, converted: true };
       }
-    } else if (isRdfContentType(storedContentType)) {
-      try {
-        JSON.parse(contentStr); // GET only converts when the body parses
-        return {
-          contentType: wantsTurtle ? 'text/turtle' : selectContentType(acceptHeader, connegEnabled),
-          converted: true,
-        };
-      } catch { /* not valid JSON-LD → GET serves as-is; fall through */ }
+      const content = await storage.read(storagePath);
+      if (content !== null) {
+        try {
+          JSON.parse(content.toString()); // GET only converts when the body parses
+          return { contentType: targetType, converted: true };
+        } catch { /* not valid JSON-LD → GET serves as-is; fall through */ }
+      }
+      return { contentType: storedContentType, converted: false };
+    }
+
+    // GET's data-island check keys off CONTENT, not the stored type —
+    // an extensionless (octet-stream) HTML file with an island converts
+    // too. Run it for both HTML-stored and extensionless files; the
+    // extensionless case falls through to the relabel sniff below when
+    // no island converts.
+    const islandCandidate =
+      storedContentType === 'text/html' || storedContentType === 'application/octet-stream';
+    if (islandCandidate && wantsTurtle && fitsFullRead) {
+      // GET converts an HTML data island to Turtle only when the island
+      // exists AND its JSON parses; otherwise it serves the HTML as-is.
+      const content = await storage.read(storagePath);
+      if (content !== null) {
+        const contentStr = content.toString();
+        const trimmed = contentStr.trimStart();
+        if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+          const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+          if (jsonLdMatch) {
+            try {
+              JSON.parse(jsonLdMatch[1]);
+              return { contentType: 'text/turtle', converted: true };
+            } catch { /* unparseable island → GET serves HTML; fall through */ }
+          }
+        }
+      }
+      if (storedContentType === 'text/html') {
+        return { contentType: storedContentType, converted: false };
+      }
+      // octet-stream: fall through to the HTML relabel sniff below.
     }
   }
 
   // As-is path: GET sniffs extensionless files for HTML by content.
-  // The bytes are served unmodified — relabel only, no conversion.
+  // Only the first bytes matter, so the sniff runs at any file size
+  // via a bounded ranged read. Relabel only — no conversion.
   if (storedContentType === 'application/octet-stream') {
-    const t = contentStr.trimStart();
-    if (t.startsWith('<!DOCTYPE') || t.startsWith('<html')) {
-      return { contentType: 'text/html', converted: false };
+    const head = await readFirstBytes(storagePath, HEAD_SNIFF_CHUNK_BYTES);
+    if (head !== null) {
+      const t = head.trimStart();
+      if (t.startsWith('<!DOCTYPE') || t.startsWith('<html')) {
+        return { contentType: 'text/html', converted: false };
+      }
     }
   }
   return { contentType: storedContentType, converted: false };

@@ -142,6 +142,38 @@ describe('HEAD/GET content-type parity (#552)', () => {
       'as-is responses keep Content-Length');
   });
 
+  it('HEAD negotiates large (>1 MiB) RDF files too — optimistic path, no full read', async () => {
+    // Copilot review case on the first draft: the full-read cap must
+    // not regress parity for large VALID RDF documents. Above the cap
+    // HEAD skips the parse gate and trusts the extension.
+    const big = {
+      '@context': { name: 'http://xmlns.com/foaf/0.1/name' },
+      '@id': '#it',
+      name: 'x'.repeat(1024 * 1024 + 1024), // > HEAD_FULL_READ_MAX_BYTES
+    };
+    await fs.writeFile(path.join(DATA_DIR, 'public', 'big.jsonld'), JSON.stringify(big));
+    const res = await fetch(`${baseUrl}/public/big.jsonld`, {
+      method: 'HEAD',
+      headers: { Accept: 'text/turtle, application/ld+json' },
+    });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type'), /text\/turtle/,
+      'large valid RDF must still negotiate on HEAD');
+    assert.strictEqual(res.headers.get('content-length'), null,
+      'converted large-file HEAD must omit Content-Length');
+  });
+
+  it('HEAD sniffs large (>1 MiB) extensionless HTML via bounded ranged read', async () => {
+    const filler = '<!DOCTYPE html><html><body>' + 'y'.repeat(1024 * 1024 + 1024) + '</body></html>';
+    await fs.writeFile(path.join(DATA_DIR, 'public', 'big-noext'), filler);
+    const res = await fetch(`${baseUrl}/public/big-noext`, { method: 'HEAD' });
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type'), /text\/html/,
+      'the HTML sniff only needs the first bytes — size must not disable it');
+    assert.ok(res.headers.get('content-length'),
+      'as-is large file keeps Content-Length');
+  });
+
   it('HEAD with If-None-Match still returns 304 (negotiation must not break revalidation)', async () => {
     const probe = await fetch(`${baseUrl}/public/parity.jsonld`, { method: 'HEAD' });
     const etag = probe.headers.get('etag');
