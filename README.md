@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/javascript-solid-server)](https://www.npmjs.com/package/javascript-solid-server)
 
-A minimal, fast, JSON-LD native Solid server.
+A minimal, fast, JSON-LD native Solid server for the agentic web.
 
 **[Documentation](https://javascriptsolidserver.github.io/docs/)** | **[GitHub](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer)**
 
@@ -18,6 +18,7 @@ A minimal, fast, JSON-LD native Solid server.
 - **JSON-LD Native** — Stores and serves JSON-LD by default, Turtle via `--conneg`
 - **Web Access Control** — `.acl` file-based authorization
 - **Solid-OIDC** — Built-in Identity Provider with DPoP, passkeys, Schnorr SSO
+- **Programmatic Auth** — `POST /idp/credentials` issues tokens from email/password; agents and headless clients authenticate with no browser flow
 - **WebSocket Notifications** — Real-time updates (solid-0.1 protocol)
 - **Content Negotiation** — Turtle ↔ JSON-LD conversion (optional)
 - **Multi-user Pods** — Path-based (`/alice/`) or subdomain-based (`alice.example.com`)
