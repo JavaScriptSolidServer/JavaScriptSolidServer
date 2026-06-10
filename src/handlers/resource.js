@@ -722,13 +722,30 @@ async function negotiateHeadFileContentType({ storagePath, urlPath, stats, accep
     if (wantsTurtle && fitsFullRead) {
       const head = await readFirstBytes(storagePath, HEAD_SNIFF_CHUNK_BYTES);
       const headTrimmed = head === null ? '' : head.trimStart();
-      if (headTrimmed.startsWith('<!DOCTYPE') || headTrimmed.startsWith('<html')) {
+      let looksHtml = headTrimmed.startsWith('<!DOCTYPE') || headTrimmed.startsWith('<html');
+      let contentStr = null;
+      if (!looksHtml && head !== null && headTrimmed === '' && stats.size > HEAD_SNIFF_CHUNK_BYTES) {
+        // The chunk was entirely whitespace and the file continues past
+        // it — GET trims the FULL body, so the HTML marker may sit
+        // beyond the chunk. The file already fits the full-read budget;
+        // read it and decide exactly like GET does.
+        const content = await storage.read(storagePath);
+        if (content !== null) {
+          contentStr = content.toString();
+          const trimmed = contentStr.trimStart();
+          looksHtml = trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html');
+        }
+      }
+      if (looksHtml) {
         // GET converts an HTML data island to Turtle only when the
         // island exists AND its JSON parses; otherwise it serves the
         // document as-is.
-        const content = await storage.read(storagePath);
-        if (content !== null) {
-          const jsonLdMatch = content.toString().match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+        if (contentStr === null) {
+          const content = await storage.read(storagePath);
+          contentStr = content === null ? null : content.toString();
+        }
+        if (contentStr !== null) {
+          const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
           if (jsonLdMatch) {
             try {
               JSON.parse(jsonLdMatch[1]);

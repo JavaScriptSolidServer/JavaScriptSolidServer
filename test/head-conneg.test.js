@@ -216,6 +216,26 @@ describe('HEAD/GET content-type parity (#552)', () => {
       `xhtml island: HEAD (${mediaType(headRes)}) must equal GET (${mediaType(getRes)})`);
   });
 
+  it('island detection survives >1 KiB of leading whitespace (pass-4 review case)', async () => {
+    // GET trims the FULL body before its <!DOCTYPE/<html check, so a
+    // whitespace-padded island document still negotiates to Turtle.
+    // HEAD's 1 KiB sniff must escalate to the full read when the chunk
+    // is entirely whitespace, not silently miss the marker.
+    const padded = ' '.repeat(2048) + '<html><head>' +
+      '<script type="application/ld+json">' +
+      JSON.stringify({ '@context': { name: 'http://xmlns.com/foaf/0.1/name' }, '@id': '#it', name: 'padded' }) +
+      '</script></head><body/></html>';
+    await fs.writeFile(path.join(DATA_DIR, 'public', 'padded.xhtml'), padded);
+
+    const headers = { Accept: 'text/turtle, application/ld+json' };
+    const getRes = await fetch(`${baseUrl}/public/padded.xhtml`, { headers });
+    const headRes = await fetch(`${baseUrl}/public/padded.xhtml`, { method: 'HEAD', headers });
+    assert.strictEqual(getRes.status, 200);
+    assert.strictEqual(headRes.status, 200);
+    assert.strictEqual(mediaType(headRes), mediaType(getRes),
+      `whitespace-padded island: HEAD (${mediaType(headRes)}) must equal GET (${mediaType(getRes)})`);
+  });
+
   it('HEAD with If-None-Match still returns 304 (negotiation must not break revalidation)', async () => {
     const probe = await fetch(`${baseUrl}/public/parity.jsonld`, { method: 'HEAD' });
     const etag = probe.headers.get('etag');
