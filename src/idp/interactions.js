@@ -95,7 +95,7 @@ export async function handleInteractionGet(request, reply, provider) {
 
     // If we need login
     if (prompt.name === 'login') {
-      return reply.type('text/html').send(loginPage(uid, params.client_id, interaction.lastError));
+      return reply.type('text/html').send(loginPage(uid, params.client_id, interaction.lastSubmission?.lastError));
     }
 
     // If we need consent
@@ -173,9 +173,17 @@ export async function handleLogin(request, reply, provider) {
       return reply.code(404).type('text/html').send(errorPage('Session expired', 'Please try logging in again.'));
     }
 
-    // Validate input
+    // Validate input.
+    //
+    // The error must live inside `lastSubmission` — oidc-provider's
+    // Interaction.save() persists ONLY the fields in the model's
+    // IN_PAYLOAD list (lib/models/interaction.js), and `lastSubmission`
+    // is the designated slot for form re-render state. A bare
+    // `interaction.lastError = …` survives in memory but is silently
+    // DROPPED on save, so the redirected GET re-rendered the form with
+    // no error and users retried blind (#514).
     if (!identifier || !password) {
-      interaction.lastError = 'Username and password are required';
+      interaction.lastSubmission = { lastError: 'Username and password are required' };
       await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
       return reply.redirect(`/idp/interaction/${uid}`);
     }
@@ -183,7 +191,8 @@ export async function handleLogin(request, reply, provider) {
     // Authenticate
     const account = await authenticate(identifier, password);
     if (!account) {
-      interaction.lastError = 'Invalid username or password';
+      // See the IN_PAYLOAD note above — must ride in lastSubmission.
+      interaction.lastSubmission = { lastError: 'Invalid username or password' };
       await interaction.save(interaction.exp - Math.floor(Date.now() / 1000));
       return reply.redirect(`/idp/interaction/${uid}`);
     }
@@ -404,7 +413,7 @@ export async function handleSwitchAccount(request, reply, provider) {
     interaction.session = undefined;
     interaction.result = undefined;
     interaction.prompt = { name: 'login', reasons: ['no_session'], details: {} };
-    interaction.lastError = undefined;
+    interaction.lastSubmission = undefined;
     const ttl = Math.max(1, interaction.exp - Math.floor(Date.now() / 1000));
     await interaction.save(ttl);
 
