@@ -672,17 +672,18 @@ function readFirstBytes(storagePath, bytes) {
  *     a corrupt >1 MiB RDF document is far rarer than a valid one, so
  *     optimism keeps parity for the common case and confines the
  *     divergence to that corner.
- *   - HTML-stored + Turtle-preferring Accept: stay at text/html
- *     (conservative) — the data island can sit anywhere in the file,
- *     so its presence can't be checked without a full read.
+ *   - HTML-looking content (any stored type) + Turtle-preferring
+ *     Accept: stay at the stored type (conservative) — the data
+ *     island can sit anywhere in the file, so its presence can't be
+ *     checked without the full read this cap exists to avoid.
  *   - Extensionless: the HTML sniff only needs the first bytes, so it
  *     runs at ANY size via a bounded ranged read.
  *
  * Known residual divergences (deliberate, all need unusual documents):
  * a parseable-but-unconvertible document (GET's fromJsonLd fails after
  * JSON.parse succeeds → GET falls back to raw bytes), a corrupt
- * >1 MiB RDF file (optimistic path above), and a >1 MiB HTML file
- * carrying a data island (conservative path above).
+ * >1 MiB RDF file (optimistic path above), and a >1 MiB HTML-looking
+ * file carrying a data island (conservative path above).
  */
 async function negotiateHeadFileContentType({ storagePath, urlPath, stats, acceptHeader, connegEnabled }) {
   const storedContentType = getContentType(storagePath);
@@ -712,34 +713,32 @@ async function negotiateHeadFileContentType({ storagePath, urlPath, stats, accep
       return { contentType: storedContentType, converted: false };
     }
 
-    // GET's data-island check keys off CONTENT, not the stored type —
-    // an extensionless (octet-stream) HTML file with an island converts
-    // too. Run it for both HTML-stored and extensionless files; the
-    // extensionless case falls through to the relabel sniff below when
-    // no island converts.
-    const islandCandidate =
-      storedContentType === 'text/html' || storedContentType === 'application/octet-stream';
-    if (islandCandidate && wantsTurtle && fitsFullRead) {
-      // GET converts an HTML data island to Turtle only when the island
-      // exists AND its JSON parses; otherwise it serves the HTML as-is.
-      const content = await storage.read(storagePath);
-      if (content !== null) {
-        const contentStr = content.toString();
-        const trimmed = contentStr.trimStart();
-        if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
-          const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+    // GET's data-island branch is gated on CONTENT ONLY — any file
+    // whose body starts with <!DOCTYPE/<html gets the island→Turtle
+    // conversion, regardless of stored type (.html, extensionless,
+    // .xhtml, …). Mirror that: a 1 KiB ranged sniff decides HTML-ness
+    // for O(1) cost on any file, and only HTML-looking content pays
+    // the full read for the island check.
+    if (wantsTurtle && fitsFullRead) {
+      const head = await readFirstBytes(storagePath, HEAD_SNIFF_CHUNK_BYTES);
+      const headTrimmed = head === null ? '' : head.trimStart();
+      if (headTrimmed.startsWith('<!DOCTYPE') || headTrimmed.startsWith('<html')) {
+        // GET converts an HTML data island to Turtle only when the
+        // island exists AND its JSON parses; otherwise it serves the
+        // document as-is.
+        const content = await storage.read(storagePath);
+        if (content !== null) {
+          const jsonLdMatch = content.toString().match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
           if (jsonLdMatch) {
             try {
               JSON.parse(jsonLdMatch[1]);
               return { contentType: 'text/turtle', converted: true };
-            } catch { /* unparseable island → GET serves HTML; fall through */ }
+            } catch { /* unparseable island → GET serves as-is; fall through */ }
           }
         }
       }
-      if (storedContentType === 'text/html') {
-        return { contentType: storedContentType, converted: false };
-      }
-      // octet-stream: fall through to the HTML relabel sniff below.
+      // No island conversion → fall through to the as-is path below
+      // (HTML-looking extensionless files still get the relabel sniff).
     }
   }
 

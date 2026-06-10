@@ -196,6 +196,26 @@ describe('HEAD/GET content-type parity (#552)', () => {
       'as-is large file keeps Content-Length');
   });
 
+  it('island negotiation keys off content, not stored type (.xhtml file, pass-3 review case)', async () => {
+    // GET's data-island branch is gated on CONTENT only — a .xhtml
+    // file (stored type application/xhtml+xml) whose body starts with
+    // <html and carries a parseable island converts to Turtle. HEAD
+    // must agree.
+    const xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><head>' +
+      '<script type="application/ld+json">' +
+      JSON.stringify({ '@context': { name: 'http://xmlns.com/foaf/0.1/name' }, '@id': '#it', name: 'xhtml-island' }) +
+      '</script></head><body/></html>';
+    await fs.writeFile(path.join(DATA_DIR, 'public', 'island.xhtml'), xhtml);
+
+    const headers = { Accept: 'text/turtle, application/ld+json' };
+    const getRes = await fetch(`${baseUrl}/public/island.xhtml`, { headers });
+    const headRes = await fetch(`${baseUrl}/public/island.xhtml`, { method: 'HEAD', headers });
+    assert.strictEqual(getRes.status, 200);
+    assert.strictEqual(headRes.status, 200);
+    assert.strictEqual(mediaType(headRes), mediaType(getRes),
+      `xhtml island: HEAD (${mediaType(headRes)}) must equal GET (${mediaType(getRes)})`);
+  });
+
   it('HEAD with If-None-Match still returns 304 (negotiation must not break revalidation)', async () => {
     const probe = await fetch(`${baseUrl}/public/parity.jsonld`, { method: 'HEAD' });
     const etag = probe.headers.get('etag');
