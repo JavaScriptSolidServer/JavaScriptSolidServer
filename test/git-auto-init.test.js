@@ -141,6 +141,14 @@ describe('Git auto-init on first push', () => {
     await fs.ensureDir(DATA_DIR_AUTH);
     const port = await getAvailablePort();
     const authBaseUrl = `http://${TEST_HOST}:${port}`;
+    // createServer({ root }) mutates process.env.DATA_ROOT globally, and
+    // handleGit resolves the data root PER REQUEST via getDataRoot().
+    // Without restoring the env afterwards, every later test in this
+    // file silently runs against DATA_DIR_AUTH instead of DATA_DIR —
+    // auto-initing repos in the wrong tree and leaving the authcheck
+    // directory behind after the suite's cleanup (which only removes
+    // DATA_DIR). Same pollution class as the #543 review finding.
+    const originalDataRoot = process.env.DATA_ROOT;
     const authServer = createServer({
       logger: false,
       root: DATA_DIR_AUTH,
@@ -162,6 +170,8 @@ describe('Git auto-init on first push', () => {
         'auto-init MUST NOT create a directory for an unauthenticated request');
     } finally {
       await authServer.close();
+      if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
+      else process.env.DATA_ROOT = originalDataRoot;
       await fs.remove(DATA_DIR_AUTH);
     }
   });
