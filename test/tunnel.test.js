@@ -240,8 +240,17 @@ describe('Tunnel Proxy', () => {
         'cookie must NOT reach the tunnel client by default');
       assert.strictEqual(receivedHeaders.authorization, undefined,
         'authorization must NOT reach the tunnel client by default');
-      assert.strictEqual(res.headers.get('set-cookie'), null,
-        'set-cookie from the tunnel client must NOT reach the visitor by default');
+      // Feature-detect here too: on some undici versions get('set-cookie')
+      // is null even when Set-Cookie headers ARE present (only readable
+      // via getSetCookie), which would make a null assertion vacuous and
+      // could mask a regression in the default strip mode.
+      if (typeof res.headers.getSetCookie === 'function') {
+        assert.deepStrictEqual(res.headers.getSetCookie(), [],
+          'set-cookie from the tunnel client must NOT reach the visitor by default');
+      } else {
+        assert.strictEqual(res.headers.get('set-cookie'), null,
+          'set-cookie from the tunnel client must NOT reach the visitor by default');
+      }
 
       ws.close();
       await new Promise(r => setTimeout(r, 50));
