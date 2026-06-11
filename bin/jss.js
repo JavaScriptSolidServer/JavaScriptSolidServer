@@ -190,6 +190,10 @@ program
       const server = createServer({
         port: config.port,
         host: config.host,
+        // Wire the parsed --body-limit / JSS_BODY_LIMIT value through —
+        // omitting it here silently pinned every CLI-started server to
+        // the 10MB default and made the #474 knob dead wiring (#561).
+        bodyLimit: config.bodyLimit,
         logger: config.logger,
         conneg: config.conneg,
         notifications: config.notifications,

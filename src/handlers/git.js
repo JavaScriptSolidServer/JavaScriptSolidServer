@@ -279,7 +279,15 @@ export async function handleGit(request, reply) {
     CONTENT_TYPE: request.headers['content-type'] || '',
     QUERY_STRING: queryString,
     REMOTE_USER: request.webId || '',           // Pass authenticated user
-    CONTENT_LENGTH: request.headers['content-length'] || '0',
+    // Use the buffered body's real length, not the Content-Length header:
+    // git sends packs larger than http.postBuffer (1 MiB default) with
+    // Transfer-Encoding: chunked and NO Content-Length, so the header
+    // fallback told http-backend "0 bytes" and receive-pack died with
+    // "the remote end hung up unexpectedly" on any push > 1 MiB (#561).
+    // Fastify has already buffered the full body either way.
+    CONTENT_LENGTH: request.body?.length
+      ? String(request.body.length)
+      : (request.headers['content-length'] || '0'),
   };
 
   // For regular repositories, set GIT_DIR
