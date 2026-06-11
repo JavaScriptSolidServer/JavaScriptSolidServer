@@ -296,6 +296,37 @@ describe('Tunnel Proxy', () => {
       await new Promise(r => setTimeout(r, 50));
     });
 
+    it('passthrough strips the relay\'s own IdP cookies but keeps the service cookies (#530 session-hijack guard)', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      await echoTunnel(ws, 'mixedcookies', { passthrough: true });
+
+      // Visitor carries BOTH a cookie for the tunnelled app AND the
+      // relay's own oidc session cookies (path=/, so a real browser
+      // would attach them on /tunnel/... too). The relay cookies must
+      // never reach the tunnel client; the app cookie must.
+      const res = await fetch(`${baseUrl}/tunnel/mixedcookies/`, {
+        headers: {
+          // `appsid` deliberately avoids the `_session` substring so the
+          // assertions below can test cookie *values* without collision.
+          Cookie: 'appsid=keep; _session=relay-secret; _session.sig=relay-sig; _interaction=flow',
+        },
+      });
+      assert.strictEqual(res.status, 200);
+      const { receivedHeaders } = await res.json();
+      const fwd = receivedHeaders.cookie || '';
+      assert.ok(fwd.includes('appsid=keep'),
+        `tunnelled-service cookie must survive; got: ${fwd}`);
+      assert.ok(!fwd.includes('relay-secret') && !fwd.includes('relay-sig'),
+        `relay _session cookies must NOT be forwarded; got: ${fwd}`);
+      assert.ok(!fwd.includes('_interaction'),
+        `relay _interaction cookies must NOT be forwarded; got: ${fwd}`);
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
     it('passthrough never forwards Proxy-Authorization (relay-directed credential)', async () => {
       const ws = connectTunnel();
       await new Promise(r => ws.on('open', r));

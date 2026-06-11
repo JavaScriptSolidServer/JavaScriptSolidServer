@@ -11,7 +11,7 @@
  *
  * Tunnel client protocol (JSON over WebSocket):
  *   → { type: "register", name: "myapp", passthrough?: true }
- *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/", passthrough: false }
+ *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/", passthrough: true|false }
  *   ← { type: "request", id: "<uuid>", method: "GET", path: "/api/hello", headers: {...}, body: "..." }
  *   → { type: "response", id: "<uuid>", status: 200, headers: {...}, body: "..." }
  *   ← { type: "error", message: "..." }
@@ -28,7 +28,47 @@
  * relay" case), which is why it is per-tunnel, owner-asserted, and
  * off by default. `Proxy-Authorization` is always stripped — it is
  * addressed to this relay, never to the tunnelled service.
+ *
+ * Even with passthrough on, the relay's OWN IdP session/interaction
+ * cookies are stripped from the forwarded Cookie header. oidc-provider
+ * sets them with `path: '/'`, so a browser attaches them to
+ * `/tunnel/...` requests too — but they authenticate the visitor to
+ * THE RELAY, not to the tunnelled service. Forwarding them would let a
+ * tunnel client capture a visitor's relay `_session` and replay it
+ * against the relay's `/idp/*` endpoints (session hijack). See #530.
  */
+
+// Cookie names reserved by the relay's own oidc-provider IdP
+// (`_session`, `_session.sig`, `_session.legacy[.sig]`, `_interaction`,
+// `_interaction.sig`, `_interaction_resume[.sig]`). They share two
+// prefixes; we match the prefix plus a `.`/`_` boundary so a tunnelled
+// service's unrelated cookie (e.g. `_sessionsLeft`) isn't stripped.
+const RELAY_COOKIE_PREFIXES = ['_session', '_interaction'];
+
+function isRelayCookieName(name) {
+  return RELAY_COOKIE_PREFIXES.some(
+    (p) => name === p || name.startsWith(`${p}.`) || name.startsWith(`${p}_`),
+  );
+}
+
+/**
+ * Remove the relay's own IdP cookies from a forwarded Cookie header,
+ * keeping the visitor's cookies bound for the tunnelled service.
+ * Returns '' when nothing remains (caller then drops the header).
+ */
+function stripRelayCookies(cookieHeader) {
+  if (typeof cookieHeader !== 'string') return '';
+  return cookieHeader
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((pair) => {
+      const eq = pair.indexOf('=');
+      const name = (eq === -1 ? pair : pair.slice(0, eq)).trim();
+      return !isRelayCookieName(name);
+    })
+    .join('; ');
+}
 
 import websocket from '@fastify/websocket';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
@@ -197,9 +237,16 @@ export async function tunnelPlugin(fastify, options = {}) {
       skipHeaders.add('authorization');
     }
     for (const [k, v] of Object.entries(request.headers)) {
-      if (!skipHeaders.has(k.toLowerCase())) {
-        tunnelReq.headers[k] = v;
+      const lower = k.toLowerCase();
+      if (skipHeaders.has(lower)) continue;
+      if (lower === 'cookie' && tunnel.passthrough) {
+        // Forward the visitor's cookies for the tunnelled service, but
+        // never the relay's own IdP session cookies (#530 security).
+        const filtered = stripRelayCookies(v);
+        if (filtered) tunnelReq.headers[k] = filtered;
+        continue;
       }
+      tunnelReq.headers[k] = v;
     }
     // Forward body if present
     if (request.body) {
