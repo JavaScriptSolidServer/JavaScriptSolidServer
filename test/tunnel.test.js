@@ -199,4 +199,170 @@ describe('Tunnel Proxy', () => {
       await new Promise(r => setTimeout(r, 50));
     });
   });
+
+  describe('Credential passthrough (#530)', () => {
+    // Register a tunnel, echo each request's received headers back in
+    // the response body, and attach the given response headers — lets
+    // tests assert both directions of the credential flow.
+    function echoTunnel(ws, name, { passthrough, responseHeaders = {} } = {}) {
+      ws.send(JSON.stringify({ type: 'register', name, ...(passthrough !== undefined && { passthrough }) }));
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'request') {
+          ws.send(JSON.stringify({
+            type: 'response',
+            id: msg.id,
+            status: 200,
+            headers: { 'content-type': 'application/json', ...responseHeaders },
+            body: JSON.stringify({ receivedHeaders: msg.headers })
+          }));
+        }
+      });
+      return waitMsg(ws, 'registered');
+    }
+
+    it('default registration strips credentials both ways (the security default)', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      const ack = await echoTunnel(ws, 'noauth', {
+        responseHeaders: { 'set-cookie': 'leak=1; Path=/' }
+      });
+      assert.strictEqual(ack.passthrough, false,
+        'ack must state passthrough is off');
+
+      const res = await fetch(`${baseUrl}/tunnel/noauth/`, {
+        headers: { Cookie: 'session=secret', Authorization: 'Bearer visitor-token' }
+      });
+      assert.strictEqual(res.status, 200);
+      const { receivedHeaders } = await res.json();
+      assert.strictEqual(receivedHeaders.cookie, undefined,
+        'cookie must NOT reach the tunnel client by default');
+      assert.strictEqual(receivedHeaders.authorization, undefined,
+        'authorization must NOT reach the tunnel client by default');
+      // Feature-detect here too: on some undici versions get('set-cookie')
+      // is null even when Set-Cookie headers ARE present (only readable
+      // via getSetCookie), which would make a null assertion vacuous and
+      // could mask a regression in the default strip mode.
+      if (typeof res.headers.getSetCookie === 'function') {
+        assert.deepStrictEqual(res.headers.getSetCookie(), [],
+          'set-cookie from the tunnel client must NOT reach the visitor by default');
+      } else {
+        assert.strictEqual(res.headers.get('set-cookie'), null,
+          'set-cookie from the tunnel client must NOT reach the visitor by default');
+      }
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    it('passthrough registration forwards Cookie/Authorization in and Set-Cookie out', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      const ack = await echoTunnel(ws, 'authapp', {
+        passthrough: true,
+        // Array value: JSON serialization preserves it and Fastify
+        // emits one Set-Cookie header per entry.
+        responseHeaders: { 'set-cookie': ['sess=abc; Path=/', 'csrf=xyz; Path=/'] }
+      });
+      assert.strictEqual(ack.passthrough, true, 'ack must confirm passthrough');
+
+      const res = await fetch(`${baseUrl}/tunnel/authapp/`, {
+        headers: { Cookie: 'session=secret', Authorization: 'Bearer visitor-token' }
+      });
+      assert.strictEqual(res.status, 200);
+      const { receivedHeaders } = await res.json();
+      assert.strictEqual(receivedHeaders.cookie, 'session=secret',
+        'cookie must reach the tunnel client with passthrough');
+      assert.strictEqual(receivedHeaders.authorization, 'Bearer visitor-token',
+        'authorization must reach the tunnel client with passthrough');
+      // Headers#getSetCookie() (Node ≥18.15) is the supported way to
+      // read multiple Set-Cookie values; get('set-cookie') behaviour
+      // varies by undici version and may expose only one value. Feature-
+      // detect: assert the full pair on the real API, degrade to a
+      // single-cookie assertion on older runtimes (engines floor bump
+      // tracked in #541).
+      const hasGetSetCookie = typeof res.headers.getSetCookie === 'function';
+      const setCookie = hasGetSetCookie
+        ? res.headers.getSetCookie().join('; ')
+        : (res.headers.get('set-cookie') || '');
+      assert.ok(setCookie.includes('sess=abc'), `sess cookie must survive; got: ${setCookie}`);
+      if (hasGetSetCookie) {
+        assert.ok(setCookie.includes('csrf=xyz'), `csrf cookie must survive; got: ${setCookie}`);
+      }
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    it('passthrough strips the relay\'s own IdP cookies but keeps the service cookies (#530 session-hijack guard)', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      await echoTunnel(ws, 'mixedcookies', { passthrough: true });
+
+      // Visitor carries BOTH a cookie for the tunnelled app AND the
+      // relay's own oidc session cookies (path=/, so a real browser
+      // would attach them on /tunnel/... too). The relay cookies must
+      // never reach the tunnel client; the app cookie must.
+      const res = await fetch(`${baseUrl}/tunnel/mixedcookies/`, {
+        headers: {
+          // `appsid` deliberately avoids the `_session` substring so the
+          // assertions below can test cookie *values* without collision.
+          Cookie: 'appsid=keep; _session=relay-secret; _session.sig=relay-sig; _interaction=flow',
+        },
+      });
+      assert.strictEqual(res.status, 200);
+      const { receivedHeaders } = await res.json();
+      const fwd = receivedHeaders.cookie || '';
+      assert.ok(fwd.includes('appsid=keep'),
+        `tunnelled-service cookie must survive; got: ${fwd}`);
+      assert.ok(!fwd.includes('relay-secret') && !fwd.includes('relay-sig'),
+        `relay _session cookies must NOT be forwarded; got: ${fwd}`);
+      assert.ok(!fwd.includes('_interaction'),
+        `relay _interaction cookies must NOT be forwarded; got: ${fwd}`);
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    it('passthrough never forwards Proxy-Authorization (relay-directed credential)', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      await echoTunnel(ws, 'proxyauth', { passthrough: true });
+
+      const res = await fetch(`${baseUrl}/tunnel/proxyauth/`, {
+        headers: { 'Proxy-Authorization': 'Basic cmVsYXk6c2VjcmV0' }
+      });
+      assert.strictEqual(res.status, 200);
+      const { receivedHeaders } = await res.json();
+      assert.strictEqual(receivedHeaders['proxy-authorization'], undefined,
+        'proxy-authorization is addressed to the relay and must never be forwarded');
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+
+    it('non-boolean passthrough values do not enable forwarding (strict === true)', async () => {
+      const ws = connectTunnel();
+      await new Promise(r => ws.on('open', r));
+
+      // "true" (string) must not opt a tunnel into credential forwarding.
+      const ack = await echoTunnel(ws, 'stringy', { passthrough: 'true' });
+      assert.strictEqual(ack.passthrough, false,
+        'string "true" must not enable passthrough');
+
+      const res = await fetch(`${baseUrl}/tunnel/stringy/`, {
+        headers: { Cookie: 'session=secret' }
+      });
+      const { receivedHeaders } = await res.json();
+      assert.strictEqual(receivedHeaders.cookie, undefined,
+        'credentials stay stripped for non-boolean opt-in values');
+
+      ws.close();
+      await new Promise(r => setTimeout(r, 50));
+    });
+  });
 });

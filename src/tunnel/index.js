@@ -10,12 +10,69 @@
  * Public URL: https://your.pod/tunnel/{name}/path
  *
  * Tunnel client protocol (JSON over WebSocket):
- *   → { type: "register", name: "myapp" }
- *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/" }
+ *   → { type: "register", name: "myapp", passthrough?: true }
+ *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/", passthrough: true|false }
  *   ← { type: "request", id: "<uuid>", method: "GET", path: "/api/hello", headers: {...}, body: "..." }
  *   → { type: "response", id: "<uuid>", status: 200, headers: {...}, body: "..." }
  *   ← { type: "error", message: "..." }
+ *
+ * Credential passthrough (#530): by default the proxy strips
+ * `Cookie` / `Authorization` from inbound requests and `Set-Cookie`
+ * from outbound responses, so a tunnel exposes PUBLIC content only.
+ * A client may opt in per-registration with `passthrough: true`,
+ * which forwards those three headers and makes authenticated access
+ * (bearer/DPoP, cookie sessions) work through the tunnel. Opting in
+ * means visitor credentials bound for the tunnelled service are
+ * handed to the registered client — safe exactly when the registrant
+ * owns the tunnelled service (the normal "my own pod through my own
+ * relay" case), which is why it is per-tunnel, owner-asserted, and
+ * off by default. `Proxy-Authorization` is always stripped — it is
+ * addressed to this relay, never to the tunnelled service.
+ *
+ * Even with passthrough on, the relay's OWN IdP session/interaction
+ * cookies are stripped from the forwarded Cookie header. oidc-provider
+ * sets them with `path: '/'`, so a browser attaches them to
+ * `/tunnel/...` requests too — but they authenticate the visitor to
+ * THE RELAY, not to the tunnelled service. Forwarding them would let a
+ * tunnel client capture a visitor's relay `_session` and replay it
+ * against the relay's `/idp/*` endpoints (session hijack). See #530.
  */
+
+// Cookie names reserved by the relay's own oidc-provider IdP
+// (`_session`, `_session.sig`, `_session.legacy[.sig]`, `_interaction`,
+// `_interaction.sig`, `_interaction_resume[.sig]`). They share two
+// prefixes; we match the prefix plus a `.`/`_` boundary so a tunnelled
+// service's unrelated cookie (e.g. `_sessionsLeft`) isn't stripped.
+const RELAY_COOKIE_PREFIXES = ['_session', '_interaction'];
+
+function isRelayCookieName(name) {
+  return RELAY_COOKIE_PREFIXES.some(
+    (p) => name === p || name.startsWith(`${p}.`) || name.startsWith(`${p}_`),
+  );
+}
+
+/**
+ * Remove the relay's own IdP cookies from a forwarded Cookie header,
+ * keeping the visitor's cookies bound for the tunnelled service.
+ * Returns '' when nothing remains (caller then drops the header).
+ */
+function stripRelayCookies(cookieHeader) {
+  // Node folds duplicate Cookie headers into one string, but Fastify
+  // can surface string[] — normalize so passthrough doesn't drop every
+  // cookie when an array arrives. Cookies join with '; '.
+  const raw = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader;
+  if (typeof raw !== 'string') return '';
+  return raw
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((pair) => {
+      const eq = pair.indexOf('=');
+      const name = (eq === -1 ? pair : pair.slice(0, eq)).trim();
+      return !isRelayCookieName(name);
+    })
+    .join('; ');
+}
 
 import websocket from '@fastify/websocket';
 import { getWebIdFromRequestAsync } from '../auth/token.js';
@@ -109,9 +166,15 @@ export async function tunnelPlugin(fastify, options = {}) {
           existing.socket.close();
         }
 
+        // Per-tunnel credential passthrough (#530) — strict boolean so a
+        // truthy-but-wrong value ("false", 1) can't silently enable
+        // credential forwarding. Echoed in the ack so the client knows
+        // which mode the relay actually applied.
+        const passthrough = msg.passthrough === true;
+
         tunnelName = name;
-        tunnels.set(name, { socket, webId });
-        socket.send(JSON.stringify({ type: 'registered', name, url: `/tunnel/${name}/` }));
+        tunnels.set(name, { socket, webId, passthrough });
+        socket.send(JSON.stringify({ type: 'registered', name, url: `/tunnel/${name}/`, passthrough }));
 
       } else if (msg.type === 'response') {
         // Tunnel client returning an HTTP response
@@ -167,12 +230,27 @@ export async function tunnelPlugin(fastify, options = {}) {
     tunnelReq.method = request.method;
     tunnelReq.path = fullPath;
     tunnelReq.headers = Object.create(null);
-    // Forward relevant headers (skip hop-by-hop)
-    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'cookie', 'authorization', 'proxy-authorization']);
+    // Forward relevant headers. Hop-by-hop headers are always skipped;
+    // credentials (cookie / authorization) are skipped UNLESS the tunnel
+    // registered with passthrough (#530 — owner opted in to receive
+    // visitor credentials). Proxy-Authorization is always stripped: it
+    // is addressed to this relay, never to the tunnelled service.
+    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'proxy-authorization']);
+    if (!tunnel.passthrough) {
+      skipHeaders.add('cookie');
+      skipHeaders.add('authorization');
+    }
     for (const [k, v] of Object.entries(request.headers)) {
-      if (!skipHeaders.has(k.toLowerCase())) {
-        tunnelReq.headers[k] = v;
+      const lower = k.toLowerCase();
+      if (skipHeaders.has(lower)) continue;
+      if (lower === 'cookie' && tunnel.passthrough) {
+        // Forward the visitor's cookies for the tunnelled service, but
+        // never the relay's own IdP session cookies (#530 security).
+        const filtered = stripRelayCookies(v);
+        if (filtered) tunnelReq.headers[k] = filtered;
+        continue;
       }
+      tunnelReq.headers[k] = v;
     }
     // Forward body if present
     if (request.body) {
@@ -201,8 +279,15 @@ export async function tunnelPlugin(fastify, options = {}) {
 
     const res = await responsePromise;
 
-    // Set response headers
-    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive', 'set-cookie']);
+    // Set response headers. Set-Cookie is stripped by default so a
+    // tunnelled service can't set cookies on the relay's origin; with
+    // passthrough (#530) the owner opted in and session flows (e.g.
+    // OIDC login cookies) must survive the proxy. Fastify accepts an
+    // array value for set-cookie, which JSON serialization preserves.
+    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive']);
+    if (!tunnel.passthrough) {
+      hopHeaders.add('set-cookie');
+    }
     for (const [k, v] of Object.entries(res.headers)) {
       if (!hopHeaders.has(k.toLowerCase())) {
         reply.header(k, v);
