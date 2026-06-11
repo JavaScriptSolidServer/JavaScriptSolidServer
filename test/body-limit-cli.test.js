@@ -82,13 +82,19 @@ async function stopCli() {
   if (!child) return;
   const c = child;
   child = null;
-  if (c.exitCode === null && c.signalCode === null) {
-    const gone = new Promise(r => c.once('exit', r));
-    c.kill('SIGTERM');
-    await Promise.race([gone, new Promise(r => setTimeout(r, 3000))]);
-    if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
-    await gone;
-  }
+  // The exitCode check and the once('exit') attach below are in the
+  // same synchronous block — Node can't emit 'exit' between two
+  // synchronous statements, so the listener can't miss the event (if
+  // it already fired, exitCode is non-null and we return here).
+  if (c.exitCode !== null || c.signalCode !== null) return;
+  const gone = new Promise(r => c.once('exit', r));
+  c.kill('SIGTERM');
+  await Promise.race([gone, new Promise(r => setTimeout(r, 3000))]);
+  if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+  // SIGKILL can't be caught, so 'exit' follows promptly. The cap is a
+  // belt-and-braces bound so the suite can never hang on a pathological
+  // unkillable child (e.g. stuck in uninterruptible I/O).
+  await Promise.race([gone, new Promise(r => setTimeout(r, 2000))]);
 }
 
 async function putTwoKiB(baseUrl) {
