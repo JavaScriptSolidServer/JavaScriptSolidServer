@@ -57,8 +57,12 @@ function isRelayCookieName(name) {
  * Returns '' when nothing remains (caller then drops the header).
  */
 function stripRelayCookies(cookieHeader) {
-  if (typeof cookieHeader !== 'string') return '';
-  return cookieHeader
+  // Node folds duplicate Cookie headers into one string, but Fastify
+  // can surface string[] — normalize so passthrough doesn't drop every
+  // cookie when an array arrives. Cookies join with '; '.
+  const raw = Array.isArray(cookieHeader) ? cookieHeader.join('; ') : cookieHeader;
+  if (typeof raw !== 'string') return '';
+  return raw
     .split(';')
     .map((s) => s.trim())
     .filter(Boolean)
