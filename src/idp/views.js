@@ -265,12 +265,26 @@ export function loginPage(uid, clientId, error = null, passkeyEnabled = true, sc
     var INTERACTION_UID = '${safeUid}';
 
     async function loginWithPasskey() {
+      // Passkeys require WebAuthn + a secure context. Stale Android
+      // System WebViews (common on de-Googled phones, #556) and plain
+      // http origins lack it. Detect up front and steer the user to the
+      // password form right below instead of failing deep in the
+      // ceremony with a cryptic error.
+      if (!window.isSecureContext || !window.PublicKeyCredential ||
+          !(navigator.credentials && navigator.credentials.get)) {
+        alert('Passkeys aren\\'t available in this browser. Please sign in with your username and password below.');
+        return;
+      }
       try {
-        // Get authentication options
+        // Get authentication options. No client-side correlation id is
+        // sent — the server mints the challengeKey (always-available
+        // Node crypto) and returns it; we echo options.challengeKey on
+        // verify. This deliberately avoids a browser crypto.randomUUID
+        // call that old WebViews lack (#556).
         const optionsRes = await fetch('/idp/passkey/login/options', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ visitorId: crypto.randomUUID() })
+          body: JSON.stringify({})
         });
         const options = await optionsRes.json();
         if (options.error) {
@@ -1032,6 +1046,15 @@ export function passkeyPromptPage(uid, accountId) {
     var PASSKEY_ICON = '${passkeyIconEscaped}';
 
     async function registerPasskey() {
+      // Same WebAuthn / secure-context gate as the login page (#556):
+      // on a stale WebView the create() ceremony would fail cryptically.
+      // Steer to "Skip for now" instead of disabling the button on a
+      // path that can't succeed.
+      if (!window.isSecureContext || !window.PublicKeyCredential ||
+          !(navigator.credentials && navigator.credentials.create)) {
+        alert('Passkeys aren\\'t available in this browser. Tap "Skip for now" to continue.');
+        return;
+      }
       const btn = document.getElementById('addBtn');
       btn.disabled = true;
       btn.textContent = 'Setting up...';
