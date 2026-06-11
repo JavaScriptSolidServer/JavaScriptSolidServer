@@ -10,11 +10,24 @@
  * Public URL: https://your.pod/tunnel/{name}/path
  *
  * Tunnel client protocol (JSON over WebSocket):
- *   → { type: "register", name: "myapp" }
- *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/" }
+ *   → { type: "register", name: "myapp", passthrough?: true }
+ *   ← { type: "registered", name: "myapp", url: "/tunnel/myapp/", passthrough: false }
  *   ← { type: "request", id: "<uuid>", method: "GET", path: "/api/hello", headers: {...}, body: "..." }
  *   → { type: "response", id: "<uuid>", status: 200, headers: {...}, body: "..." }
  *   ← { type: "error", message: "..." }
+ *
+ * Credential passthrough (#530): by default the proxy strips
+ * `Cookie` / `Authorization` from inbound requests and `Set-Cookie`
+ * from outbound responses, so a tunnel exposes PUBLIC content only.
+ * A client may opt in per-registration with `passthrough: true`,
+ * which forwards those three headers and makes authenticated access
+ * (bearer/DPoP, cookie sessions) work through the tunnel. Opting in
+ * means visitor credentials bound for the tunnelled service are
+ * handed to the registered client — safe exactly when the registrant
+ * owns the tunnelled service (the normal "my own pod through my own
+ * relay" case), which is why it is per-tunnel, owner-asserted, and
+ * off by default. `Proxy-Authorization` is always stripped — it is
+ * addressed to this relay, never to the tunnelled service.
  */
 
 import websocket from '@fastify/websocket';
@@ -109,9 +122,15 @@ export async function tunnelPlugin(fastify, options = {}) {
           existing.socket.close();
         }
 
+        // Per-tunnel credential passthrough (#530) — strict boolean so a
+        // truthy-but-wrong value ("false", 1) can't silently enable
+        // credential forwarding. Echoed in the ack so the client knows
+        // which mode the relay actually applied.
+        const passthrough = msg.passthrough === true;
+
         tunnelName = name;
-        tunnels.set(name, { socket, webId });
-        socket.send(JSON.stringify({ type: 'registered', name, url: `/tunnel/${name}/` }));
+        tunnels.set(name, { socket, webId, passthrough });
+        socket.send(JSON.stringify({ type: 'registered', name, url: `/tunnel/${name}/`, passthrough }));
 
       } else if (msg.type === 'response') {
         // Tunnel client returning an HTTP response
@@ -167,8 +186,16 @@ export async function tunnelPlugin(fastify, options = {}) {
     tunnelReq.method = request.method;
     tunnelReq.path = fullPath;
     tunnelReq.headers = Object.create(null);
-    // Forward relevant headers (skip hop-by-hop)
-    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'cookie', 'authorization', 'proxy-authorization']);
+    // Forward relevant headers. Hop-by-hop headers are always skipped;
+    // credentials (cookie / authorization) are skipped UNLESS the tunnel
+    // registered with passthrough (#530 — owner opted in to receive
+    // visitor credentials). Proxy-Authorization is always stripped: it
+    // is addressed to this relay, never to the tunnelled service.
+    const skipHeaders = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'proxy-authorization']);
+    if (!tunnel.passthrough) {
+      skipHeaders.add('cookie');
+      skipHeaders.add('authorization');
+    }
     for (const [k, v] of Object.entries(request.headers)) {
       if (!skipHeaders.has(k.toLowerCase())) {
         tunnelReq.headers[k] = v;
@@ -201,8 +228,15 @@ export async function tunnelPlugin(fastify, options = {}) {
 
     const res = await responsePromise;
 
-    // Set response headers
-    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive', 'set-cookie']);
+    // Set response headers. Set-Cookie is stripped by default so a
+    // tunnelled service can't set cookies on the relay's origin; with
+    // passthrough (#530) the owner opted in and session flows (e.g.
+    // OIDC login cookies) must survive the proxy. Fastify accepts an
+    // array value for set-cookie, which JSON serialization preserves.
+    const hopHeaders = new Set(['connection', 'transfer-encoding', 'keep-alive']);
+    if (!tunnel.passthrough) {
+      hopHeaders.add('set-cookie');
+    }
     for (const [k, v] of Object.entries(res.headers)) {
       if (!hopHeaders.has(k.toLowerCase())) {
         reply.header(k, v);
