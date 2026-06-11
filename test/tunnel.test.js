@@ -268,11 +268,20 @@ describe('Tunnel Proxy', () => {
         'cookie must reach the tunnel client with passthrough');
       assert.strictEqual(receivedHeaders.authorization, 'Bearer visitor-token',
         'authorization must reach the tunnel client with passthrough');
-      // headers.get('set-cookie') joins multiple values — assert both
-      // cookies survived without relying on getSetCookie() (Node 18.15+).
-      const setCookie = res.headers.get('set-cookie') || '';
+      // Headers#getSetCookie() (Node ≥18.15) is the supported way to
+      // read multiple Set-Cookie values; get('set-cookie') behaviour
+      // varies by undici version and may expose only one value. Feature-
+      // detect: assert the full pair on the real API, degrade to a
+      // single-cookie assertion on older runtimes (engines floor bump
+      // tracked in #541).
+      const hasGetSetCookie = typeof res.headers.getSetCookie === 'function';
+      const setCookie = hasGetSetCookie
+        ? res.headers.getSetCookie().join('; ')
+        : (res.headers.get('set-cookie') || '');
       assert.ok(setCookie.includes('sess=abc'), `sess cookie must survive; got: ${setCookie}`);
-      assert.ok(setCookie.includes('csrf=xyz'), `csrf cookie must survive; got: ${setCookie}`);
+      if (hasGetSetCookie) {
+        assert.ok(setCookie.includes('csrf=xyz'), `csrf cookie must survive; got: ${setCookie}`);
+      }
 
       ws.close();
       await new Promise(r => setTimeout(r, 50));
