@@ -20,11 +20,12 @@ export const defaults = {
   host: '0.0.0.0',
   root: './data',
   // Maximum request body size in bytes (or a size string when supplied
-  // via CLI / config file, e.g. "100MB"). Default 10 MiB matches the
-  // previous hard-coded Fastify limit. Operators hosting personal pods
-  // may want to raise this so that large `git push` of an established
-  // app repo doesn't 413 — see #474.
-  bodyLimit: 10 * 1024 * 1024,
+  // via CLI / config file, e.g. "100MB"). 20 MiB default (#563) — a
+  // generous out-of-the-box limit for common workloads (larger `git
+  // push`, media uploads, bigger RDF documents). Raise via --body-limit
+  // / JSS_BODY_LIMIT for established app repos (#474); lower it for
+  // tighter memory-DoS protection.
+  bodyLimit: 20 * 1024 * 1024,
 
   // SSL
   sslKey: null,

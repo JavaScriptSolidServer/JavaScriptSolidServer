@@ -12,8 +12,8 @@
  *
  * Tests here verify the surface end-to-end — server actually rejects
  * over-size requests with 413, AND the size-string parsing path works
- * the same as the numeric path. The default (10 MiB) is covered
- * implicitly by every other test in the suite continuing to pass.
+ * the same as the numeric path. The out-of-the-box default (20 MiB
+ * since #563) is pinned explicitly via Fastify's initialConfig.
  */
 
 import { describe, it, before, after, afterEach } from 'node:test';
@@ -101,5 +101,15 @@ describe('configurable bodyLimit (#474)', () => {
     });
     assert.notStrictEqual(res.status, 413,
       `100-byte body under a 10KB cap should not 413; got ${res.status}`);
+  });
+
+  it('defaults to a 20 MiB body limit when none is configured (#563)', async () => {
+    await fs.emptyDir(TEST_DATA_DIR);
+    server = createServer({ logger: false, forceCloseConnections: true, root: TEST_DATA_DIR });
+    // Pin the EFFECTIVE wired default, not the constant in isolation:
+    // Fastify freezes resolved options into initialConfig, so this
+    // exercises config.defaults.bodyLimit → createServer → Fastify.
+    assert.strictEqual(server.initialConfig.bodyLimit, 20 * 1024 * 1024,
+      `expected the out-of-the-box default to be 20 MiB; got ${server.initialConfig.bodyLimit}`);
   });
 });
