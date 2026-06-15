@@ -187,8 +187,8 @@ export function createServer(options = {}) {
   // already coerced by parseEnvValue) pass through unchanged; strings
   // ("100MB" from CLI / config files) go through parseSize for
   // size-shorthand support. The typeof check matters because parseSize
-  // calls `.match` on its input and would throw on a raw number. Default
-  // matches the previous hard-coded 10 MiB cap. See #474.
+  // calls `.match` on its input and would throw on a raw number. Falls
+  // back to defaults.bodyLimit (20 MiB, #563) when unset. See #474.
   const bodyLimit = options.bodyLimit == null
     ? defaults.bodyLimit
     : (typeof options.bodyLimit === 'number' ? options.bodyLimit : parseSize(options.bodyLimit));

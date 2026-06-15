@@ -112,7 +112,7 @@ program
   .option('--cors-proxy-max-bytes <n>', 'CORS proxy upstream response size cap (default 50MB)', parseInt)
   .option('--cors-proxy-timeout-ms <ms>', 'CORS proxy upstream request timeout (default 30s)', parseInt)
   .option('--cors-proxy-max-redirects <n>', 'CORS proxy max redirect hops, each re-validated (default 5)', parseInt)
-  .option('--body-limit <size>', 'Maximum request body size, e.g. 100MB or 1GB (default 10MB). Raise to accept larger `git push`; lower for tighter memory-DoS protection.')
+  .option('--body-limit <size>', 'Maximum request body size, e.g. 100MB or 1GB (default 20MB). Raise to accept larger `git push`; lower for tighter memory-DoS protection.')
   .option('--nostr', 'Enable Nostr relay')
   .option('--no-nostr', 'Disable Nostr relay')
   .option('--nostr-path <path>', 'Nostr relay WebSocket path (default: /relay)')
