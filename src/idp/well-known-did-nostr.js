@@ -498,7 +498,7 @@ function buildDidDocument({ pubkey, webId }) {
   const multikey = `f` + `e701` + `02` + pubkey.toLowerCase();
   const vmId = `${did}#key1`;
   return {
-    '@context': ['https://w3id.org/did', 'https://w3id.org/nostr/context'],
+    '@context': ['https://www.w3.org/ns/cid/v1', 'https://w3id.org/nostr/context'],
     'id': did,
     'type': 'DIDNostr',
     'alsoKnownAs': [webId],
