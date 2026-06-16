@@ -39,6 +39,7 @@
     "mime-types": "^2.1.35",
     "n3": "^1.26.0",
     "oidc-provider": "^9.6.0",
+    "secure-json-parse": "^2.7.0",
     "sql.js": "^1.13.0",
     "tar-stream": "^3.2.0"
   },

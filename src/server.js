@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import sjson from 'secure-json-parse';
 import rateLimit from '@fastify/rate-limit';
 import { readFile } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -269,7 +270,36 @@ export function createServer(options = {}) {
     done(null, body);
   });
 
+  // Override the default application/json parser so the NIP-98 payload-hash
+  // check (src/auth/nostr.js) can verify against the EXACT bytes the client
+  // signed, not a re-serialization of the parsed object (#565). The default
+  // parser discards the raw bytes once it produces an object, so capturing
+  // req.rawBody here is the only point they still exist. Behaviour otherwise
+  // mirrors Fastify 4's defaultJsonParser exactly — empty body → 400,
+  // secure-json-parse (same prototype-pollution protection JSS gets today),
+  // 400 on malformed — so no other request path changes. (Must
+  // removeContentTypeParser first: Fastify throws on a duplicate type.)
+  fastify.removeContentTypeParser('application/json');
+  fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
+    req.rawBody = body;
+    if (body === '' || body == null) {
+      const err = new Error("Body cannot be empty when content-type is set to 'application/json'");
+      err.statusCode = 400;
+      return done(err, undefined);
+    }
+    let json;
+    try {
+      json = sjson.parse(body);
+    } catch (err) {
+      err.statusCode = 400;
+      return done(err, undefined);
+    }
+    done(null, json);
+  });
+
   // Attach server config to requests
+  // Raw request body for the application/json parser to stash (#565).
+  fastify.decorateRequest('rawBody', null);
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
   fastify.decorateRequest('idpEnabled', null);

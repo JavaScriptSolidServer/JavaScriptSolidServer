@@ -245,11 +245,24 @@ export async function verifyNostrAuth(request) {
   const payloadTag = getTagValue(event, 'payload');
   if (payloadTag && request.body) {
     let bodyString;
-    if (typeof request.body === 'string') {
+    if (typeof request.rawBody === 'string') {
+      // The exact bytes the client signed. NIP-98's `payload` tag is
+      // sha256(request body) over the wire bytes; the application/json
+      // parser stashes them here (#565) because by this point request.body
+      // is already a parsed object and the original bytes are gone.
+      // Re-serializing the object (the old `else` branch) only matched when
+      // the client happened to send minified JSON in Node's exact key order
+      // — pretty-printed or differently-escaped bodies 401'd despite a
+      // valid signature.
+      bodyString = request.rawBody;
+    } else if (typeof request.body === 'string') {
       bodyString = request.body;
     } else if (Buffer.isBuffer(request.body)) {
       bodyString = request.body.toString();
     } else {
+      // No raw bytes captured (shouldn't happen for HTTP requests:
+      // application/json sets rawBody, other types stay a Buffer). Keep a
+      // deterministic fallback rather than throwing.
       bodyString = JSON.stringify(request.body);
     }
 
