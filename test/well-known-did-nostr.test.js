@@ -129,7 +129,7 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     assert.ok(r.headers.get('last-modified'));
 
     const doc = await r.json();
-    assert.deepStrictEqual(doc['@context'], ['https://w3id.org/did', 'https://w3id.org/nostr/context']);
+    assert.deepStrictEqual(doc['@context'], ['https://www.w3.org/ns/cid/v1', 'https://w3id.org/nostr/context']);
     assert.strictEqual(doc.id, `did:nostr:${alicePk}`);
     assert.strictEqual(doc.type, 'DIDNostr');
     assert.ok(Array.isArray(doc.alsoKnownAs));
