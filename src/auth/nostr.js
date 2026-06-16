@@ -244,29 +244,35 @@ export async function verifyNostrAuth(request) {
   // Validate payload hash if present and request has body
   const payloadTag = getTagValue(event, 'payload');
   if (payloadTag && request.body) {
-    let bodyString;
+    // Hash the EXACT bytes the client signed. NIP-98's `payload` tag is
+    // sha256(request body) over the wire bytes. crypto.update() accepts a
+    // string (encoded UTF-8) or a Buffer (raw bytes), so we pass each
+    // through in its native form — never a lossy conversion.
+    let bodyData;
     if (typeof request.rawBody === 'string') {
-      // The exact bytes the client signed. NIP-98's `payload` tag is
-      // sha256(request body) over the wire bytes; the application/json
-      // parser stashes them here (#565) because by this point request.body
-      // is already a parsed object and the original bytes are gone.
-      // Re-serializing the object (the old `else` branch) only matched when
-      // the client happened to send minified JSON in Node's exact key order
-      // — pretty-printed or differently-escaped bodies 401'd despite a
-      // valid signature.
-      bodyString = request.rawBody;
+      // application/json raw wire string captured by the parser (#565),
+      // because by this point request.body is already a parsed object and
+      // the original bytes are gone. Re-serializing the object (the old
+      // fallback) only matched when the client happened to send minified
+      // JSON in Node's exact key order — pretty-printed or differently-
+      // escaped bodies 401'd despite a valid signature. (JSON is UTF-8 by
+      // spec, so the captured string round-trips losslessly.)
+      bodyData = request.rawBody;
     } else if (typeof request.body === 'string') {
-      bodyString = request.body;
+      bodyData = request.body;
     } else if (Buffer.isBuffer(request.body)) {
-      bodyString = request.body.toString();
+      // Hash the Buffer DIRECTLY. A .toString() round-trip UTF-8-mangles
+      // binary / non-UTF-8 bodies (e.g. an image PUT) and would cause
+      // false mismatches against the raw-byte hash the client signed.
+      bodyData = request.body;
     } else {
       // No raw bytes captured (shouldn't happen for HTTP requests:
       // application/json sets rawBody, other types stay a Buffer). Keep a
       // deterministic fallback rather than throwing.
-      bodyString = JSON.stringify(request.body);
+      bodyData = JSON.stringify(request.body);
     }
 
-    const expectedHash = crypto.createHash('sha256').update(bodyString).digest('hex');
+    const expectedHash = crypto.createHash('sha256').update(bodyData).digest('hex');
     if (payloadTag.toLowerCase() !== expectedHash.toLowerCase()) {
       return { webId: null, error: 'Payload hash mismatch' };
     }

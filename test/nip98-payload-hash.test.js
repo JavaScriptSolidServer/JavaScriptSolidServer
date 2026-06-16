@@ -133,4 +133,21 @@ describe('NIP-98 payload hash uses the raw request bytes (#565)', () => {
     assert.notStrictEqual(result.error, 'Payload hash mismatch',
       `compact body should still pass; got error: ${result.error}`);
   });
+
+  it('a binary / non-UTF-8 Buffer body hashes the raw bytes (Copilot review on #573)', async () => {
+    // Bytes that are NOT valid UTF-8 — a .toString() round-trip would
+    // mangle them (replacement chars) and break the hash. The client
+    // signs sha256 over the raw bytes; the server must do the same.
+    const binary = Buffer.from([0xff, 0xfe, 0x00, 0x01, 0x80, 0xc3, 0x28]);
+    // Sanity: this fixture genuinely changes bytes under a UTF-8 string
+    // round-trip, so the old `.toString()` path WOULD have mismatched.
+    assert.ok(!Buffer.from(binary.toString('utf8'), 'utf8').equals(binary),
+      'fixture must be lossy under a UTF-8 round-trip');
+    const token = nip98Token(url, 'PUT', sk, binary);
+    // Non-JSON body → no rawBody; request.body is the raw Buffer (the `*`
+    // content-type parser keeps it as a Buffer).
+    const result = await verifyNostrAuth(mockRequest(token, { rawBody: undefined, body: binary }));
+    assert.notStrictEqual(result.error, 'Payload hash mismatch',
+      `binary body must hash raw bytes, not a UTF-8 round-trip; got error: ${result.error}`);
+  });
 });
