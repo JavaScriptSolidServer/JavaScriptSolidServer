@@ -70,6 +70,18 @@ describe('application/json parser: rawBody capture + preserved semantics (#565)'
     assert.strictEqual(res.statusCode, 400);
   });
 
+  it('empty JSON body errors with Fastify\'s FST_ERR_CTP_EMPTY_JSON_BODY code (response-shape fidelity)', async () => {
+    const res = await server.inject({
+      method: 'PUT',
+      url: '/public/empty.json',
+      headers: { 'content-type': 'application/json' },
+      payload: '',
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, 'FST_ERR_CTP_EMPTY_JSON_BODY',
+      'empty-body error must carry Fastify\'s standard code so the response shape matches the default parser');
+  });
+
   it('blocks __proto__ prototype pollution (secure-json-parse preserved)', async () => {
     const res = await server.inject({
       method: 'PUT',

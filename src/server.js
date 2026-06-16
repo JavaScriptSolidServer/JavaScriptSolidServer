@@ -283,12 +283,19 @@ export function createServer(options = {}) {
   fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
     req.rawBody = body;
     if (body === '' || body == null) {
+      // Match Fastify's FST_ERR_CTP_EMPTY_JSON_BODY exactly (code +
+      // message + status), so the error-response shape — which surfaces
+      // err.code — is identical to the default parser's.
       const err = new Error("Body cannot be empty when content-type is set to 'application/json'");
+      err.code = 'FST_ERR_CTP_EMPTY_JSON_BODY';
       err.statusCode = 400;
       return done(err, undefined);
     }
     let json;
     try {
+      // The malformed-JSON path already mirrors Fastify's default: it
+      // sets statusCode 400 on the raw parser error without adding an FST
+      // code (the default does the same), so no code is set here.
       json = sjson.parse(body);
     } catch (err) {
       err.statusCode = 400;
