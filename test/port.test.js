@@ -85,4 +85,14 @@ describe('findFreePort (#557)', () => {
       await close(b);
     }
   });
+
+  it('re-throws a non-EADDRINUSE bind error instead of reporting "no free port"', async () => {
+    // 192.0.2.0/24 (TEST-NET-1) isn't a local interface → EADDRNOTAVAIL,
+    // which is a real failure, not a busy port. Must propagate so the CLI
+    // surfaces the actual cause rather than "no free port found".
+    await assert.rejects(
+      () => findFreePort(40000, '192.0.2.1', 1),
+      (err) => err && err.code !== undefined && err.code !== 'EADDRINUSE',
+    );
+  });
 });

@@ -34,6 +34,11 @@ export function formatUrl(host, port, protocol = 'http') {
  * behaviour: probe one port at a time, up to `maxTries`, returning the
  * first bindable one — or `null` if every port in the range is taken.
  *
+ * Only EADDRINUSE counts as "busy" (try the next port). Any other
+ * bind failure — EACCES on a privileged port, EADDRNOTAVAIL for an
+ * invalid host — is a real error and is re-thrown, so the caller
+ * surfaces the actual cause instead of a misleading "no free port".
+ *
  * Uses a throwaway net server to test bindability without committing the
  * real server. (There is an inherent TOCTOU window between this probe
  * and the real listen; the caller falls back to its normal listen-error
@@ -46,9 +51,12 @@ export function formatUrl(host, port, protocol = 'http') {
  */
 export async function findFreePort(startPort, host, maxTries = 10) {
   for (let p = startPort; p < startPort + maxTries; p++) {
-    const free = await new Promise((resolve) => {
+    const free = await new Promise((resolve, reject) => {
       const srv = createServer();
-      srv.once('error', () => resolve(false));
+      srv.once('error', (err) => {
+        if (err.code === 'EADDRINUSE') resolve(false); // busy — try the next port
+        else reject(err);                              // real failure — surface it
+      });
       srv.once('listening', () => srv.close(() => resolve(true)));
       srv.listen(p, host);
     });
