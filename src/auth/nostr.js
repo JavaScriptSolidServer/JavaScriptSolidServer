@@ -243,7 +243,12 @@ export async function verifyNostrAuth(request) {
 
   // Validate payload hash if present and request has body
   const payloadTag = getTagValue(event, 'payload');
-  if (payloadTag && request.body) {
+  // Validate whenever a payload tag is present AND a body was provided —
+  // keyed on `!== undefined`, not truthiness, so a JSON body that parses
+  // to a falsy value (`null`, `false`, `0`, `""`) is still hash-checked
+  // rather than silently skipping the integrity guard (Copilot review on
+  // #573). Fastify leaves request.body `undefined` when no body was sent.
+  if (payloadTag && request.body !== undefined) {
     // Hash the EXACT bytes the client signed. NIP-98's `payload` tag is
     // sha256(request body) over the wire bytes. crypto.update() accepts a
     // string (encoded UTF-8) or a Buffer (raw bytes), so we pass each

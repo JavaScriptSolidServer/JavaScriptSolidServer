@@ -134,6 +134,23 @@ describe('NIP-98 payload hash uses the raw request bytes (#565)', () => {
       `compact body should still pass; got error: ${result.error}`);
   });
 
+  it('a falsy JSON body (false) is still hash-checked, not skipped (Copilot review on #573)', async () => {
+    // The body literally parses to `false`. A WRONG payload tag must still
+    // be caught — under the old `&& request.body` truthiness guard this
+    // validation was skipped entirely for falsy bodies.
+    const falsyRaw = 'false';
+    const wrongToken = nip98Token(url, 'PUT', sk, 'a-different-body');
+    const mismatch = await verifyNostrAuth(mockRequest(wrongToken, { rawBody: falsyRaw, body: false }));
+    assert.strictEqual(mismatch.error, 'Payload hash mismatch',
+      'a falsy body with a wrong payload tag must be rejected, not skipped');
+
+    // And the matching payload for the same falsy body passes.
+    const goodToken = nip98Token(url, 'PUT', sk, falsyRaw);
+    const ok = await verifyNostrAuth(mockRequest(goodToken, { rawBody: falsyRaw, body: false }));
+    assert.notStrictEqual(ok.error, 'Payload hash mismatch',
+      `a falsy body with the correct payload should pass; got ${ok.error}`);
+  });
+
   it('a binary / non-UTF-8 Buffer body hashes the raw bytes (Copilot review on #573)', async () => {
     // Bytes that are NOT valid UTF-8 — a .toString() round-trip would
     // mangle them (replacement chars) and break the hash. The client
