@@ -16,6 +16,7 @@ import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
 import { findByUsername, updatePassword, deleteAccount } from '../src/idp/accounts.js';
 import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
 import { parseSize } from '../src/config.js';
+import { findFreePort, formatUrl } from '../src/utils/port.js';
 import crypto from 'crypto';
 import fs from 'fs-extra';
 import path from 'path';
@@ -176,10 +177,29 @@ program
         process.exit(0);
       }
 
+      // If the requested port is busy, shift up to the next free one
+      // (Vite-style), rather than dying on a raw EADDRINUSE — a common
+      // first-run papercut when a stale instance is still running (#557).
+      // Must run BEFORE the issuer/baseUrl are derived so they reflect
+      // the port we actually bind. The notice goes to stderr so it
+      // surfaces even under --quiet (a port change the operator didn't
+      // ask for is operationally significant).
+      const requestedPort = config.port;
+      const boundPort = await findFreePort(requestedPort, config.host);
+      if (boundPort === null) {
+        console.error(
+          `Error: no free port found in ${requestedPort}–${requestedPort + 9} on ${config.host}.`
+        );
+        process.exit(1);
+      }
+      if (boundPort !== requestedPort) {
+        console.error(`  Port ${requestedPort} is in use — using ${boundPort} instead.`);
+        config.port = boundPort;
+      }
+
       // Determine IdP issuer URL
       const protocol = config.ssl ? 'https' : 'http';
-      const serverHost = config.host === '0.0.0.0' ? 'localhost' : config.host;
-      const baseUrl = `${protocol}://${serverHost}:${config.port}`;
+      const baseUrl = formatUrl(config.host, config.port, protocol);
       // Ensure issuer has trailing slash for CTH compatibility
       let idpIssuer = config.idpIssuer || baseUrl;
       if (idpIssuer && !idpIssuer.endsWith('/')) {
