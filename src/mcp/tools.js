@@ -300,21 +300,22 @@ async function read_acl({ path }, ctx) {
   });
 }
 
-function buildAclDoc(structured, targetUrl, isContainer) {
+function buildAclDoc(structured, targetRef, isContainer) {
   const graph = structured.authorizations.map((auth, i) => {
     const node = {
       '@id': `#auth${i}`,
       '@type': 'acl:Authorization',
-      // Point accessTo at the explicit absolute resource URL, NOT './'. A
-      // relative './' resolves against the .acl document's own URL, which
-      // only lands on the right target for a *container* ACL
-      // (<container>/.acl -> the container). For a *resource* ACL
-      // (<resource>.acl) it resolves to the parent container, so
-      // checkAuthorizations() — which requires an exact accessTo match —
-      // finds nothing and leaves the resource with zero authorizations,
-      // locking out even the owner who just granted themselves Control
-      // (#575). parser.js already writes the explicit resourceUrl; match it.
-      'acl:accessTo': { '@id': targetUrl },
+      // accessTo is a *relative* IRI resolved against the .acl document's
+      // own URL, so stored ACLs stay host-portable across origins (#428).
+      // The bare './' the old code always used only lands on the right
+      // target for a *container* ACL (<container>/.acl -> the container).
+      // For a *resource* ACL (<resource>.acl) './' resolves to the parent
+      // container, so checkAuthorizations() — which requires an exact
+      // accessTo match — finds nothing and leaves the resource with zero
+      // authorizations, locking out even the owner who just granted
+      // themselves Control (#575). targetRef is therefore './' for a
+      // container and './<basename>' for a resource.
+      'acl:accessTo': { '@id': targetRef },
       'acl:mode': (auth.modes || []).map(m => ({ '@id': `acl:${m}` }))
     };
     if (auth.agents && auth.agents.length) {
@@ -326,10 +327,9 @@ function buildAclDoc(structured, targetUrl, isContainer) {
       }));
     }
     // acl:default only has meaning on a container ACL (it supplies the
-    // defaults inherited by contained resources). Emit it for containers
-    // only, pointing at the container itself.
+    // defaults inherited by contained resources), where targetRef is './'.
     if (auth.isDefault && isContainer) {
-      node['acl:default'] = { '@id': targetUrl };
+      node['acl:default'] = { '@id': targetRef };
     }
     return node;
   });
@@ -352,8 +352,15 @@ async function write_acl({ path, authorizations }, ctx) {
     return toolError(`access denied: control ${path}`);
   }
   const aclPath = aclUrlFor(path);
-  const targetUrl = buildUrl(ctx, path);
-  const doc = buildAclDoc({ authorizations }, targetUrl, path.endsWith('/'));
+  const isContainer = path.endsWith('/');
+  // Relative target IRI for the stored ACL (host-portable, #428): './' for
+  // a container, './<basename>' for a resource. Resolved against the .acl
+  // URL by the parser at check time.
+  const targetRef = isContainer
+    ? './'
+    : './' + path.replace(/\/+$/, '').split('/').pop();
+  const targetUrl = buildUrl(ctx, path); // absolute, for the lockout check below
+  const doc = buildAclDoc({ authorizations }, targetRef, isContainer);
   const serialized = serializeAcl(doc);
 
   // Safety: refuse to write an ACL that would lock the caller out of
