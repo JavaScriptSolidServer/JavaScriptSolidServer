@@ -22,6 +22,7 @@ import {
 import { emitChange } from '../src/notifications/events.js';
 
 let token;
+let ownerWebId;
 
 async function rpc(body, opts = {}) {
   const headers = { 'Content-Type': 'application/json' };
@@ -39,8 +40,9 @@ async function rpc(body, opts = {}) {
 describe('MCP server (--mcp enabled)', () => {
   before(async () => {
     await startTestServer({ mcp: true });
-    await createTestPod('mcptest');
+    const pod = await createTestPod('mcptest');
     token = getPodToken('mcptest');
+    ownerWebId = pod.webId;
   });
 
   after(async () => {
@@ -320,6 +322,41 @@ describe('MCP server (--mcp enabled)', () => {
     });  // no token
     assert.ok(body.result.isError);
     assert.match(body.result.content[0].text, /control/i);
+  });
+
+  it('write_acl on a resource does not lock the owner out (#575)', async () => {
+    // Regression: write_acl on a non-container resource used to set
+    // accessTo='./', which resolves to the *parent container* rather than
+    // the resource, leaving the resource with zero matching authorizations
+    // and locking out even the owner who just granted themselves Control.
+    const resPath = '/mcptest/public/acl575.txt';
+    const cr = await rpc({
+      jsonrpc: '2.0', id: 220, method: 'tools/call',
+      params: { name: 'write_resource', arguments: { path: resPath, content: 'secret', contentType: 'text/plain' } }
+    }, { token });
+    assert.strictEqual(cr.body.result.isError, false, cr.body.result.content?.[0]?.text);
+
+    // Grant the owner Read/Write/Control on the resource itself.
+    const wr = await rpc({
+      jsonrpc: '2.0', id: 221, method: 'tools/call',
+      params: { name: 'write_acl', arguments: {
+        path: resPath,
+        authorizations: [{ agents: [ownerWebId], modes: ['Read', 'Write', 'Control'] }]
+      } }
+    }, { token });
+    assert.strictEqual(wr.body.result.isError, false, wr.body.result.content?.[0]?.text);
+
+    // read_acl requires Control on the resource. Before the fix the owner
+    // was locked out and this was denied; it must now succeed.
+    const rd = await rpc({
+      jsonrpc: '2.0', id: 222, method: 'tools/call',
+      params: { name: 'read_acl', arguments: { path: resPath } }
+    }, { token });
+    assert.strictEqual(rd.body.result.isError, false,
+      'owner locked out of resource ACL (#575): ' + rd.body.result.content?.[0]?.text);
+    const payload = JSON.parse(rd.body.result.content[0].text);
+    assert.ok(payload.authorizations.some(a => a.modes.includes('Control')),
+      'resource ACL should grant the owner Control');
   });
 
   // --- call_remote_pod (#495) ---
