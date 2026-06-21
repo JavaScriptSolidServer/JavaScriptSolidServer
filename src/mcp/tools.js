@@ -300,12 +300,22 @@ async function read_acl({ path }, ctx) {
   });
 }
 
-function buildAclDoc(structured) {
+function buildAclDoc(structured, targetRef, isContainer) {
   const graph = structured.authorizations.map((auth, i) => {
     const node = {
       '@id': `#auth${i}`,
       '@type': 'acl:Authorization',
-      'acl:accessTo': { '@id': './' },
+      // accessTo is a *relative* IRI; the parser resolves it against the
+      // ACL's base URL (parser.js getBaseUrl()), which is the parent
+      // container directory for BOTH container and resource ACLs. So './'
+      // resolves to that container — correct for a container ACL, but for a
+      // *resource* ACL it points at the parent container, not the resource,
+      // leaving checkAuthorizations() (which requires an exact accessTo
+      // match) with zero authorizations and locking out even the owner who
+      // just granted themselves Control (#575). targetRef is therefore './'
+      // for a container and './<basename>' for a resource. Relative IRIs
+      // keep stored ACLs host-portable across origins (#428).
+      'acl:accessTo': { '@id': targetRef },
       'acl:mode': (auth.modes || []).map(m => ({ '@id': `acl:${m}` }))
     };
     if (auth.agents && auth.agents.length) {
@@ -316,8 +326,10 @@ function buildAclDoc(structured) {
         '@id': fullAgentClass(c)
       }));
     }
-    if (auth.isDefault) {
-      node['acl:default'] = { '@id': './' };
+    // acl:default only has meaning on a container ACL (it supplies the
+    // defaults inherited by contained resources), where targetRef is './'.
+    if (auth.isDefault && isContainer) {
+      node['acl:default'] = { '@id': targetRef };
     }
     return node;
   });
@@ -340,31 +352,63 @@ async function write_acl({ path, authorizations }, ctx) {
     return toolError(`access denied: control ${path}`);
   }
   const aclPath = aclUrlFor(path);
-  const doc = buildAclDoc({ authorizations });
+  const isContainer = path.endsWith('/');
+  // Relative target IRI for the stored ACL (host-portable, #428): './' for
+  // a container, './<basename>' for a resource. The parser resolves it
+  // against the ACL base URL (the parent container directory), so the
+  // basename lands on the resource.
+  const targetRef = isContainer
+    ? './'
+    : './' + path.replace(/\/+$/, '').split('/').pop();
+  const targetUrl = buildUrl(ctx, path); // absolute, for the lockout check below
+  const doc = buildAclDoc({ authorizations }, targetRef, isContainer);
   const serialized = serializeAcl(doc);
 
   // Safety: refuse to write an ACL that would lock the caller out of
-  // future Control. This is the most common write_acl footgun —
-  // typically caused by relative WebID paths in `agents` resolving
-  // against the .acl URL to a different absolute URI than the caller's
-  // actual WebID. Parse the proposed ACL with its real URL so relative
-  // agents resolve correctly, then check whether any authorization
-  // grants Control to the caller.
+  // future Control. Two footguns are covered:
+  //   1. relative WebID paths in `agents` resolving against the .acl URL
+  //      to a different absolute URI than the caller's actual WebID;
+  //   2. an authorization whose `accessTo` does not actually cover this
+  //      resource (e.g. #575), which the checker would skip entirely.
+  // Parse the proposed ACL with its real URL so relative refs resolve
+  // correctly, then require an authorization that both grants Control to
+  // the caller *and* applies to this target.
   const aclAbsUrl = buildUrl(ctx, aclPath);
   const proposed = await parseAcl(serialized, aclAbsUrl);
-  const callerHasControl = proposed.some(auth => {
+  const normUrl = u => String(u).replace(/\/$/, '');
+  const grantsCallerControl = auth => {
     if (!(auth.modes || []).includes(AccessMode.CONTROL)) return false;
     if (ctx.webId && (auth.agents || []).includes(ctx.webId)) return true;
     if ((auth.agentClasses || []).includes(FOAF_AGENT)) return true;
     if (ctx.webId && (auth.agentClasses || []).includes(ACL_AUTH_AGENT)) return true;
     return false;
-  });
-  if (!callerHasControl) {
+  };
+  const appliesToTarget = auth => {
+    const t = normUrl(targetUrl);
+    return (auth.accessTo || []).some(a => normUrl(a) === t) ||
+      (auth.default || []).some(d => {
+        const p = normUrl(d);
+        return t === p || t.startsWith(p + '/');
+      });
+  };
+  // Distinguish the two failure modes so the caller can fix the right thing:
+  //   (a) no authorization grants Control to the caller at all, vs
+  //   (b) one does, but its accessTo/default does not cover this target.
+  const controlAuths = proposed.filter(grantsCallerControl);
+  if (controlAuths.length === 0) {
     return toolError(
       `write_acl refused: the proposed ACL would not grant Control to the caller (${ctx.webId || 'anonymous'}). ` +
       'This is typically caused by relative WebID paths in agents resolving against the .acl URL — use absolute WebIDs. ' +
       'If you really want to remove your own access (e.g. transferring ownership), do it in two steps: ' +
       'first grant Control to the new owner, then have the new owner write_acl without you.'
+    );
+  }
+  if (!controlAuths.some(appliesToTarget)) {
+    return toolError(
+      `write_acl refused: the proposed ACL grants Control to the caller (${ctx.webId || 'anonymous'}) ` +
+      `but none of those authorizations apply to ${path} — their accessTo/default targets a different ` +
+      'resource (commonly the parent container), so the resource would be left with no effective Control. ' +
+      'Ensure each authorization\'s accessTo covers this resource.'
     );
   }
 
