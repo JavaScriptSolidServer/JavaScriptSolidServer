@@ -305,16 +305,16 @@ function buildAclDoc(structured, targetRef, isContainer) {
     const node = {
       '@id': `#auth${i}`,
       '@type': 'acl:Authorization',
-      // accessTo is a *relative* IRI resolved against the .acl document's
-      // own URL, so stored ACLs stay host-portable across origins (#428).
-      // The bare './' the old code always used only lands on the right
-      // target for a *container* ACL (<container>/.acl -> the container).
-      // For a *resource* ACL (<resource>.acl) './' resolves to the parent
-      // container, so checkAuthorizations() — which requires an exact
-      // accessTo match — finds nothing and leaves the resource with zero
-      // authorizations, locking out even the owner who just granted
-      // themselves Control (#575). targetRef is therefore './' for a
-      // container and './<basename>' for a resource.
+      // accessTo is a *relative* IRI; the parser resolves it against the
+      // ACL's base URL (parser.js getBaseUrl()), which is the parent
+      // container directory for BOTH container and resource ACLs. So './'
+      // resolves to that container — correct for a container ACL, but for a
+      // *resource* ACL it points at the parent container, not the resource,
+      // leaving checkAuthorizations() (which requires an exact accessTo
+      // match) with zero authorizations and locking out even the owner who
+      // just granted themselves Control (#575). targetRef is therefore './'
+      // for a container and './<basename>' for a resource. Relative IRIs
+      // keep stored ACLs host-portable across origins (#428).
       'acl:accessTo': { '@id': targetRef },
       'acl:mode': (auth.modes || []).map(m => ({ '@id': `acl:${m}` }))
     };
@@ -354,8 +354,9 @@ async function write_acl({ path, authorizations }, ctx) {
   const aclPath = aclUrlFor(path);
   const isContainer = path.endsWith('/');
   // Relative target IRI for the stored ACL (host-portable, #428): './' for
-  // a container, './<basename>' for a resource. Resolved against the .acl
-  // URL by the parser at check time.
+  // a container, './<basename>' for a resource. The parser resolves it
+  // against the ACL base URL (the parent container directory), so the
+  // basename lands on the resource.
   const targetRef = isContainer
     ? './'
     : './' + path.replace(/\/+$/, '').split('/').pop();
