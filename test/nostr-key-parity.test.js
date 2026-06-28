@@ -43,20 +43,20 @@ const fform = (xHex, parity) => 'f' + 'e701' + parity + xHex.toLowerCase();
 
 describe('Nostr key parity consistency (#571)', () => {
   it('f-form Multikey decoder accepts both 02 and 03, returning the same x', () => {
-    assert.equal(decodeFFormSecp256k1(fform(X, '02')), X);
-    assert.equal(decodeFFormSecp256k1(fform(X, '03')), X);
+    assert.strictEqual(decodeFFormSecp256k1(fform(X, '02')), X);
+    assert.strictEqual(decodeFFormSecp256k1(fform(X, '03')), X);
   });
 
   it('f-form decoder rejects a non-parity prefix byte', () => {
-    assert.equal(decodeFFormSecp256k1(fform(X, '04')), null);
+    assert.strictEqual(decodeFFormSecp256k1(fform(X, '04')), null);
   });
 
   it('JWK path accepts an even-Y point and returns x', () => {
-    assert.equal(pubkeyFromValidatedJwk(jwkFor(X, '02')), X);
+    assert.strictEqual(pubkeyFromValidatedJwk(jwkFor(X, '02')), X);
   });
 
   it('JWK path now also accepts an odd-Y point and returns the same x', () => {
-    assert.equal(pubkeyFromValidatedJwk(jwkFor(X, '03')), X);
+    assert.strictEqual(pubkeyFromValidatedJwk(jwkFor(X, '03')), X);
   });
 
   it('JWK path still rejects a fabricated off-curve y', () => {
@@ -67,19 +67,19 @@ describe('Nostr key parity consistency (#571)', () => {
       .toString('hex');
     const flipped = (BigInt('0x' + yHex) ^ 1n).toString(16).padStart(64, '0');
     bad.y = b64u(flipped);
-    assert.equal(pubkeyFromValidatedJwk(bad), null);
+    assert.strictEqual(pubkeyFromValidatedJwk(bad), null);
   });
 
   it('nostrJwkYParities returns both genuine y values and null for a bad x', () => {
     const ys = nostrJwkYParities(X);
     assert.ok(Array.isArray(ys) && ys.length === 2);
-    assert.notEqual(ys[0], ys[1]);
-    assert.equal(nostrJwkYParities('zz'), null);
-    assert.equal(nostrJwkYParities(42), null);
+    assert.notStrictEqual(ys[0], ys[1]);
+    assert.strictEqual(nostrJwkYParities('zz'), null);
+    assert.strictEqual(nostrJwkYParities(42), null);
   });
 
   it('nostrJwkYParities normalizes uppercase hex (matches the lowercase result)', () => {
-    assert.deepEqual(nostrJwkYParities(X.toUpperCase()), nostrJwkYParities(X));
+    assert.deepStrictEqual(nostrJwkYParities(X.toUpperCase()), nostrJwkYParities(X));
   });
 
   it('profile extraction maps a 03 Multikey and a 03 JWK to the same identity', () => {
@@ -90,7 +90,7 @@ describe('Nostr key parity consistency (#571)', () => {
       ],
     };
     const found = extractNostrPubkeysFromProfile(profile);
-    assert.equal(found.length, 2);
+    assert.strictEqual(found.length, 2);
     assert.ok(found.every((e) => e.pubkey === X));
   });
 });
