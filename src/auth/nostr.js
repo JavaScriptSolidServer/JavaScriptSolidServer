@@ -34,8 +34,8 @@ import { resolveDidNostrToWebId } from './did-nostr.js';
 // importing the NIP-98 verifier.
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
-import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile, nostrJwkYParities } from './nostr-keys.js'; // re-exported for back-compat
-export { extractNostrPubkeysFromProfile };
+import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile, nostrJwkYParities } from './nostr-keys.js';
+export { extractNostrPubkeysFromProfile }; // re-exported for back-compat
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;

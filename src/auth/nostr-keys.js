@@ -26,10 +26,12 @@ const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
  * real on-curve point. See issue #571.
  */
 export function nostrJwkYParities(xHex) {
-  if (!/^[0-9a-f]{64}$/.test(xHex)) return null;
+  if (typeof xHex !== 'string') return null;
+  const x = xHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(x)) return null;
   try {
-    const even = secp256k1.ProjectivePoint.fromHex('02' + xHex).toAffine().y;
-    const odd = secp256k1.ProjectivePoint.fromHex('03' + xHex).toAffine().y;
+    const even = secp256k1.ProjectivePoint.fromHex('02' + x).toAffine().y;
+    const odd = secp256k1.ProjectivePoint.fromHex('03' + x).toAffine().y;
     return [
       even.toString(16).padStart(64, '0'),
       odd.toString(16).padStart(64, '0'),

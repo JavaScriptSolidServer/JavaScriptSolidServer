@@ -75,6 +75,11 @@ describe('Nostr key parity consistency (#571)', () => {
     assert.ok(Array.isArray(ys) && ys.length === 2);
     assert.notEqual(ys[0], ys[1]);
     assert.equal(nostrJwkYParities('zz'), null);
+    assert.equal(nostrJwkYParities(42), null);
+  });
+
+  it('nostrJwkYParities normalizes uppercase hex (matches the lowercase result)', () => {
+    assert.deepEqual(nostrJwkYParities(X.toUpperCase()), nostrJwkYParities(X));
   });
 
   it('profile extraction maps a 03 Multikey and a 03 JWK to the same identity', () => {
