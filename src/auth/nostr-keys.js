@@ -13,20 +13,51 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 const MULTICODEC_SECP256K1_PUB_HEX = 'e701';
 
 /**
+ * The two valid y-coordinates (64-char hex) for a secp256k1 x: the
+ * even-parity point and its odd-parity reflection. Returns `null` if
+ * `xHex` isn't a valid curve x.
+ *
+ * Both parities are in-spec for did:nostr: the spec
+ * (https://nostrcg.github.io/did-nostr/) states "Nostr applications
+ * may generate keys with either 0x02 or 0x03 prefixes" — 0x02 for an
+ * even y, 0x03 for an odd y. So a verification method that encodes the
+ * same x-only Nostr identity can legitimately carry either parity, and
+ * key matching accepts either while still requiring `(x, y)` to be a
+ * real on-curve point. See issue #571.
+ */
+export function nostrJwkYParities(xHex) {
+  if (typeof xHex !== 'string') return null;
+  const x = xHex.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(x)) return null;
+  try {
+    const even = secp256k1.ProjectivePoint.fromHex('02' + x).toAffine().y;
+    const odd = secp256k1.ProjectivePoint.fromHex('03' + x).toAffine().y;
+    return [
+      even.toString(16).padStart(64, '0'),
+      odd.toString(16).padStart(64, '0'),
+    ];
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate a secp256k1 JWK as a Nostr key and return its x-only
  * pubkey hex. Returns `null` if the JWK isn't a Nostr-shaped key
- * or its `y` doesn't match the BIP-340 canonical (even-y) point
- * for the declared `x`.
+ * or its `y` isn't an on-curve point (either parity) for the
+ * declared `x`.
  *
- * Why y matters: every secp256k1 x has TWO valid points (positive
- * and negative y). Nostr uses x-only pubkeys, which by BIP-340
- * convention always pick the even-y point. A profile that declares
- * a JWK with the right x but the wrong y is NOT the user's Nostr
- * key — accepting it would let an attacker plant a JWK at someone
- * else's WebID and have the indexer publish it as theirs.
+ * Why y matters: every secp256k1 x has TWO valid points (even and
+ * odd y). Nostr identities are x-only, so the x coordinate IS the
+ * identity — but a profile that declares a JWK with the right x and a
+ * *fabricated* (off-curve) y is malformed and must be rejected, else
+ * an attacker could plant arbitrary key material at someone else's
+ * WebID and have the indexer publish it. We therefore require y to be
+ * one of the two genuine on-curve y's, accepting either parity per the
+ * did:nostr spec (see `nostrJwkYParities` / issue #571).
  *
- * The verifier in src/auth/nostr.js (jwkMatchesNostrPubkey) does
- * the same check. Keeping the indexer in sync prevents the
+ * The verifier in src/auth/nostr.js (jwkMatchesNostrPubkey) applies
+ * the same rule. Keeping the indexer in sync prevents the
  * "indexed but verifier rejects" inconsistency that would surface
  * as a 401 on a key the well-known endpoint had advertised.
  */
@@ -41,18 +72,14 @@ export function pubkeyFromValidatedJwk(jwk) {
       .toString('hex').toLowerCase();
   } catch { return null; }
   if (!/^[0-9a-f]{64}$/.test(xHex)) return null;
-  let canonicalY;
-  try {
-    // Compressed SEC1 encoding for the EVEN-y point at this x.
-    const point = secp256k1.ProjectivePoint.fromHex('02' + xHex);
-    canonicalY = point.toAffine().y.toString(16).padStart(64, '0');
-  } catch { return null; }
+  const validY = nostrJwkYParities(xHex);
+  if (!validY) return null;
   let jwkYHex;
   try {
     jwkYHex = Buffer.from(jwk.y.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
       .toString('hex').toLowerCase();
   } catch { return null; }
-  if (jwkYHex !== canonicalY) return null;
+  if (!validY.includes(jwkYHex)) return null;
   return xHex;
 }
 
@@ -99,11 +126,11 @@ export function extractNostrPubkeysFromProfile(profile) {
       const xonly = decodeFFormSecp256k1(vm.publicKeyMultibase);
       if (xonly) out.push({ pubkey: xonly, vm });
     } else if (vm.publicKeyJwk && typeof vm.publicKeyJwk === 'object') {
-      // Require y to match the BIP-340 canonical point — the same
-      // check the NIP-98 verifier applies. Without this, the indexer
-      // could publish a JWK that the verifier will then reject,
-      // surfacing as a 401 on a key the well-known endpoint had
-      // advertised as authentic.
+      // Require y to be a genuine on-curve point for x (either
+      // parity, per the did:nostr spec) — the same check the NIP-98
+      // verifier applies. Without this, the indexer could publish a
+      // JWK that the verifier will then reject, surfacing as a 401 on
+      // a key the well-known endpoint had advertised as authentic.
       const xonly = pubkeyFromValidatedJwk(vm.publicKeyJwk);
       if (xonly) out.push({ pubkey: xonly, vm });
     }

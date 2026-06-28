@@ -26,7 +26,6 @@
  */
 
 import { verifyEvent, getEventHash } from '../nostr/event.js';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import crypto from 'crypto';
 import { resolveDidNostrToWebId } from './did-nostr.js';
 // resolveDidNostrLocally is loaded lazily (inside the idpEnabled
@@ -35,8 +34,8 @@ import { resolveDidNostrToWebId } from './did-nostr.js';
 // importing the NIP-98 verifier.
 import { fetchCidDocument } from './cid-doc-fetch.js';
 import { normalizeControllers } from './lws-cid.js'; // shared JSON-LD controller helper
-import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile } from './nostr-keys.js'; // re-exported for back-compat
-export { extractNostrPubkeysFromProfile };
+import { decodeFFormSecp256k1, extractNostrPubkeysFromProfile, nostrJwkYParities } from './nostr-keys.js';
+export { extractNostrPubkeysFromProfile }; // re-exported for back-compat
 
 // NIP-98 event kind (references RFC 7235)
 const HTTP_AUTH_KIND = 27235;
@@ -659,29 +658,22 @@ function hexToBase64url(hex) {
  *
  * EC keys are (x, y) pairs — two distinct valid points share the same
  * x with opposite y parities. Matching on x alone would let an
- * attacker craft a JWK with the target x and a wrong y, which we'd
- * then accept as the user's Nostr key. So we also derive the
- * BIP-340-canonical y (even-parity) for the target x and require the
- * JWK's y to match.
+ * attacker craft a JWK with the target x and a fabricated, off-curve
+ * y, which we'd then accept as the user's Nostr key. So we also
+ * require the JWK's y to be a genuine on-curve y for the target x —
+ * accepting either parity, since the did:nostr spec allows both 0x02
+ * (even) and 0x03 (odd) encodings of the same x-only identity (see
+ * `nostrJwkYParities` / issue #571).
  *
  * Returns false if the JWK's coordinates aren't on-curve, can't be
- * decoded, or don't match the BIP-340 canonical point for `targetHex`.
+ * decoded, or don't match an on-curve point for `targetHex`.
  */
 function jwkMatchesNostrPubkey(jwk, targetHex, targetB64u) {
   if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string') return false;
   if (jwk.x !== targetB64u) return false;
-  // Decompress the BIP-340 even-y point for the target x. Then compare
-  // the JWK's declared y against this canonical y.
-  let canonicalY;
-  try {
-    // Compressed SEC1 point, even-y prefix (0x02) || x.
-    const compressed = '02' + targetHex;
-    const point = secp256k1.ProjectivePoint.fromHex(compressed);
-    const affine = point.toAffine();
-    canonicalY = affine.y.toString(16).padStart(64, '0');
-  } catch {
-    return false;
-  }
+  // The two genuine on-curve y's (even + odd parity) for the target x.
+  const validY = nostrJwkYParities(targetHex);
+  if (!validY) return false;
   let jwkYHex;
   try {
     jwkYHex = Buffer.from(jwk.y.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
@@ -689,7 +681,7 @@ function jwkMatchesNostrPubkey(jwk, targetHex, targetB64u) {
   } catch {
     return false;
   }
-  return jwkYHex === canonicalY;
+  return validY.includes(jwkYHex);
 }
 
 function isInProofPurpose(profile, predicate, vmId, baseUrl) {
