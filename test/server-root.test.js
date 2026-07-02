@@ -103,6 +103,56 @@ describe('Server-root landing — operator override', () => {
   });
 });
 
+describe('Server-root landing — public mode skips seeding', () => {
+  let server;
+  let baseUrl;
+  let savedDataRoot;
+  const DATA_DIR = './test-data-server-root-public';
+
+  before(async () => {
+    savedDataRoot = process.env.DATA_ROOT;
+
+    await fs.remove(DATA_DIR);
+    await fs.ensureDir(DATA_DIR);
+    await fs.writeFile(`${DATA_DIR}/hello.txt`, 'hello');
+
+    server = createServer({
+      logger: false,
+      root: DATA_DIR,
+      public: true,
+      forceCloseConnections: true,
+    });
+    await server.listen({ port: 0, host: '127.0.0.1' });
+    baseUrl = `http://127.0.0.1:${server.server.address().port}`;
+  });
+
+  after(async () => {
+    await server.close();
+    await fs.remove(DATA_DIR);
+    if (savedDataRoot === undefined) delete process.env.DATA_ROOT;
+    else process.env.DATA_ROOT = savedDataRoot;
+  });
+
+  it('does not seed /index.html, /.acl, or /index.html.acl into the served tree', async () => {
+    // WAC is bypassed in public mode, so the seeded ACLs would never be
+    // consulted — and serve-a-directory consumers (servejss) must not
+    // have startup write into the directory they serve.
+    assert.strictEqual(await fs.pathExists(`${DATA_DIR}/index.html`), false);
+    assert.strictEqual(await fs.pathExists(`${DATA_DIR}/.acl`), false);
+    assert.strictEqual(await fs.pathExists(`${DATA_DIR}/index.html.acl`), false);
+  });
+
+  it('GET / serves the container listing, and files remain readable', async () => {
+    const res = await fetch(`${baseUrl}/`);
+    assert.strictEqual(res.status, 200);
+    assert.match(res.headers.get('content-type'), /application\/ld\+json/);
+
+    const file = await fetch(`${baseUrl}/hello.txt`);
+    assert.strictEqual(file.status, 200);
+    assert.strictEqual(await file.text(), 'hello');
+  });
+});
+
 describe('renderServerRoot', () => {
   // The seeded HTML is fully static — no template substitution, no
   // values vary by request. This is deliberate: anything dynamic

@@ -887,8 +887,11 @@ export function createServer(options = {}) {
   // Server-root landing page: seed /index.html and a public-read /.acl
   // on first start (skip-if-exists, so operator-provided files are
   // preserved). See #433 / #276. Skipped in read-only deployments so
-  // startup never mutates DATA_ROOT.
-  if (!options.readOnly) {
+  // startup never mutates DATA_ROOT, and in --public mode: WAC is
+  // bypassed there so the seeded .acl files would never be consulted,
+  // and public mode's serve-a-directory use case (servejss) must not
+  // write into the served tree.
+  if (!options.readOnly && !options.public) {
     fastify.addHook('onReady', async () => {
       // A missing or unreadable package.json (some production bundles
       // omit it) shouldn't block seeding; fall back to "unknown".
