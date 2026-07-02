@@ -160,7 +160,7 @@ Server: pub http://localhost:4443/alice/public/data.json  (on change)
 | `--ap-display-name <name>` | ActivityPub display name | (username) |
 | `--ap-summary <text>` | ActivityPub bio/summary | - |
 | `--ap-nostr-pubkey <hex>` | Nostr pubkey for identity linking | - |
-| `--public` | Allow unauthenticated access (skip WAC) | false |
+| `--public` | Allow unauthenticated access (skip WAC); never writes into the served directory (no landing-page seed) | false |
 | `--read-only` | Disable PUT/DELETE/PATCH methods | false |
 | `--live-reload` | Auto-refresh browser on file changes | false |
 | `--pay` | Enable HTTP 402 paid access for /pay/* | false |
