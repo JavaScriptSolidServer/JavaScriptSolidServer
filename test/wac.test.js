@@ -25,6 +25,8 @@ import {
   relativizeOwnerWebId
 } from '../src/wac/parser.js';
 import { checkAccess, getRequiredMode } from '../src/wac/checker.js';
+import * as storage from '../src/storage/filesystem.js';
+import { createLedger, setBalance, getBalance, LEDGER_PATH } from '../src/webledger.js';
 
 describe('WAC Parser', () => {
   describe('parseAcl', () => {
@@ -711,5 +713,78 @@ describe('WAC Conditions', () => {
       assert.strictEqual(condition.currency, 'sats');
       assert.strictEqual(condition.protocol, 'lightning');
     });
+  });
+});
+
+describe('WAC PaymentCondition noDebit (secondary/guard checks must not charge)', () => {
+  let baseUrl;
+  const AGENT = 'https://payer.example/profile/card#me';
+  const COST = 5;
+  const RESOURCE_PATH = '/paygate/resource';
+
+  before(async () => {
+    const result = await startTestServer();
+    baseUrl = result.baseUrl;
+  });
+
+  after(async () => {
+    await stopTestServer();
+  });
+
+  // Seed a ledger balance for AGENT and an ACL granting AGENT Control on the
+  // protected resource, gated behind a positive-cost PaymentCondition.
+  async function seed(balance) {
+    const ledger = createLedger();
+    setBalance(ledger, AGENT, balance, 'sat');
+    await storage.write(LEDGER_PATH, Buffer.from(JSON.stringify(ledger)));
+
+    const resourceUrl = `${baseUrl}${RESOURCE_PATH}`;
+    const acl = {
+      '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+      '@graph': [{
+        '@id': '#paid',
+        '@type': 'acl:Authorization',
+        'acl:agent': { '@id': AGENT },
+        'acl:accessTo': { '@id': resourceUrl },
+        'acl:mode': [{ '@id': 'acl:Control' }],
+        'acl:condition': { '@type': 'PaymentCondition', amount: String(COST), currency: 'sat' }
+      }]
+    };
+    await storage.write(`${RESOURCE_PATH}.acl`, Buffer.from(JSON.stringify(acl)));
+    return resourceUrl;
+  }
+
+  async function balanceNow() {
+    const raw = await storage.read(LEDGER_PATH);
+    return getBalance(JSON.parse(raw.toString()), AGENT, 'sat');
+  }
+
+  it('debits the ledger on a normal (primary) Control check', async () => {
+    const resourceUrl = await seed(100);
+    const res = await checkAccess({
+      resourceUrl,
+      resourcePath: RESOURCE_PATH,
+      isContainer: false,
+      agentWebId: AGENT,
+      requiredMode: AccessMode.CONTROL
+    });
+    assert.strictEqual(res.allowed, true);
+    assert.strictEqual(res.paid, COST);
+    assert.strictEqual(await balanceNow(), 100 - COST, 'primary check should debit');
+  });
+
+  it('does NOT debit when noDebit is set (guard/secondary check)', async () => {
+    const resourceUrl = await seed(100);
+    const res = await checkAccess({
+      resourceUrl,
+      resourcePath: RESOURCE_PATH,
+      isContainer: false,
+      agentWebId: AGENT,
+      requiredMode: AccessMode.CONTROL,
+      noDebit: true
+    });
+    assert.strictEqual(res.allowed, false, 'paid grant is not satisfied without charging');
+    assert.ok(res.paymentRequired, 'should surface paymentRequired instead of debiting');
+    assert.strictEqual(await balanceNow(), 100, 'balance must be unchanged');
   });
 });

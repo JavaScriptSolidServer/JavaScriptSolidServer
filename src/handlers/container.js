@@ -105,6 +105,9 @@ export async function handlePost(request, reply) {
   // before minting a sidecar via POST. Build the resource URL with the same
   // buildResourceUrl() the auth middleware uses so this Control decision is
   // evaluated against the identical origin (host+port, subdomain-normalized).
+  // noDebit: this is a secondary WAC check on a request the authorize() hook
+  // already evaluated (and possibly billed) — pass noDebit so a payment-gated
+  // Control grant can't be charged here (no double debit, no silent charge).
   if (!isCreatingContainer && /\.(acl|meta)$/.test(filename)) {
     const protectedUrlPath = newUrlPath.replace(/\.(acl|meta)$/, '');
     const protectedStoragePath = newStoragePath.replace(/\.(acl|meta)$/, '');
@@ -113,7 +116,8 @@ export async function handlePost(request, reply) {
       resourcePath: protectedStoragePath,
       isContainer: protectedUrlPath.endsWith('/'),
       agentWebId: request.webId,
-      requiredMode: AccessMode.CONTROL
+      requiredMode: AccessMode.CONTROL,
+      noDebit: true
     });
     if (!allowed) {
       return reply.code(403).send({
