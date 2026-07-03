@@ -212,6 +212,60 @@ describe('Authentication', () => {
       const res3 = await request('/authuser1/authenticated-only/test.txt', { auth: 'authuser2' });
       assertStatus(res3, 200);
     });
+
+    it('should deny POST-created .acl/.meta sidecars without Control on the protected resource', async () => {
+      // Regression for the POST .acl sidecar injection: an agent holding only
+      // acl:Append on a container (here, the public-append inbox) must not be
+      // able to plant an .acl sidecar, which the WAC checker would then treat
+      // as the authorization policy for the sibling resource. .meta is not a
+      // WAC input, but is gated the same way as a protected Solid sidecar.
+      await createTestPod('sidecarvictim');
+
+      const aclBody = JSON.stringify({
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': []
+      });
+
+      // Append-only (unauthenticated public append) agent tries to plant victim.acl
+      const attackAcl = await request('/sidecarvictim/inbox/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Slug': 'victim.acl' },
+        body: aclBody
+      });
+      assertStatus(attackAcl, 403);
+
+      // The same trick with a .meta sidecar must also be blocked
+      const attackMeta = await request('/sidecarvictim/inbox/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Slug': 'victim.meta' },
+        body: aclBody
+      });
+      assertStatus(attackMeta, 403);
+
+      // A normal (non-sidecar) POST to the public inbox still works
+      const legit = await request('/sidecarvictim/inbox/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Slug': 'note' },
+        body: JSON.stringify({ type: 'note' })
+      });
+      assertStatus(legit, 201);
+    });
+
+    it('should allow the owner (Control) to POST an .acl sidecar', async () => {
+      // Owners hold acl:Control, so the sidecar guard must not block them.
+      await createTestPod('sidecarowner');
+
+      const res = await request('/sidecarowner/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Slug': 'owned.acl' },
+        body: JSON.stringify({
+          '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+          '@graph': []
+        }),
+        auth: 'sidecarowner'
+      });
+      assertStatus(res, 201);
+    });
   });
 
   describe('WAC-Allow Header', () => {
