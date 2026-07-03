@@ -3,7 +3,8 @@ import { initializeQuota, checkQuota, updateQuotaUsage } from '../storage/quota.
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
-import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId } from '../wac/parser.js';
+import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId, AccessMode } from '../wac/parser.js';
+import { checkAccess } from '../wac/checker.js';
 import { provisionOwnerKey, assertProvisionKeysCompatible } from '../keys/provision.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
@@ -87,6 +88,33 @@ export async function handlePost(request, reply) {
   const newUrlPath = urlPath + filename + (isCreatingContainer ? '/' : '');
   const newStoragePath = storagePath + filename + (isCreatingContainer ? '/' : '');
   const resourceUrl = `${request.protocol}://${request.hostname}${newUrlPath}`;
+
+  // Security: a Slug that resolves to an `.acl`/`.meta` sidecar governs
+  // ANOTHER resource's permissions. The authorize() preHandler only checked
+  // Append/Write on the *container* (the request path), and its dedicated
+  // `.acl` Control guard (authorizeAclAccess) never fires here because the
+  // request path is the container, not the resolved sidecar. Without this an
+  // agent with mere Append rights on a container could POST `Slug: victim.acl`
+  // and self-grant Control on a sibling resource — privilege escalation.
+  // Mirror authorizeAclAccess: require acl:Control on the protected resource
+  // before minting a sidecar via POST.
+  if (!isCreatingContainer && /\.(acl|meta)$/.test(filename)) {
+    const protectedUrlPath = newUrlPath.replace(/\.(acl|meta)$/, '');
+    const protectedStoragePath = newStoragePath.replace(/\.(acl|meta)$/, '');
+    const { allowed } = await checkAccess({
+      resourceUrl: `${request.protocol}://${request.hostname}${protectedUrlPath}`,
+      resourcePath: protectedStoragePath,
+      isContainer: protectedUrlPath.endsWith('/'),
+      agentWebId: request.webId,
+      requiredMode: AccessMode.CONTROL
+    });
+    if (!allowed) {
+      return reply.code(403).send({
+        error: 'Forbidden',
+        message: 'Creating an ACL/meta sidecar via POST requires Control on the protected resource'
+      });
+    }
+  }
 
   let success;
   if (isCreatingContainer) {
