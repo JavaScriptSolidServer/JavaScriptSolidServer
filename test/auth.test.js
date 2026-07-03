@@ -216,7 +216,9 @@ describe('Authentication', () => {
     it('should deny POST-created .acl/.meta sidecars without Control on the protected resource', async () => {
       // Regression for the POST .acl sidecar injection: an agent holding only
       // acl:Append on a container (here, the public-append inbox) must not be
-      // able to plant a sidecar that governs a sibling resource's permissions.
+      // able to plant an .acl sidecar, which the WAC checker would then treat
+      // as the authorization policy for the sibling resource. .meta is not a
+      // WAC input, but is gated the same way as a protected Solid sidecar.
       await createTestPod('sidecarvictim');
 
       const aclBody = JSON.stringify({

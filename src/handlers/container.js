@@ -5,6 +5,7 @@ import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
 import { generateOwnerAcl, generatePrivateAcl, generateInboxAcl, generatePublicFolderAcl, serializeAcl, relativizeOwnerWebId, AccessMode } from '../wac/parser.js';
 import { checkAccess } from '../wac/checker.js';
+import { buildResourceUrl } from '../auth/middleware.js';
 import { provisionOwnerKey, assertProvisionKeysCompatible } from '../keys/provision.js';
 import { createToken } from '../auth/token.js';
 import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
@@ -89,20 +90,26 @@ export async function handlePost(request, reply) {
   const newStoragePath = storagePath + filename + (isCreatingContainer ? '/' : '');
   const resourceUrl = `${request.protocol}://${request.hostname}${newUrlPath}`;
 
-  // Security: a Slug that resolves to an `.acl`/`.meta` sidecar governs
-  // ANOTHER resource's permissions. The authorize() preHandler only checked
-  // Append/Write on the *container* (the request path), and its dedicated
-  // `.acl` Control guard (authorizeAclAccess) never fires here because the
-  // request path is the container, not the resolved sidecar. Without this an
-  // agent with mere Append rights on a container could POST `Slug: victim.acl`
-  // and self-grant Control on a sibling resource — privilege escalation.
+  // Security: a Slug that resolves to an `.acl` sidecar governs ANOTHER
+  // resource's permissions — the WAC checker searches for `*.acl`, so an
+  // `.acl` written here becomes the authorization policy for its sibling.
+  // The authorize() preHandler only checked Append/Write on the *container*
+  // (the request path), and its dedicated `.acl` Control guard
+  // (authorizeAclAccess) never fires here because the request path is the
+  // container, not the resolved sidecar. Without this an agent with mere
+  // Append rights on a container could POST `Slug: victim.acl` and self-grant
+  // Control on a sibling resource — privilege escalation. `.meta` is not
+  // consulted for WAC, but it is a protected Solid sidecar dotfile, so we gate
+  // it the same way (defense in depth) rather than let it be minted by Append.
   // Mirror authorizeAclAccess: require acl:Control on the protected resource
-  // before minting a sidecar via POST.
+  // before minting a sidecar via POST. Build the resource URL with the same
+  // buildResourceUrl() the auth middleware uses so this Control decision is
+  // evaluated against the identical origin (host+port, subdomain-normalized).
   if (!isCreatingContainer && /\.(acl|meta)$/.test(filename)) {
     const protectedUrlPath = newUrlPath.replace(/\.(acl|meta)$/, '');
     const protectedStoragePath = newStoragePath.replace(/\.(acl|meta)$/, '');
     const { allowed } = await checkAccess({
-      resourceUrl: `${request.protocol}://${request.hostname}${protectedUrlPath}`,
+      resourceUrl: buildResourceUrl(request, protectedUrlPath),
       resourcePath: protectedStoragePath,
       isContainer: protectedUrlPath.endsWith('/'),
       agentWebId: request.webId,
