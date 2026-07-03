@@ -22,7 +22,18 @@ import { readLedger, getBalance, debit } from '../webledger.js';
  *   Used by secondary/guard checks (e.g. the POST sidecar Control gate in
  *   handlePost) so a single request cannot debit twice or charge silently;
  *   the authoritative debit stays in the primary authorize() hook.
- * @returns {Promise<{allowed: boolean, wacAllow: string}>}
+ * @returns {Promise<{
+ *   allowed: boolean,
+ *   wacAllow: string,
+ *   paymentRequired?: object|null,
+ *   paid?: number,
+ *   balance?: number,
+ *   currency?: string
+ * }>}
+ *   `paymentRequired` carries the unmet PaymentCondition (present when a paid
+ *   grant is denied, including every `noDebit` denial). `paid`/`balance`/
+ *   `currency` are set only when a debit actually occurred. The no-ACL deny
+ *   path returns just `{allowed, wacAllow}`.
  */
 export async function checkAccess({
   resourceUrl,
