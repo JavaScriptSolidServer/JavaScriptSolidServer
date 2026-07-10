@@ -430,6 +430,25 @@ routed through the same upgrade path as the built-in realtime features, so
 plugins never attach their own `'upgrade'` listener. Return
 `{ deactivate }` to run teardown (state saves, timers) on server close.
 
+To mount an **existing node-style app** — a `(req, res)` handler, a reverse
+proxy, or a framework adapter — use `api.mountApp(handler, { prefix })`:
+
+```js
+export async function activate(api) {
+  const app = createMyNodeApp();
+  await api.mountApp((req, res) => app.handle(req, res));
+}
+```
+
+`mountApp` bundles the four things a wrapped-app plugin needs and would
+otherwise rediscover: the appPaths WAC exemption, a **scoped pass-through
+content parser** (so the wrapped app receives an unconsumed body stream
+instead of one Fastify already drained — the failure that hangs any
+body-reading app), `reply.hijack()` so Fastify releases the response, and
+registration on both the bare prefix and its subtree. It defaults to the
+entry's `prefix`; pass `{ prefix }` to mount a second app elsewhere (that
+prefix is WAC-exempted too).
+
 A plugin that fails to import or activate fails `listen()` loudly rather
 than booting a server silently missing an app.
 

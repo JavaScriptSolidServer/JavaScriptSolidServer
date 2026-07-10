@@ -152,6 +152,37 @@ export async function loadPlugins(fastify, entries, ctx) {
           return dir;
         },
       },
+      // Mount a node-style (req, res) handler — a wrapped HTTP app, reverse
+      // proxy, or framework adapter — under the plugin's prefix (#583). This
+      // bundles the four things every such plugin needs and otherwise
+      // rediscovers: the appPaths WAC exemption (already applied above), a
+      // scoped pass-through content parser so the wrapped app receives an
+      // unconsumed body stream, reply.hijack() so Fastify releases the
+      // response, and registration on both the bare prefix and its subtree.
+      // Without the scoped parser, Fastify drains the request stream before
+      // the handler runs and any body-reading app hangs forever.
+      async mountApp(handler, opts = {}) {
+        if (typeof handler !== 'function') {
+          throw new Error(`plugin ${id}: mountApp(handler) needs a (req, res) function`);
+        }
+        const mountPrefix = normalizePrefix(opts.prefix) || prefix;
+        if (!mountPrefix) {
+          throw new Error(`plugin ${id}: mountApp needs a prefix (entry.prefix or opts.prefix)`);
+        }
+        if (mountPrefix !== prefix && !ctx.appPaths.includes(mountPrefix)) {
+          ctx.appPaths.push(mountPrefix); // exempt a secondary mount too
+        }
+        await fastify.register(async (scope) => {
+          scope.removeAllContentTypeParsers();
+          scope.addContentTypeParser('*', (req, payload, done) => done(null, payload));
+          const wrapped = (request, reply) => {
+            reply.hijack();
+            handler(request.raw, reply.raw);
+          };
+          scope.all(mountPrefix, wrapped);
+          scope.all(mountPrefix + '/*', wrapped);
+        });
+      },
       ws: {
         async route(wsPath, handler) {
           if (typeof wsPath !== 'string' || !wsPath.startsWith('/')) {
