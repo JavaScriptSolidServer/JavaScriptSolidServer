@@ -372,6 +372,12 @@ built-in `/storage/` and `/db/` routes. Everything outside the declared
 prefixes keeps full WAC enforcement. Entries must start with `/` and be
 longer than `/`; anything else is ignored.
 
+Because the WAC hook is also what populates `request.webId`, requests under
+an app path never carry it — don't rely on `request.webId` in app handlers.
+Resolve identity yourself, e.g. with `getWebIdFromRequestAsync(request)`
+from `src/auth/token.js` (a stable public accessor is tracked in
+[#584](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/584)).
+
 See [#582](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/582)
 for the design discussion and
 [melvincarvalho/tideholm](https://github.com/melvincarvalho/tideholm/tree/gh-pages/jss-plugin)
