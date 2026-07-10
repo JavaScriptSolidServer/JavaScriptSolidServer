@@ -67,11 +67,24 @@ export function normalizePrefix(p) {
   return trimmed.startsWith('/') && trimmed.length > 1 ? trimmed : '';
 }
 
-/** Directory-safe plugin id: from entry.id or derived from the module spec. */
+/**
+ * Directory-safe plugin id: entry.id, or derived from the module spec.
+ * Bare package specifiers keep their full path ('@scope/pkg/plugin.js' ->
+ * 'scope-pkg-plugin') so same-named files in different packages don't
+ * collide; file paths use the basename, because a machine-specific
+ * directory prefix must not name the plugin's data dir (the id — and with
+ * it pluginDir — would change whenever the deployment moves). The loader
+ * additionally rejects duplicate ids, so any residual collision fails the
+ * boot instead of silently sharing storage.
+ */
 export function pluginId(spec) {
+  const module = String(spec.module);
   const raw = typeof spec.id === 'string' && spec.id
     ? spec.id
-    : path.basename(String(spec.module)).replace(/\.[cm]?js$/, '');
+    : (module.startsWith('.') || path.isAbsolute(module)
+        ? path.basename(module)
+        : module
+      ).replace(/\.[cm]?js$/, '');
   const id = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!id) throw new Error(`plugins: cannot derive an id from ${JSON.stringify(spec.module)}; set entry.id`);
   return id;
@@ -88,12 +101,17 @@ export function pluginId(spec) {
  */
 export async function loadPlugins(fastify, entries, ctx) {
   const log = makePluginLog(ctx.log);
+  const seenIds = new Set();
   for (const entry of entries) {
     const spec = typeof entry === 'string' ? { module: entry } : entry;
     if (!spec || typeof spec.module !== 'string' || !spec.module) {
       throw new Error('plugins: each entry needs a module (import specifier or path)');
     }
     const id = pluginId(spec);
+    if (seenIds.has(id)) {
+      throw new Error(`plugins: duplicate id '${id}' — set entry.id to keep the plugins' data dirs apart`);
+    }
+    seenIds.add(id);
 
     // Paths resolve from the operator's cwd; bare specifiers stay package
     // imports resolved from JSS's own module graph.
@@ -142,7 +160,18 @@ export async function loadPlugins(fastify, entries, ctx) {
           fastify.get(wsPath, { websocket: true }, (connection, request) => {
             // @fastify/websocket v8 hands a SocketStream; the ws socket is
             // .socket. Later majors hand the socket directly — accept both.
-            handler(connection.socket ?? connection, request);
+            const socket = connection.socket ?? connection;
+            // A plugin bug here must not become an unhandled rejection that
+            // takes the host down: log it and close the one affected socket.
+            try {
+              Promise.resolve(handler(socket, request)).catch((err) => {
+                log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+                socket.terminate?.();
+              });
+            } catch (err) {
+              log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+              socket.terminate?.();
+            }
           });
         },
       },

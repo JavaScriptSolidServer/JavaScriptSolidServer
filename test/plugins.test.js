@@ -17,6 +17,7 @@ import path from 'path';
 import { WebSocket } from 'ws';
 import fs from 'fs-extra';
 import { createServer } from '../src/server.js';
+import { pluginId } from '../src/plugins.js';
 
 const TEST_DATA_DIR = './test-data-plugins';
 const FIXTURE_DIR = './test-fixtures-plugins';
@@ -52,6 +53,9 @@ export async function activate(api) {
 
   await api.ws.route(api.prefix + '/ws', (socket) => {
     socket.on('message', (data) => socket.send('pong:' + String(data)));
+  });
+  await api.ws.route(api.prefix + '/ws-throw', () => {
+    throw new Error('plugin bug');
   });
 
   return {
@@ -184,6 +188,44 @@ describe('plugin loader (#206)', () => {
     await assert.rejects(
       server.listen({ port: 0, host: '127.0.0.1' }),
       /cannot import/,
+    );
+  });
+
+  it('a throwing ws handler closes that socket but not the server', async () => {
+    await startWith([
+      { module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: '/game' },
+    ]);
+    const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/game/ws-throw`);
+    await new Promise((resolve) => {
+      ws.on('close', resolve);
+      ws.on('error', resolve);
+    });
+    // The host survives its plugin's bug.
+    const res = await fetch(`${baseUrl}/game/echo`);
+    assert.strictEqual(res.status, 200);
+  });
+
+  it('derives collision-resistant ids and rejects duplicates', async () => {
+    // Bare specifiers keep their full path; file paths use the basename.
+    assert.strictEqual(pluginId({ module: '@scope1/pkg/plugin.js' }), 'scope1-pkg-plugin');
+    assert.strictEqual(pluginId({ module: '@scope2/pkg/plugin.js' }), 'scope2-pkg-plugin');
+    assert.strictEqual(pluginId({ module: '/some/machine/path/foo.js' }), 'foo');
+    assert.strictEqual(pluginId({ module: './x.js', id: 'Custom Id!' }), 'custom-id');
+
+    // Two entries reducing to the same id fail the boot, not share a dir.
+    await fs.emptyDir(TEST_DATA_DIR);
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: '/a' },
+        { module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: '/b' },
+      ],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /duplicate id/,
     );
   });
 

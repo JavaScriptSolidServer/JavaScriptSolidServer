@@ -389,6 +389,50 @@ for the design discussion and
 for a complete example (a multiplayer game where pod WebIDs are the player
 accounts).
 
+## App Plugins (plugins)
+
+The plugin loader
+([#206](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/206))
+does the appPaths wiring for you: declare the apps in config and the server
+imports, mounts, and tears them down itself.
+
+```js
+const fastify = createServer({
+  root: './data',
+  idp: true,
+  plugins: [
+    { module: 'tideholm/jss-plugin/tideholm-jss.js', prefix: '/tideholm',
+      config: { bots: 8 } },
+    { module: './my-app/plugin.js', prefix: '/myapp' },
+  ],
+});
+```
+
+Each entry:
+
+- `module` — import specifier: a package path (resolved from JSS's module
+  graph) or a file path (`./…` or absolute, resolved from the process cwd).
+  The module exports `activate(api)`, called during startup.
+- `prefix` — the app's mount point. Added to `appPaths` automatically, so
+  the app owns authentication below it (see the section above). Must start
+  with `/`; invalid prefixes fail startup.
+- `config` — passed to the plugin verbatim as `api.config`.
+- `id` — optional stable identifier (defaults to a name derived from
+  `module`); names the plugin's private data dir, so set it explicitly if
+  you load two plugins whose specifiers reduce to the same name.
+
+`activate(api)` receives: `api.fastify` (register routes here),
+`api.prefix`, `api.config`, `api.log`, `api.auth.getAgent(request)`
+(identity, as above), `api.storage.pluginDir()` (a private server-side
+directory under the data root, never served over HTTP), and
+`api.ws.route(path, (socket, request) => {})` for WebSocket endpoints —
+routed through the same upgrade path as the built-in realtime features, so
+plugins never attach their own `'upgrade'` listener. Return
+`{ deactivate }` to run teardown (state saves, timers) on server close.
+
+A plugin that fails to import or activate fails `listen()` loudly rather
+than booting a server silently missing an app.
+
 ## Storage Quotas
 
 Limit storage per pod to prevent abuse and manage resources:
