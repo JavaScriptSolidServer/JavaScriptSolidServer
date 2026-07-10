@@ -8,11 +8,16 @@
  *
  *   import { getAgent } from 'javascript-solid-server/auth.js';
  *
- *   const webId = await getAgent(request);   // string | null
+ *   const agent = await getAgent(request);   // string | null
  *
  * Covers every token scheme the server itself accepts, uniformly:
  * IdP-issued Bearer tokens, Solid-OIDC DPoP, Nostr NIP-98 signatures,
- * and LWS10-CID. Authentication only — deliberately not authorization:
+ * and LWS10-CID. The returned identifier is usually an HTTP(S) WebID;
+ * for NIP-98 it can be a `did:nostr:...` DID when no WebID mapping
+ * exists — DID agents are first-class here, which is why this is
+ * getAgent and not getWebId. Key your app's users on the string.
+ *
+ * Authentication only — deliberately not authorization:
  * apps under an appPaths prefix own their own permissioning (WAC stays
  * out of their jurisdiction, and `request.webId` is never set there).
  *
@@ -29,8 +34,10 @@ import { getWebIdFromRequestAsync } from './src/auth/token.js';
  *   Bearer verification only reads `headers`, but DPoP (Solid-OIDC),
  *   NIP-98 and LWS-CID verification also read `method`, `url`, `protocol`
  *   and `hostname` to check what the credential was signed over.
- * @returns {Promise<string|null>} verified WebID, or null when anonymous /
- *   invalid — never throws on bad credentials
+ * @returns {Promise<string|null>} the verified agent identifier — an
+ *   HTTP(S) WebID, or a `did:nostr:` DID for NIP-98 agents without a
+ *   WebID mapping — or null when anonymous / invalid. Never throws on
+ *   bad credentials.
  */
 export async function getAgent(request) {
   try {

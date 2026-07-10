@@ -380,7 +380,7 @@ Resolve identity with the public accessor
 ```js
 import { getAgent } from 'javascript-solid-server/auth.js';
 
-const webId = await getAgent(request); // string | null, covers Bearer/DPoP/NIP-98/LWS-CID
+const agent = await getAgent(request); // WebID or did:nostr DID, null if anonymous
 ```
 
 See [#582](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/582)
