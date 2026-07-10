@@ -1,5 +1,5 @@
 /**
- * getAgent — public request → WebID accessor (#584).
+ * getAgent — public request → agent-identifier accessor (#584).
  *
  * Apps that own their own auth (appPaths mounts, #582) need to ask "who is
  * this?" without reaching into src/auth internals. auth.js at the package
@@ -9,8 +9,10 @@
  *   - anonymous / malformed credentials  -> null, never a throw
  *   - a real IdP-issued Bearer token     -> the account's WebID
  *
- * The individual token schemes (Bearer, DPoP, NIP-98, LWS10-CID) are
- * exercised by their own suites; this one pins the public wrapper.
+ * The identifier is an HTTP(S) WebID or, for NIP-98 agents without a WebID
+ * mapping, a did:nostr DID. The individual credential schemes (Bearer,
+ * DPoP, NIP-98, LWS10-CID, WebID-TLS) are exercised by their own suites;
+ * this one pins the public wrapper.
  */
 
 import { describe, it, before, after, afterEach } from 'node:test';
