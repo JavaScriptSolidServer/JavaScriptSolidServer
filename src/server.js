@@ -112,7 +112,10 @@ export function createServer(options = {}) {
   // app path skip the WAC hook — the app owns authentication and
   // authorization under its prefix, like /storage/ and /db/ already do.
   const appPaths = Array.isArray(options.appPaths)
-    ? options.appPaths.filter((p) => typeof p === 'string' && p.startsWith('/') && p.length > 1)
+    ? options.appPaths
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim().replace(/\/+$/, '')) // '/myapp/' matches like '/myapp'
+        .filter((p) => p.startsWith('/') && p.length > 1)
     : [];
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;

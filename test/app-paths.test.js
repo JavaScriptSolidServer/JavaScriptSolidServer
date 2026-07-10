@@ -127,10 +127,16 @@ describe('appPaths application mount points (#582)', () => {
       `expected WAC rejection, got ${res.status}`);
   });
 
+  it('trailing-slash entries are normalized, children still exempt', async () => {
+    await startWith(['/myapp/']);
+    const res = await fetch(`${baseUrl}/myapp/api/action`, { method: 'POST' });
+    assert.strictEqual(res.status, 200);
+  });
+
   it('malformed appPaths entries are dropped, not accidental holes', async () => {
     // No leading slash and bare '/' are both invalid; with them filtered out
     // the route registrations still exist but WAC fires first.
-    await startWith(['myapp', '/']);
+    await startWith(['myapp', '/', '///', '  ']);
     const res = await fetch(`${baseUrl}/myapp/api/action`, { method: 'POST' });
     assert.ok(res.status === 401 || res.status === 403,
       `expected WAC rejection (invalid entries dropped), got ${res.status}`);

@@ -360,6 +360,8 @@ Programmatic compositions can mount whole applications beside the pod
 import { createServer } from 'javascript-solid-server/src/server.js';
 
 const fastify = createServer({ appPaths: ['/myapp'] });
+// Register both forms: fastify wildcards don't match the bare prefix.
+fastify.all('/myapp', myAppHandler);
 fastify.all('/myapp/*', myAppHandler); // the app owns auth below its prefix
 await fastify.listen({ port: 4443 });
 ```
