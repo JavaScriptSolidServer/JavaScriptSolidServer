@@ -230,16 +230,23 @@ describe('plugin loader (#206)', () => {
   });
 
   it('an invalid prefix fails listen() loudly', async () => {
-    await fs.emptyDir(TEST_DATA_DIR);
-    server = createServer({
-      logger: false,
-      forceCloseConnections: true,
-      root: TEST_DATA_DIR,
-      plugins: [{ module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: 'game' }],
-    });
-    await assert.rejects(
-      server.listen({ port: 0, host: '127.0.0.1' }),
-      /invalid prefix/,
-    );
+    // Any provided prefix must validate — including falsy ones, which would
+    // otherwise mount the app without its WAC exemption.
+    for (const prefix of ['game', '', '/', 0, null]) {
+      await fs.emptyDir(TEST_DATA_DIR);
+      server = createServer({
+        logger: false,
+        forceCloseConnections: true,
+        root: TEST_DATA_DIR,
+        plugins: [{ module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix }],
+      });
+      await assert.rejects(
+        server.listen({ port: 0, host: '127.0.0.1' }),
+        /invalid prefix/,
+        `prefix ${JSON.stringify(prefix)} should be rejected`,
+      );
+      await server.close();
+      server = null;
+    }
   });
 });

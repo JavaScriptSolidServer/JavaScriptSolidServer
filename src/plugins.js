@@ -129,9 +129,12 @@ export async function loadPlugins(fastify, entries, ctx) {
       throw new Error(`plugin ${id}: module exports no activate(api) function`);
     }
 
+    // Any provided prefix must validate — a falsy one ('', 0) silently
+    // skipping the appPaths exemption would mount the app behind WAC.
+    // Omit the property entirely for a plugin with no mount prefix.
     const prefix = normalizePrefix(spec.prefix);
-    if (spec.prefix && !prefix) {
-      throw new Error(`plugin ${id}: invalid prefix ${JSON.stringify(spec.prefix)} (must start with '/')`);
+    if (spec.prefix !== undefined && !prefix) {
+      throw new Error(`plugin ${id}: invalid prefix ${JSON.stringify(spec.prefix)} (must start with '/'; omit for none)`);
     }
     if (prefix) ctx.appPaths.push(prefix); // WAC exemption under the mount (#582)
 
