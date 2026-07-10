@@ -374,9 +374,14 @@ longer than `/`; anything else is ignored.
 
 Because the WAC hook is also what populates `request.webId`, requests under
 an app path never carry it — don't rely on `request.webId` in app handlers.
-Resolve identity yourself, e.g. with `getWebIdFromRequestAsync(request)`
-from `src/auth/token.js` (a stable public accessor is tracked in
-[#584](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/584)).
+Resolve identity with the public accessor
+([#584](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/584)):
+
+```js
+import { getAgent } from 'javascript-solid-server/auth.js';
+
+const agent = await getAgent(request); // WebID or did:nostr DID, null if anonymous
+```
 
 See [#582](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/582)
 for the design discussion and
