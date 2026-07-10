@@ -60,6 +60,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {string} options.apNostrPubkey - Nostr pubkey for identity linking
  * @param {boolean} options.webidTls - Enable WebID-TLS client certificate auth (default false)
  * @param {boolean} options.pay - Enable HTTP 402 paid /pay/* routes (default false)
+ * @param {Array} options.plugins - App plugins to load (#206): [{ module, prefix, config, id }].
+ *   Each module's activate(api) runs at startup; prefix is WAC-exempted via appPaths.
+ *   See src/plugins.js for the api surface.
  * @param {number} options.payCost - Cost per request in satoshis (default 1)
  * @param {string} options.payMempoolUrl - Mempool API base URL (default testnet4)
  * @param {string} options.payAddress - Pod's MRC20 address for receiving token transfers
@@ -117,6 +120,10 @@ export function createServer(options = {}) {
         .map((p) => p.trim().replace(/\/+$/, '')) // '/myapp/' matches like '/myapp'
         .filter((p) => p.startsWith('/') && p.length > 1)
     : [];
+  // App plugins (#206): loaded at startup, each entry's prefix joins
+  // appPaths. The WAC hook reads the array per request, so pushes made
+  // during plugin activation are honored.
+  const pluginEntries = Array.isArray(options.plugins) ? options.plugins : [];
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -408,6 +415,20 @@ export function createServer(options = {}) {
     } catch { /* keep 'unknown' */ }
     fastify.register(idpPlugin, {
       issuer: idpIssuer, inviteOnly, singleUser, singleUserName, jssVersion,
+    });
+  }
+
+  // Load app plugins (#206). Deferred into a register scope so the dynamic
+  // imports and async activation run during fastify's startup; a failing
+  // plugin fails listen() rather than leaving a half-configured server.
+  if (pluginEntries.length) {
+    fastify.register(async (instance) => {
+      const { loadPlugins } = await import('./plugins.js');
+      await loadPlugins(instance, pluginEntries, {
+        appPaths,
+        root: options.root || process.env.DATA_ROOT || './data',
+        log: fastify.log,
+      });
     });
   }
 
