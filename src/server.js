@@ -107,6 +107,16 @@ export function createServer(options = {}) {
   // Tunnel proxy is OFF by default
   const tunnelEnabled = options.tunnel ?? false;
   const tunnelPath = options.tunnelPath ?? '/.tunnel';
+  // Application mount points (plugin seam, #206): URL prefixes owned by
+  // registered apps (e.g. a game mounted at /tideholm). Requests below an
+  // app path skip the WAC hook — the app owns authentication and
+  // authorization under its prefix, like /storage/ and /db/ already do.
+  const appPaths = Array.isArray(options.appPaths)
+    ? options.appPaths
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim().replace(/\/+$/, '')) // '/myapp/' matches like '/myapp'
+        .filter((p) => p.startsWith('/') && p.length > 1)
+    : [];
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -719,6 +729,7 @@ export function createServer(options = {}) {
         (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
         (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
+        appPaths.some(p => request.url === p || request.url.startsWith(p + '/') || request.url.startsWith(p + '?')) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }
