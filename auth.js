@@ -10,9 +10,10 @@
  *
  *   const agent = await getAgent(request);   // string | null
  *
- * Covers every token scheme the server itself accepts, uniformly:
+ * Covers every credential scheme the server itself accepts, uniformly:
  * IdP-issued Bearer tokens, Solid-OIDC DPoP, Nostr NIP-98 signatures,
- * and LWS10-CID. The returned identifier is usually an HTTP(S) WebID;
+ * LWS10-CID, and WebID-TLS client certificates.
+ * The returned identifier is usually an HTTP(S) WebID;
  * for NIP-98 it can be a `did:nostr:...` DID when no WebID mapping
  * exists — DID agents are first-class here, which is why this is
  * getAgent and not getWebId. Key your app's users on the string.

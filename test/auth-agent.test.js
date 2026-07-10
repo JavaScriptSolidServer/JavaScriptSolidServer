@@ -87,6 +87,7 @@ describe('public getAgent accessor (#584)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'agent', password: 'secret-word' }),
     });
+    assert.strictEqual(res.status, 200, `credentials failed: ${res.status}`);
     const cred = await res.json();
     assert.ok(cred.access_token, 'no token issued');
 
