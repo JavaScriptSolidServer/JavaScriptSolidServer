@@ -60,8 +60,9 @@ describe('public getAgent accessor (#584)', () => {
     // The IdP needs its real issuer up front — reserve a port first (same
     // pattern as test/well-known-did-nostr.test.js).
     const net = await import('node:net');
-    const port = await new Promise((resolve) => {
+    const port = await new Promise((resolve, reject) => {
       const probe = net.createServer();
+      probe.once('error', reject); // fail loudly, don't hang, if listen errors
       probe.listen(0, '127.0.0.1', () => {
         const p = probe.address().port;
         probe.close(() => resolve(p));
