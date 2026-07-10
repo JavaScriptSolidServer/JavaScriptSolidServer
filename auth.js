@@ -25,7 +25,10 @@ import { getWebIdFromRequestAsync } from './src/auth/token.js';
 
 /**
  * Resolve the authenticated agent of a request.
- * @param {object} request - Fastify request (or any object with `headers`)
+ * @param {object} request - a Fastify request. Pass the real request object:
+ *   Bearer verification only reads `headers`, but DPoP (Solid-OIDC),
+ *   NIP-98 and LWS-CID verification also read `method`, `url`, `protocol`
+ *   and `hostname` to check what the credential was signed over.
  * @returns {Promise<string|null>} verified WebID, or null when anonymous /
  *   invalid — never throws on bad credentials
  */

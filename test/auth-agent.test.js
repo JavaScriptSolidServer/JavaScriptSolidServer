@@ -55,15 +55,25 @@ describe('public getAgent accessor (#584)', () => {
 
   it('resolves a real IdP Bearer token to the account WebID', async () => {
     await fs.emptyDir(TEST_DATA_DIR);
+    // The IdP needs its real issuer up front — reserve a port first (same
+    // pattern as test/well-known-did-nostr.test.js).
+    const net = await import('node:net');
+    const port = await new Promise((resolve) => {
+      const probe = net.createServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const p = probe.address().port;
+        probe.close(() => resolve(p));
+      });
+    });
+    baseUrl = `http://127.0.0.1:${port}`;
     server = createServer({
       logger: false,
       forceCloseConnections: true,
       root: TEST_DATA_DIR,
       idp: true,
-      idpIssuer: 'http://127.0.0.1:0', // patched after listen below
+      idpIssuer: baseUrl,
     });
-    await server.listen({ port: 0, host: '127.0.0.1' });
-    baseUrl = `http://127.0.0.1:${server.server.address().port}`;
+    await server.listen({ port, host: '127.0.0.1' });
 
     let res = await fetch(`${baseUrl}/idp/register`, {
       method: 'POST',
