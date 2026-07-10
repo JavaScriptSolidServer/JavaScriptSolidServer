@@ -350,6 +350,32 @@ When `--invite-only` is enabled:
 
 Invite codes are stored in `.server/invites.json` in your data directory.
 
+## Application Mount Points (appPaths)
+
+Programmatic compositions can mount whole applications beside the pod
+(the plugin-zero pattern from
+[#206](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/206)):
+
+```js
+import { createServer } from 'javascript-solid-server/src/server.js';
+
+const fastify = createServer({ appPaths: ['/myapp'] });
+fastify.all('/myapp/*', myAppHandler); // the app owns auth below its prefix
+await fastify.listen({ port: 4443 });
+```
+
+Requests at or below an app path skip the WAC authorization hook — the
+application authenticates and authorizes its own traffic, exactly like the
+built-in `/storage/` and `/db/` routes. Everything outside the declared
+prefixes keeps full WAC enforcement. Entries must start with `/` and be
+longer than `/`; anything else is ignored.
+
+See [#582](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/582)
+for the design discussion and
+[melvincarvalho/tideholm](https://github.com/melvincarvalho/tideholm/tree/gh-pages/jss-plugin)
+for a complete example (a multiplayer game where pod WebIDs are the player
+accounts).
+
 ## Storage Quotas
 
 Limit storage per pod to prevent abuse and manage resources:
