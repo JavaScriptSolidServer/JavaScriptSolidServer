@@ -21,6 +21,7 @@
  *   api.storage.pluginDir()  -> private server-side data dir for this plugin
  *   api.serverInfo()         -> { baseUrl, protocol, host, port, listening } (#601)
  *   api.reservePath(path)    claim + WAC-exempt a protocol-pinned path (#602)
+ *   api.plugins              -> [{ id, prefix, module }] of every loaded entry (#610)
  *   api.ws.route(path, (socket, request) => {})          (#588)
  *
  * The entry's `prefix` is added to appPaths automatically (#582), so the
@@ -162,6 +163,28 @@ export async function loadPlugins(fastify, entries, ctx) {
   // names — loud beats the silent-loser outcome witnessed with webfinger
   // vs remotestorage.
   const reservations = new Map();
+
+  // Read-only roster of every loaded entry (#610): { id, prefix, module }
+  // for each. Computed up front, before any activate() runs, so a plugin
+  // whose job is describing the deployment (a status dashboard, an admin
+  // console) sees the FULL set regardless of load order — rather than being
+  // hand-fed a duplicate of the operator's plugins array that silently
+  // drifts. Frozen so one plugin can't mutate another's view; it includes
+  // the plugin itself (consumers filter). Lenient here (never throws) — the
+  // load loop below owns validation and fails the boot on a bad entry, so
+  // on any successful boot every id/prefix matches what the loop derives.
+  // A boot-time snapshot: there is no runtime add/remove yet.
+  const roster = Object.freeze(entries.map((entry) => {
+    const spec = typeof entry === 'string' ? { module: entry } : (entry ?? {});
+    let id = null;
+    try { if (spec.module) id = pluginId(spec); } catch { /* the loop reports it */ }
+    return Object.freeze({
+      id,
+      prefix: normalizePrefix(spec.prefix),
+      module: spec.module ? String(spec.module) : null,
+    });
+  }));
+
   for (const entry of entries) {
     const spec = typeof entry === 'string' ? { module: entry } : entry;
     if (!spec || typeof spec.module !== 'string' || !spec.module) {
@@ -297,6 +320,12 @@ export async function loadPlugins(fastify, entries, ctx) {
         const baseUrl = o.baseUrl || `${protocol}://${urlHost}:${port}`;
         return { baseUrl, protocol, host, port, listening: !!live };
       },
+      // Every loaded plugin's { id, prefix, module } (#610), read-only — so
+      // a plugin can enumerate its co-loaded siblings instead of being
+      // handed a copy of the operator's plugins array. Includes this
+      // plugin; consumers filter themselves out. A frozen boot-time
+      // snapshot (see `roster` above).
+      plugins: roster,
       // Mount a node-style (req, res) handler — a wrapped HTTP app, reverse
       // proxy, or framework adapter — under the plugin's prefix (#583). This
       // bundles the four things every such plugin needs and otherwise
