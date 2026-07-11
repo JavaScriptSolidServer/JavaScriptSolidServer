@@ -223,4 +223,11 @@ describe('config — parsePluginFlag (#594)', () => {
     assert.deepStrictEqual(parsePluginFlag('./p.js@chat'),
       { module: './p.js@chat' });
   });
+
+  it('parses a missing module to module: "" for the loader to reject', () => {
+    // '@/app' splits at position 0 so the loader raises its clear
+    // "each entry needs a module" error instead of a confusing import failure.
+    assert.deepStrictEqual(parsePluginFlag('@/app'),
+      { module: '', prefix: '/app' });
+  });
 });

@@ -325,7 +325,9 @@ function loadEnvConfig() {
 export function parsePluginFlag(value) {
   const str = String(value);
   const at = str.lastIndexOf('@/');
-  if (at > 0) {
+  if (at >= 0) {
+    // at === 0 yields module: '' ('@/app' has no module) — the loader's
+    // "each entry needs a module" beats a confusing import error.
     return { module: str.slice(0, at), prefix: str.slice(at + 1) };
   }
   return { module: str };
