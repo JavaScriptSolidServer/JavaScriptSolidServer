@@ -32,6 +32,17 @@ export async function activate(api) {
     res.writeHead(200, { 'content-type': 'text/plain' });
     res.end('secondary');
   }, { prefix: '/wrapped2' });
+  // Handlers that fail — sync throw and async rejection — to prove a
+  // handler bug after hijack() answers 500 instead of hanging the client.
+  await api.mountApp(() => { throw new Error('sync boom'); }, { prefix: '/boom' });
+  await api.mountApp(async () => { throw new Error('async boom'); }, { prefix: '/boom-async' });
+}
+`;
+
+// A plugin whose secondary mount prefix is invalid — must fail the boot.
+const BAD_PREFIX_FIXTURE = `
+export async function activate(api) {
+  await api.mountApp((req, res) => res.end('x'), { prefix: 'chat' });
 }
 `;
 
@@ -102,5 +113,40 @@ describe('api.mountApp (#583)', () => {
     await start();
     const res = await fetch(`${baseUrl}/somepod/private/x`, { method: 'PUT', body: 'data' });
     assert.ok([401, 403].includes(res.status), `expected WAC rejection, got ${res.status}`);
+  });
+
+  it('a handler that throws sync answers 500 and the server survives', async () => {
+    await start();
+    const res = await fetch(`${baseUrl}/boom`);
+    assert.strictEqual(res.status, 500);
+    // Process and server still alive: a healthy mount keeps answering.
+    const ok = await fetch(`${baseUrl}/wrapped2/still-up`);
+    assert.strictEqual(ok.status, 200);
+  });
+
+  it('a handler that rejects async answers 500 instead of leaking the rejection', async () => {
+    await start();
+    const res = await fetch(`${baseUrl}/boom-async`);
+    assert.strictEqual(res.status, 500);
+    const ok = await fetch(`${baseUrl}/wrapped2/still-up`);
+    assert.strictEqual(ok.status, 200);
+  });
+
+  it('a provided-but-invalid secondary prefix fails the boot instead of mounting at the entry prefix', async () => {
+    await fs.writeFile(path.join(FIXTURE_DIR, 'bad-prefix.js'), BAD_PREFIX_FIXTURE);
+    await fs.emptyDir(TEST_DATA_DIR);
+    const { createServer } = await import('../src/server.js');
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { id: 'bad', module: path.join(FIXTURE_DIR, 'bad-prefix.js'), prefix: '/ok' },
+      ],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /invalid prefix "chat"/,
+    );
   });
 });
