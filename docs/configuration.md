@@ -429,6 +429,10 @@ directory under the data root, never served over HTTP),
 server's own origin, for minting absolute URLs and loopback calls — call
 it lazily, e.g. per request: with `port: 0` the real port exists only once
 the server is listening, and an explicit `idpIssuer` wins as `baseUrl`),
+`api.plugins` → `[{ id, prefix, module }]` for every loaded entry (a
+read-only, frozen boot-time snapshot, so a plugin can enumerate its
+co-loaded siblings instead of being handed a copy of the operator's
+plugins array — it includes the plugin itself, so consumers filter),
 and `api.ws.route(path, (socket, request) => {})` for WebSocket endpoints —
 routed through the same upgrade path as the built-in realtime features, so
 plugins never attach their own `'upgrade'` listener. Return
