@@ -70,14 +70,31 @@ export function makePluginLog(base) {
  * documents inside otherwise WAC-governed namespaces (did:web), where
  * exempting a whole subtree would be a WAC bypass.
  */
+// Only a segment that is ENTIRELY ':name' is a parameter. '/:user.json'
+// is literal (its own segment mixes a param sigil with literal text) —
+// treating it as a wildcard would exempt a far broader set of URLs than
+// the ':name'-per-segment contract promises.
+const PARAM_SEGMENT = /^:[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function isParamPath(p) {
+  return p.split('/').some((seg) => PARAM_SEGMENT.test(seg));
+}
+
 export function compilePathPattern(p) {
   const pattern = p
     .split('/')
-    .map((seg) => (seg.startsWith(':') && seg.length > 1
+    .map((seg) => (PARAM_SEGMENT.test(seg)
       ? '[^/]+'
       : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     .join('/');
   return new RegExp(`^${pattern}(?:\\?.*)?$`);
+}
+
+// Collision key: two reservations conflict when they exempt the same
+// URLs, so parameter NAMES don't matter — '/:user/did.json' and
+// '/:acct/did.json' are the same claim. Canonicalize param segments.
+export function reservationKey(p) {
+  return p.split('/').map((seg) => (PARAM_SEGMENT.test(seg) ? ':' : seg)).join('/');
 }
 
 /** Same normalization appPaths applies: no trailing slash, must be '/x…'. */
@@ -202,12 +219,16 @@ export async function loadPlugins(fastify, entries, ctx) {
         if (!key.startsWith('/') || key.length < 2) {
           throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
         }
-        const holder = reservations.get(key);
+        // Track by the shape, not the raw string: '/:user/did.json' and
+        // '/:acct/did.json' exempt the same URLs, so they're the same
+        // claim and must collide loudly like two literal reservations.
+        const claim = reservationKey(key);
+        const holder = reservations.get(claim);
         if (holder && holder !== id) {
           throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
         }
-        reservations.set(key, id);
-        if (key.includes('/:')) {
+        reservations.set(claim, id);
+        if (isParamPath(key)) {
           // Parameterized reservations are method-gated, read-only by
           // default: the URL shape lives inside a WAC-governed pod
           // namespace, and exempting PUT/DELETE would hand the LDP
