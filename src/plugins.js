@@ -83,8 +83,12 @@ export function isParamPath(p) {
 export function compilePathPattern(p) {
   const pattern = p
     .split('/')
+    // Exclude '?' as well as '/': a param must be a single PATH segment,
+    // so it must not swallow the query delimiter — otherwise a query
+    // containing '/' (e.g. /alice?x=a/b) would fail to match a shape the
+    // path part satisfies, making matching depend on query contents.
     .map((seg) => (PARAM_SEGMENT.test(seg)
-      ? '[^/]+'
+      ? '[^/?]+'
       : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     .join('/');
   return new RegExp(`^${pattern}(?:\\?.*)?$`);

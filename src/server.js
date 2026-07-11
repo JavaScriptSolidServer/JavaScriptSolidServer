@@ -764,7 +764,7 @@ export function createServer(options = {}) {
         (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
         appPaths.some(p => request.url === p || request.url.startsWith(p + '/') || request.url.startsWith(p + '?')) ||
-        appPathPatterns.some(m => m.re.test(request.url) && m.methods.has(request.method)) ||
+        appPathPatterns.some(m => m.methods.has(request.method) && m.re.test(request.url)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }

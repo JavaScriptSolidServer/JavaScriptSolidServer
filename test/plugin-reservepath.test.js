@@ -133,6 +133,15 @@ describe('api.reservePath (#602)', () => {
     assert.deepStrictEqual(await res.json(), { id: 'did:web:alice' });
   });
 
+  it('a query string (even one containing /) does not affect shape matching', async () => {
+    await start(MAIN());
+    // The param class must not swallow '?': a '/' inside the query would
+    // otherwise break the match for a path shape that is satisfied.
+    const res = await fetch(`${baseUrl}/alice/did.json?redirect=/a/b`);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(await res.json(), { id: 'did:web:alice' });
+  });
+
   it('parameterized reservations are read-only: writes to the shape stay WAC-guarded', async () => {
     await start(MAIN());
     // Without the method gate this PUT would skip WAC and fall through
