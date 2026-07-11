@@ -20,6 +20,7 @@
  *   api.auth.getAgent(req)   -> agent id string | null   (#584)
  *   api.storage.pluginDir()  -> private server-side data dir for this plugin
  *   api.serverInfo()         -> { baseUrl, protocol, host, port, listening } (#601)
+ *   api.reservePath(path)    claim + WAC-exempt a protocol-pinned path (#602)
  *   api.ws.route(path, (socket, request) => {})          (#588)
  *
  * The entry's `prefix` is added to appPaths automatically (#582), so the
@@ -59,6 +60,59 @@ export function makePluginLog(base) {
     if (typeof fn === 'function') fn.call(base, ...args);
   };
   return { log: call('info'), info: call('info'), warn: call('warn'), error: call('error'), debug: call('debug') };
+}
+
+/**
+ * Compile a parameterized reservation like '/:user/did.json' (#602) to a
+ * matcher. ':name' segments match one path segment; everything else is
+ * literal. Parameterized reservations match the exact path shape (plus an
+ * optional query string) — NOT a subtree — because they exist for pinned
+ * documents inside otherwise WAC-governed namespaces (did:web), where
+ * exempting a whole subtree would be a WAC bypass.
+ */
+// Only a segment that is ENTIRELY ':name' is a parameter. '/:user.json'
+// is literal (its own segment mixes a param sigil with literal text) —
+// treating it as a wildcard would exempt a far broader set of URLs than
+// the ':name'-per-segment contract promises.
+const PARAM_SEGMENT = /^:[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function isParamPath(p) {
+  return p.split('/').some((seg) => PARAM_SEGMENT.test(seg));
+}
+
+export function compilePathPattern(p) {
+  const pattern = p
+    .split('/')
+    // Exclude '?' as well as '/': a param must be a single PATH segment,
+    // so it must not swallow the query delimiter — otherwise a query
+    // containing '/' (e.g. /alice?x=a/b) would fail to match a shape the
+    // path part satisfies, making matching depend on query contents.
+    .map((seg) => (PARAM_SEGMENT.test(seg)
+      ? '[^/?]+'
+      : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .join('/');
+  return new RegExp(`^${pattern}(?:\\?.*)?$`);
+}
+
+/**
+ * A literal reservation ('/xrpc') claims its whole subtree — the path
+ * itself, everything under it, and either plus a query string.
+ */
+export function compileSubtreePattern(p) {
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${esc}(?:/.*)?(?:\\?.*)?$`);
+}
+
+// Collision key: two reservations conflict when they exempt the same
+// URLs, so parameter NAMES don't matter — '/:user/did.json' and
+// '/:acct/did.json' are the same claim. Each segment is tagged by TYPE
+// (param vs literal) so a canonicalized param can't alias a literal
+// segment that happens to be the placeholder text (e.g. a literal '/:/…').
+// '\x00' never occurs in a real path, so it's a safe framing prefix.
+export function reservationKey(p) {
+  return p.split('/')
+    .map((seg) => (PARAM_SEGMENT.test(seg) ? '\x00P' : `\x00L${seg}`))
+    .join('/');
 }
 
 /** Same normalization appPaths applies: no trailing slash, must be '/x…'. */
@@ -103,6 +157,11 @@ export function pluginId(spec) {
 export async function loadPlugins(fastify, entries, ctx) {
   const log = makePluginLog(ctx.log);
   const seenIds = new Set();
+  // reservePath claims (#602), shared across all entries of this load so
+  // two plugins reserving the same pinned path fail the boot with both
+  // names — loud beats the silent-loser outcome witnessed with webfinger
+  // vs remotestorage.
+  const reservations = new Map();
   for (const entry of entries) {
     const spec = typeof entry === 'string' ? { module: entry } : entry;
     if (!spec || typeof spec.module !== 'string' || !spec.module) {
@@ -162,6 +221,65 @@ export async function loadPlugins(fastify, entries, ctx) {
       // An explicit idpIssuer is the deployment's canonical public origin
       // and wins over the host:port derivation, mirroring the pod-seeding
       // logic in server.js.
+      // Reserve a path the protocol pins outside the plugin's prefix
+      // (#602): fixed roots like /xrpc or /_matrix (literal — exempts the
+      // subtree), or parameterized documents like /:user/did.json
+      // (exact-shape match only; see compilePathPattern). Both are
+      // read-only by default and method-gated ({ methods } to widen) —
+      // see the exemption note below. The claim is deliberate and
+      // cross-plugin: a second plugin reserving the same path fails the
+      // boot naming both claimants, instead of one silently losing.
+      // Registering the routes is still the plugin's job via api.fastify.
+      reservePath(p, opts = {}) {
+        // Tolerate a null/garbage opts (treat as omitted), but a provided
+        // non-array `methods` is a caller mistake worth a targeted error
+        // rather than an opaque TypeError from .map deep in activate.
+        const options = opts && typeof opts === 'object' ? opts : {};
+        if (options.methods !== undefined && !Array.isArray(options.methods)) {
+          throw new Error(`plugin ${id}: reservePath { methods } must be an array, got ${JSON.stringify(options.methods)}`);
+        }
+        // Validate AFTER normalization: '//' or '/ ' normalize to '',
+        // and an empty string in appPaths would match every URL in the
+        // WAC hook — a one-call total WAC bypass.
+        const key = typeof p === 'string' ? p.trim().replace(/\/+$/, '') : '';
+        if (!key.startsWith('/') || key.length < 2) {
+          throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
+        }
+        // A reservation is a pathname, not a URL: '?'/'#' don't belong.
+        // A query in the string would be escaped into the matcher (tying
+        // the exemption to that exact query), and fragments never reach
+        // request.url — both silently produce a reservation that matches
+        // nothing real.
+        if (key.includes('?') || key.includes('#')) {
+          throw new Error(`plugin ${id}: reservePath must be a pathname without '?' or '#', got ${JSON.stringify(p)}`);
+        }
+        // Track by the shape, not the raw string: '/:user/did.json' and
+        // '/:acct/did.json' exempt the same URLs, so they're the same
+        // claim and must collide loudly like two literal reservations.
+        const claim = reservationKey(key);
+        const holder = reservations.get(claim);
+        if (holder === id) {
+          return; // idempotent re-claim — the matcher is already installed
+        }
+        if (holder) {
+          throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
+        }
+        reservations.set(claim, id);
+        // Read-only by default for BOTH lanes: a reserved path is
+        // WAC-exempt, and the LDP write wildcards (PUT/POST/PATCH/DELETE
+        // '/*') sit underneath it. Exempting a write method the plugin
+        // has NOT implemented would let that write fall through to the
+        // LDP handlers as an unauthenticated storage write — the exact
+        // trap core installs 405 blocks for under /.well-known/*. Widen
+        // with { methods } when the protocol genuinely needs writes.
+        const methods = new Set((options.methods ?? ['GET', 'HEAD', 'OPTIONS'])
+          .map((m) => String(m).toUpperCase()));
+        // Parameterized shapes match exactly (they live inside a
+        // WAC-governed pod namespace); literals claim their subtree.
+        const re = isParamPath(key) ? compilePathPattern(key) : compileSubtreePattern(key);
+        ctx.appPathPatterns?.push({ re, methods });
+        log.info(`plugin ${id} reserved ${key} [${[...methods].join(', ')}]`);
+      },
       serverInfo() {
         const o = ctx.origin ?? {};
         const addr = fastify.server?.listening ? fastify.server.address() : null;

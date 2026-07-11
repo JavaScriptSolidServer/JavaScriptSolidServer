@@ -124,6 +124,10 @@ export function createServer(options = {}) {
   // appPaths. The WAC hook reads the array per request, so pushes made
   // during plugin activation are honored.
   const pluginEntries = Array.isArray(options.plugins) ? options.plugins : [];
+  // Parameterized reservations from api.reservePath (#602): compiled
+  // matchers for path shapes like /:user/did.json that literal appPaths
+  // prefixes cannot express. Same per-request read as appPaths.
+  const appPathPatterns = [];
   // ActivityPub federation is OFF by default
   const activitypubEnabled = options.activitypub ?? false;
   const apUsername = options.apUsername ?? 'me';
@@ -426,6 +430,7 @@ export function createServer(options = {}) {
       const { loadPlugins } = await import('./plugins.js');
       await loadPlugins(instance, pluginEntries, {
         appPaths,
+        appPathPatterns,
         root: options.root || process.env.DATA_ROOT || './data',
         log: fastify.log,
         // api.serverInfo inputs (#601). ?? keeps an explicit port 0 —
@@ -759,6 +764,7 @@ export function createServer(options = {}) {
         (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
         appPaths.some(p => request.url === p || request.url.startsWith(p + '/') || request.url.startsWith(p + '?')) ||
+        appPathPatterns.some(m => m.methods.has(request.method) && m.re.test(request.url)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
       return;
     }

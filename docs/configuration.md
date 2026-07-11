@@ -434,6 +434,25 @@ routed through the same upgrade path as the built-in realtime features, so
 plugins never attach their own `'upgrade'` listener. Return
 `{ deactivate }` to run teardown (state saves, timers) on server close.
 
+A plugin whose protocol **pins absolute paths** outside its prefix can
+claim them with `api.reservePath(path)`:
+
+```js
+api.reservePath('/xrpc', { methods: ['GET', 'POST'] });  // fixed root — subtree, methods opted in
+api.reservePath('/:user/did.json');                      // pinned document — exact shape, read-only
+```
+
+Both kinds are **read-only by default** (`GET`/`HEAD`/`OPTIONS`; widen with
+`{ methods: [...] }`) — a reserved path is WAC-exempt and the LDP write
+wildcards sit beneath it, so exempting a write method the plugin hasn't
+implemented would let that write fall through to storage unauthenticated.
+Literal reservations claim their whole subtree; parameterized reservations
+(`:name` matches one segment) match only the exact path shape, since they
+exist for pinned documents inside the pod's WAC-governed namespace. Claims
+are cross-plugin: a second plugin reserving the same path fails the boot
+naming both claimants. Registering routes on the reserved paths remains the
+plugin's job via `api.fastify`.
+
 To mount an **existing node-style app** — a `(req, res)` handler, a reverse
 proxy, or a framework adapter — use `api.mountApp(handler, { prefix })`:
 
