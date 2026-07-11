@@ -428,6 +428,14 @@ export function createServer(options = {}) {
         appPaths,
         root: options.root || process.env.DATA_ROOT || './data',
         log: fastify.log,
+        // api.serverInfo inputs (#601). ?? keeps an explicit port 0 —
+        // "resolved at listen" — instead of masking it with the default.
+        origin: {
+          ssl: !!options.ssl,
+          host: options.host,
+          port: options.port ?? defaults.port,
+          baseUrl: idpIssuer?.replace(/\/$/, '') || null,
+        },
       });
     });
   }
