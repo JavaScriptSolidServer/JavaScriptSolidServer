@@ -22,6 +22,9 @@ export async function activate(api) {
   api.fastify.get('/xrpc/ping', async () => ({ pong: true }));
 
   api.reservePath('/:user/did.json');
+  // A second identical claim by the same plugin is an idempotent no-op —
+  // no duplicate matcher, no self-collision error.
+  api.reservePath('/:user/did.json');
   api.fastify.get('/:user/did.json', async (req) => ({ id: 'did:web:' + req.params.user }));
 }
 `;

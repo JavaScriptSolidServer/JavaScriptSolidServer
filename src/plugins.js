@@ -233,7 +233,10 @@ export async function loadPlugins(fastify, entries, ctx) {
         // claim and must collide loudly like two literal reservations.
         const claim = reservationKey(key);
         const holder = reservations.get(claim);
-        if (holder && holder !== id) {
+        if (holder === id) {
+          return; // idempotent re-claim — the matcher is already installed
+        }
+        if (holder) {
           throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
         }
         reservations.set(claim, id);
