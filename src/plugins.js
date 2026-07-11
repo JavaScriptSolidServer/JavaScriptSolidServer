@@ -152,6 +152,62 @@ export async function loadPlugins(fastify, entries, ctx) {
           return dir;
         },
       },
+      // Mount a node-style (req, res) handler — a wrapped HTTP app, reverse
+      // proxy, or framework adapter — under the plugin's prefix (#583). This
+      // bundles the four things every such plugin needs and otherwise
+      // rediscovers: the appPaths WAC exemption (already applied above), a
+      // scoped pass-through content parser so the wrapped app receives an
+      // unconsumed body stream, reply.hijack() so Fastify releases the
+      // response, and registration on both the bare prefix and its subtree.
+      // Without the scoped parser, Fastify drains the request stream before
+      // the handler runs and any body-reading app hangs forever.
+      async mountApp(handler, opts = {}) {
+        if (typeof handler !== 'function') {
+          throw new Error(`plugin ${id}: mountApp(handler) needs a (req, res) function`);
+        }
+        // Any provided prefix must validate — same rule as entry.prefix: a
+        // falsy normalization silently falling back to the entry prefix
+        // would mount the app (and WAC-exempt it) somewhere unexpected.
+        const secondary = normalizePrefix(opts.prefix);
+        if (opts.prefix !== undefined && !secondary) {
+          throw new Error(`plugin ${id}: mountApp invalid prefix ${JSON.stringify(opts.prefix)} (must start with '/'; omit to use the entry prefix)`);
+        }
+        const mountPrefix = secondary || prefix;
+        if (!mountPrefix) {
+          throw new Error(`plugin ${id}: mountApp needs a prefix (entry.prefix or opts.prefix)`);
+        }
+        if (mountPrefix !== prefix && !ctx.appPaths.includes(mountPrefix)) {
+          ctx.appPaths.push(mountPrefix); // exempt a secondary mount too
+        }
+        await fastify.register(async (scope) => {
+          scope.removeAllContentTypeParsers();
+          scope.addContentTypeParser('*', (req, payload, done) => done(null, payload));
+          // After hijack() Fastify sends nothing, so a handler bug must not
+          // hang the client or become an unhandled rejection (same contract
+          // as ws.route below): log, answer 500 if nothing went out yet,
+          // else drop the one affected socket.
+          const fail = (res, err) => {
+            log.error({ err }, `plugin ${id}: mounted app handler failed`);
+            if (!res.headersSent && !res.writableEnded) {
+              res.statusCode = 500;
+              res.end();
+            } else {
+              res.destroy();
+            }
+          };
+          const wrapped = (request, reply) => {
+            reply.hijack();
+            try {
+              Promise.resolve(handler(request.raw, reply.raw))
+                .catch((err) => fail(reply.raw, err));
+            } catch (err) {
+              fail(reply.raw, err);
+            }
+          };
+          scope.all(mountPrefix, wrapped);
+          scope.all(mountPrefix + '/*', wrapped);
+        });
+      },
       ws: {
         async route(wsPath, handler) {
           if (typeof wsPath !== 'string' || !wsPath.startsWith('/')) {
@@ -168,11 +224,11 @@ export async function loadPlugins(fastify, entries, ctx) {
             // takes the host down: log it and close the one affected socket.
             try {
               Promise.resolve(handler(socket, request)).catch((err) => {
-                log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+                log.error({ err }, `plugin ${id}: ws handler failed`);
                 socket.terminate?.();
               });
             } catch (err) {
-              log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+              log.error({ err }, `plugin ${id}: ws handler failed`);
               socket.terminate?.();
             }
           });
