@@ -59,6 +59,20 @@ export async function activate(api) {
 }
 `;
 
+// A non-array { methods } is a caller mistake — targeted error, not a
+// TypeError. And null opts is tolerated as "omitted" (read-only default).
+const BAD_METHODS_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/x', { methods: 'GET' });
+}
+`;
+const NULL_OPTS_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/nullopts', null);
+  api.fastify.get('/nullopts/ping', async () => ({ ok: true }));
+}
+`;
+
 // Same shape as the main plugin's /:user/did.json, different param name —
 // exempts the same URLs, so it's the same claim and must collide.
 const SHAPE_RIVAL_FIXTURE = `
@@ -118,6 +132,8 @@ describe('api.reservePath (#602)', () => {
     await fs.writeFile(path.join(FIXTURE_DIR, 'rival.js'), RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'write-shim.js'), WRITE_SHIM_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'query.js'), QUERY_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'bad-methods.js'), BAD_METHODS_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'null-opts.js'), NULL_OPTS_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'shape-rival.js'), SHAPE_RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literalish.js'), LITERALISH_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literal-colon.js'), LITERAL_COLON_FIXTURE);
@@ -263,6 +279,31 @@ describe('api.reservePath (#602)', () => {
       server.listen({ port: 0, host: '127.0.0.1' }),
       /must be a pathname without '\?' or '#'/,
     );
+  });
+
+  it('a non-array { methods } fails the boot with a targeted error', async () => {
+    await fs.emptyDir(TEST_DATA_DIR);
+    const { createServer } = await import('../src/server.js');
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { id: 'bm', module: path.join(FIXTURE_DIR, 'bad-methods.js'), prefix: '/bm' },
+      ],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /reservePath \{ methods \} must be an array/,
+    );
+  });
+
+  it('null opts is tolerated as omitted (read-only default)', async () => {
+    await start([{ id: 'no', module: path.join(FIXTURE_DIR, 'null-opts.js'), prefix: '/no' }]);
+    const ok = await fetch(`${baseUrl}/nullopts/ping`);
+    assert.strictEqual(ok.status, 200);
+    const put = await fetch(`${baseUrl}/nullopts/ping`, { method: 'PUT', body: 'x' });
+    assert.ok([401, 403].includes(put.status), `expected WAC rejection, got ${put.status}`);
   });
 
   it('two plugins claiming the same path fail the boot naming both', async () => {

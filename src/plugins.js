@@ -231,6 +231,13 @@ export async function loadPlugins(fastify, entries, ctx) {
       // boot naming both claimants, instead of one silently losing.
       // Registering the routes is still the plugin's job via api.fastify.
       reservePath(p, opts = {}) {
+        // Tolerate a null/garbage opts (treat as omitted), but a provided
+        // non-array `methods` is a caller mistake worth a targeted error
+        // rather than an opaque TypeError from .map deep in activate.
+        const options = opts && typeof opts === 'object' ? opts : {};
+        if (options.methods !== undefined && !Array.isArray(options.methods)) {
+          throw new Error(`plugin ${id}: reservePath { methods } must be an array, got ${JSON.stringify(options.methods)}`);
+        }
         // Validate AFTER normalization: '//' or '/ ' normalize to '',
         // and an empty string in appPaths would match every URL in the
         // WAC hook — a one-call total WAC bypass.
@@ -265,7 +272,7 @@ export async function loadPlugins(fastify, entries, ctx) {
         // LDP handlers as an unauthenticated storage write — the exact
         // trap core installs 405 blocks for under /.well-known/*. Widen
         // with { methods } when the protocol genuinely needs writes.
-        const methods = new Set((opts.methods ?? ['GET', 'HEAD', 'OPTIONS'])
+        const methods = new Set((options.methods ?? ['GET', 'HEAD', 'OPTIONS'])
           .map((m) => String(m).toUpperCase()));
         // Parameterized shapes match exactly (they live inside a
         // WAC-governed pod namespace); literals claim their subtree.
