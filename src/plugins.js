@@ -20,6 +20,7 @@
  *   api.auth.getAgent(req)   -> agent id string | null   (#584)
  *   api.storage.pluginDir()  -> private server-side data dir for this plugin
  *   api.serverInfo()         -> { baseUrl, protocol, host, port, listening } (#601)
+ *   api.reservePath(path)    claim + WAC-exempt a protocol-pinned path (#602)
  *   api.ws.route(path, (socket, request) => {})          (#588)
  *
  * The entry's `prefix` is added to appPaths automatically (#582), so the
@@ -59,6 +60,24 @@ export function makePluginLog(base) {
     if (typeof fn === 'function') fn.call(base, ...args);
   };
   return { log: call('info'), info: call('info'), warn: call('warn'), error: call('error'), debug: call('debug') };
+}
+
+/**
+ * Compile a parameterized reservation like '/:user/did.json' (#602) to a
+ * matcher. ':name' segments match one path segment; everything else is
+ * literal. Parameterized reservations match the exact path shape (plus an
+ * optional query string) — NOT a subtree — because they exist for pinned
+ * documents inside otherwise WAC-governed namespaces (did:web), where
+ * exempting a whole subtree would be a WAC bypass.
+ */
+export function compilePathPattern(p) {
+  const pattern = p
+    .split('/')
+    .map((seg) => (seg.startsWith(':') && seg.length > 1
+      ? '[^/]+'
+      : seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+    .join('/');
+  return new RegExp(`^${pattern}(?:\\?.*)?$`);
 }
 
 /** Same normalization appPaths applies: no trailing slash, must be '/x…'. */
@@ -103,6 +122,11 @@ export function pluginId(spec) {
 export async function loadPlugins(fastify, entries, ctx) {
   const log = makePluginLog(ctx.log);
   const seenIds = new Set();
+  // reservePath claims (#602), shared across all entries of this load so
+  // two plugins reserving the same pinned path fail the boot with both
+  // names — loud beats the silent-loser outcome witnessed with webfinger
+  // vs remotestorage.
+  const reservations = new Map();
   for (const entry of entries) {
     const spec = typeof entry === 'string' ? { module: entry } : entry;
     if (!spec || typeof spec.module !== 'string' || !spec.module) {
@@ -162,6 +186,39 @@ export async function loadPlugins(fastify, entries, ctx) {
       // An explicit idpIssuer is the deployment's canonical public origin
       // and wins over the host:port derivation, mirroring the pod-seeding
       // logic in server.js.
+      // Reserve a path the protocol pins outside the plugin's prefix
+      // (#602): fixed roots like /xrpc or /_matrix (literal — exempts the
+      // subtree, like a prefix), or parameterized documents like
+      // /:user/did.json (exact-shape match only; see compilePathPattern).
+      // The claim is deliberate and cross-plugin: a second plugin
+      // reserving the same path fails the boot naming both claimants,
+      // instead of one silently losing. Registering the routes is still
+      // the plugin's job via api.fastify.
+      reservePath(p, opts = {}) {
+        if (typeof p !== 'string' || !p.startsWith('/') || p.length < 2) {
+          throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
+        }
+        const key = p.trim().replace(/\/+$/, '');
+        const holder = reservations.get(key);
+        if (holder && holder !== id) {
+          throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
+        }
+        reservations.set(key, id);
+        if (key.includes('/:')) {
+          // Parameterized reservations are method-gated, read-only by
+          // default: the URL shape lives inside a WAC-governed pod
+          // namespace, and exempting PUT/DELETE would hand the LDP
+          // fallthrough an unauthenticated write path.
+          const methods = new Set((opts.methods ?? ['GET', 'HEAD', 'OPTIONS'])
+            .map((m) => String(m).toUpperCase()));
+          ctx.appPathPatterns?.push({ re: compilePathPattern(key), methods });
+        } else if (!ctx.appPaths.includes(key)) {
+          // Literal reservations behave exactly like an entry prefix:
+          // the plugin owns the subtree, every method.
+          ctx.appPaths.push(key);
+        }
+        log.info(`plugin ${id} reserved ${key}`);
+      },
       serverInfo() {
         const o = ctx.origin ?? {};
         const addr = fastify.server?.listening ? fastify.server.address() : null;
