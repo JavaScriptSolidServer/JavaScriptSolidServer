@@ -268,6 +268,11 @@ program
         mongoUrl: config.mongoUrl,
         mongoDatabase: config.mongoDatabase,
         mcp: config.mcp,
+        // Config-file-only keys (no CLI flags yet): omitting them here made
+        // the documented `-c config.json` route silently boot without the
+        // declared apps (#592).
+        appPaths: config.appPaths,
+        plugins: config.plugins,
       });
 
       await server.listen({ port: config.port, host: config.host });
