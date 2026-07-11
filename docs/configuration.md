@@ -417,9 +417,12 @@ Each entry:
   the app owns authentication below it (see the section above). Must start
   with `/`; invalid prefixes fail startup.
 - `config` — passed to the plugin verbatim as `api.config`.
-- `id` — optional stable identifier (defaults to a name derived from
-  `module`); names the plugin's private data dir, so set it explicitly if
-  you load two plugins whose specifiers reduce to the same name.
+- `id` — optional stable identifier that names the plugin's private data
+  dir. Defaults to a name derived from `module`: the file's basename, or —
+  for a generic basename like `plugin.js`/`index.js` — its parent directory
+  (`relay/plugin.js` → `relay`), so the conventional `<name>/plugin.js`
+  layout yields distinct ids with none set. Set it explicitly only if two
+  specifiers still reduce to the same name.
 
 `activate(api)` receives: `api.fastify` (register routes here),
 `api.prefix`, `api.config`, `api.log`, `api.auth.getAgent(request)`

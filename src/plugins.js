@@ -123,11 +123,37 @@ export function normalizePrefix(p) {
   return trimmed.startsWith('/') && trimmed.length > 1 ? trimmed : '';
 }
 
+// Basenames too generic to name a plugin: the near-universal
+// '<name>/plugin.js' convention means every such file would derive the same
+// id and collide. For these, the id falls back to the parent directory (#596).
+const GENERIC_BASENAMES = new Set(['plugin', 'index']);
+
+/**
+ * The distinguishing name of a plugin FILE: its basename, unless that is
+ * generic ('plugin.js', 'index.js'), in which case the immediate parent
+ * directory ('relay/plugin.js' -> 'relay'). The parent directory
+ * distinguishes '<name>/plugin.js' files from each other WITHOUT pinning the
+ * machine-specific path prefix (which would move the id — and pluginDir —
+ * with the deployment). Falls back to the basename when there is no usable
+ * parent (e.g. './plugin.js' at the cwd root). (#596)
+ */
+export function fileStem(module) {
+  const withoutExt = path.basename(module).replace(/\.[cm]?js$/, '');
+  if (GENERIC_BASENAMES.has(withoutExt.toLowerCase())) {
+    const parent = path.basename(path.dirname(module));
+    // The parent directory name is returned AS-IS — a directory legitimately
+    // named 'foo.js' must stay 'foo.js', not be extension-stripped to 'foo'.
+    if (parent && parent !== '.' && parent !== '..') return parent;
+  }
+  return withoutExt;
+}
+
 /**
  * Directory-safe plugin id: entry.id, or derived from the module spec.
  * Bare package specifiers keep their full path ('@scope/pkg/plugin.js' ->
  * 'scope-pkg-plugin') so same-named files in different packages don't
- * collide; file paths use the basename, because a machine-specific
+ * collide; file paths use the basename — or, for a generic basename, the
+ * parent directory (see fileStem, #596) — because a machine-specific
  * directory prefix must not name the plugin's data dir (the id — and with
  * it pluginDir — would change whenever the deployment moves). The loader
  * additionally rejects duplicate ids, so any residual collision fails the
@@ -135,12 +161,17 @@ export function normalizePrefix(p) {
  */
 export function pluginId(spec) {
   const module = String(spec.module);
-  const raw = typeof spec.id === 'string' && spec.id
-    ? spec.id
-    : (module.startsWith('.') || path.isAbsolute(module)
-        ? path.basename(module)
-        : module
-      ).replace(/\.[cm]?js$/, '');
+  // The extension is stripped where it applies — the file basename (via
+  // fileStem) and a bare specifier's tail — but NOT a parent directory name
+  // that fileStem may return for a generic basename.
+  let raw;
+  if (typeof spec.id === 'string' && spec.id) {
+    raw = spec.id.replace(/\.[cm]?js$/, '');
+  } else if (module.startsWith('.') || path.isAbsolute(module)) {
+    raw = fileStem(module);
+  } else {
+    raw = module.replace(/\.[cm]?js$/, '');
+  }
   const id = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!id) throw new Error(`plugins: cannot derive an id from ${JSON.stringify(spec.module)}; set entry.id`);
   return id;

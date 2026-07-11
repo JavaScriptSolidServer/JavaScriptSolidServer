@@ -229,6 +229,53 @@ describe('plugin loader (#206)', () => {
     );
   });
 
+  it('a generic basename (plugin.js/index.js) derives the parent dir, not "plugin" (#596)', async () => {
+    // The near-universal '<name>/plugin.js' convention: without this fallback
+    // every such file collides on the id 'plugin' (and 'index' for index.js).
+    assert.strictEqual(pluginId({ module: './relay/plugin.js' }), 'relay');
+    assert.strictEqual(pluginId({ module: '/abs/path/dashboard/plugin.js' }), 'dashboard');
+    assert.strictEqual(pluginId({ module: './chat/index.js' }), 'chat');
+    assert.strictEqual(pluginId({ module: './My-App/Plugin.mjs' }), 'my-app');
+    // A non-generic basename is unchanged (still the basename).
+    assert.strictEqual(pluginId({ module: './relay/relay.js' }), 'relay');
+    assert.strictEqual(pluginId({ module: '/some/machine/path/foo.js' }), 'foo');
+    // No usable parent → falls back to the basename; an explicit id still wins.
+    assert.strictEqual(pluginId({ module: './plugin.js' }), 'plugin');
+    assert.strictEqual(pluginId({ module: './relay/plugin.js', id: 'custom' }), 'custom');
+    // A parent directory whose own name ends in .js keeps it (only the FILE's
+    // extension is stripped, never the directory name) — so 'foo.js/' and
+    // 'foo/' don't both collapse to the same 'foo'.
+    assert.strictEqual(pluginId({ module: './foo.js/plugin.js' }), 'foo-js');
+    assert.strictEqual(pluginId({ module: './foo/plugin.js' }), 'foo');
+  });
+
+  it('two <name>/plugin.js files load together with no explicit ids (#596)', async () => {
+    // The exact case that failed before: the CLI '--plugin' form (which can't
+    // set an id) loading two conventionally-named plugins.
+    await fs.emptyDir(`${FIXTURE_DIR}/alpha`);
+    await fs.emptyDir(`${FIXTURE_DIR}/beta`);
+    await fs.writeFile(`${FIXTURE_DIR}/alpha/plugin.js`,
+      `export async function activate(api) { api.fastify.get('/alpha/ping', async () => ({ id: 'alpha' })); }`);
+    await fs.writeFile(`${FIXTURE_DIR}/beta/plugin.js`,
+      `export async function activate(api) { api.fastify.get('/beta/ping', async () => ({ id: 'beta' })); }`);
+
+    await fs.emptyDir(TEST_DATA_DIR);
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { module: `${FIXTURE_DIR}/alpha/plugin.js`, prefix: '/alpha' },
+        { module: `${FIXTURE_DIR}/beta/plugin.js`, prefix: '/beta' },
+      ],
+    });
+    // Boots (ids 'alpha' and 'beta', no collision) and both routes answer.
+    await server.listen({ port: 0, host: '127.0.0.1' });
+    const url = `http://127.0.0.1:${server.server.address().port}`;
+    assert.strictEqual((await (await fetch(`${url}/alpha/ping`)).json()).id, 'alpha');
+    assert.strictEqual((await (await fetch(`${url}/beta/ping`)).json()).id, 'beta');
+  });
+
   it('an invalid prefix fails listen() loudly', async () => {
     // Any provided prefix must validate — including falsy ones, which would
     // otherwise mount the app without its WAC exemption.
