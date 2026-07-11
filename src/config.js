@@ -311,6 +311,27 @@ function loadEnvConfig() {
 }
 
 /**
+ * Parse one --plugin flag value: module[@prefix] (#594).
+ *
+ * The prefix separator is the LAST '@' whose remainder starts with '/',
+ * so scoped package specifiers parse unambiguously:
+ *   '@scope/pkg/plugin.js@/app' -> { module: '@scope/pkg/plugin.js', prefix: '/app' }
+ *   '@scope/pkg/plugin.js'      -> { module: '@scope/pkg/plugin.js' }
+ *   './chat/plugin.js@/chat'    -> { module: './chat/plugin.js', prefix: '/chat' }
+ *
+ * Per-plugin config objects and explicit ids stay config-file territory;
+ * entries here go through the loader's usual validation untouched.
+ */
+export function parsePluginFlag(value) {
+  const str = String(value);
+  const at = str.lastIndexOf('@/');
+  if (at > 0) {
+    return { module: str.slice(0, at), prefix: str.slice(at + 1) };
+  }
+  return { module: str };
+}
+
+/**
  * Load configuration from a JSON file
  */
 async function loadFileConfig(configFile) {
