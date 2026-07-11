@@ -438,8 +438,8 @@ config file needed ([#594](https://github.com/JavaScriptSolidServer/JavaScriptSo
 
 ```bash
 jss start --root ./data --public \
-  --plugin ./chat/plugin.js@/chat \
-  --plugin @scope/pkg/plugin.js@/app
+  --plugin './chat/plugin.js@/chat' \
+  --plugin '@scope/pkg/plugin.js@/app'
 ```
 
 `--plugin` is repeatable; the prefix separator is the last `@` followed by
