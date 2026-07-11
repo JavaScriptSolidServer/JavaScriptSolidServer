@@ -195,10 +195,13 @@ export async function loadPlugins(fastify, entries, ctx) {
       // instead of one silently losing. Registering the routes is still
       // the plugin's job via api.fastify.
       reservePath(p, opts = {}) {
-        if (typeof p !== 'string' || !p.startsWith('/') || p.length < 2) {
+        // Validate AFTER normalization: '//' or '/ ' normalize to '',
+        // and an empty string in appPaths would match every URL in the
+        // WAC hook — a one-call total WAC bypass.
+        const key = typeof p === 'string' ? p.trim().replace(/\/+$/, '') : '';
+        if (!key.startsWith('/') || key.length < 2) {
           throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
         }
-        const key = p.trim().replace(/\/+$/, '');
         const holder = reservations.get(key);
         if (holder && holder !== id) {
           throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);

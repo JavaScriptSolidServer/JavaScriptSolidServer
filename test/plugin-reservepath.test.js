@@ -33,6 +33,14 @@ export async function activate(api) {
 }
 `;
 
+// '//' normalizes to '' — pushed to appPaths it would match every URL
+// and disable WAC wholesale. Must be rejected at activate.
+const SLASHES_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('//');
+}
+`;
+
 let server;
 let baseUrl;
 let originalDataRoot;
@@ -95,6 +103,24 @@ describe('api.reservePath (#602)', () => {
     // to the LDP wildcard as an unauthenticated pod write.
     const res = await fetch(`${baseUrl}/alice/did.json`, { method: 'PUT', body: '{}' });
     assert.ok([401, 403].includes(res.status), `expected WAC rejection, got ${res.status}`);
+  });
+
+  it("reservePath('//') fails the boot instead of exempting every URL from WAC", async () => {
+    await fs.writeFile(path.join(FIXTURE_DIR, 'slashes.js'), SLASHES_FIXTURE);
+    await fs.emptyDir(TEST_DATA_DIR);
+    const { createServer } = await import('../src/server.js');
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { id: 'slashes', module: path.join(FIXTURE_DIR, 'slashes.js'), prefix: '/slashes' },
+      ],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /reservePath needs an absolute path/,
+    );
   });
 
   it('two plugins claiming the same path fail the boot naming both', async () => {
