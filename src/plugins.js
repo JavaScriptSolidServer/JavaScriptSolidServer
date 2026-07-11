@@ -123,11 +123,35 @@ export function normalizePrefix(p) {
   return trimmed.startsWith('/') && trimmed.length > 1 ? trimmed : '';
 }
 
+// Basenames too generic to name a plugin: the near-universal
+// '<name>/plugin.js' convention means every such file would derive the same
+// id and collide. For these, the id falls back to the parent directory (#596).
+const GENERIC_BASENAMES = new Set(['plugin', 'index']);
+
+/**
+ * The distinguishing name of a plugin FILE: its basename, unless that is
+ * generic ('plugin.js', 'index.js'), in which case the immediate parent
+ * directory ('relay/plugin.js' -> 'relay'). The parent directory
+ * distinguishes '<name>/plugin.js' files from each other WITHOUT pinning the
+ * machine-specific path prefix (which would move the id — and pluginDir —
+ * with the deployment). Falls back to the basename when there is no usable
+ * parent (e.g. './plugin.js' at the cwd root). (#596)
+ */
+export function fileStem(module) {
+  const base = path.basename(module);
+  if (GENERIC_BASENAMES.has(base.replace(/\.[cm]?js$/, '').toLowerCase())) {
+    const parent = path.basename(path.dirname(module));
+    if (parent && parent !== '.' && parent !== '..') return parent;
+  }
+  return base;
+}
+
 /**
  * Directory-safe plugin id: entry.id, or derived from the module spec.
  * Bare package specifiers keep their full path ('@scope/pkg/plugin.js' ->
  * 'scope-pkg-plugin') so same-named files in different packages don't
- * collide; file paths use the basename, because a machine-specific
+ * collide; file paths use the basename — or, for a generic basename, the
+ * parent directory (see fileStem, #596) — because a machine-specific
  * directory prefix must not name the plugin's data dir (the id — and with
  * it pluginDir — would change whenever the deployment moves). The loader
  * additionally rejects duplicate ids, so any residual collision fails the
@@ -138,7 +162,7 @@ export function pluginId(spec) {
   const raw = typeof spec.id === 'string' && spec.id
     ? spec.id
     : (module.startsWith('.') || path.isAbsolute(module)
-        ? path.basename(module)
+        ? fileStem(module)
         : module
       ).replace(/\.[cm]?js$/, '');
   const id = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
