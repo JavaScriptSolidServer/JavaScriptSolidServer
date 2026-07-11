@@ -442,15 +442,16 @@ api.reservePath('/xrpc');            // fixed root — WAC-exempt subtree, all m
 api.reservePath('/:user/did.json');  // pinned document — exact shape, read-only
 ```
 
-Literal reservations behave like an entry prefix (the plugin owns the
-subtree). Parameterized reservations (`:name` matches one segment) exempt
-only the exact path shape and only safe methods by default
-(`GET`/`HEAD`/`OPTIONS`; override with `{ methods: [...] }`) — they exist
-for pinned documents inside the pod's WAC-governed namespace, where a
-subtree or write exemption would be a WAC bypass. Claims are cross-plugin:
-a second plugin reserving the same path fails the boot naming both
-claimants. Registering routes on the reserved paths remains the plugin's
-job via `api.fastify`.
+Both kinds are **read-only by default** (`GET`/`HEAD`/`OPTIONS`; widen with
+`{ methods: [...] }`) — a reserved path is WAC-exempt and the LDP write
+wildcards sit beneath it, so exempting a write method the plugin hasn't
+implemented would let that write fall through to storage unauthenticated.
+Literal reservations claim their whole subtree; parameterized reservations
+(`:name` matches one segment) match only the exact path shape, since they
+exist for pinned documents inside the pod's WAC-governed namespace. Claims
+are cross-plugin: a second plugin reserving the same path fails the boot
+naming both claimants. Registering routes on the reserved paths remains the
+plugin's job via `api.fastify`.
 
 To mount an **existing node-style app** — a `(req, res)` handler, a reverse
 proxy, or a framework adapter — use `api.mountApp(handler, { prefix })`:

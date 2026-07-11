@@ -36,6 +36,14 @@ export async function activate(api) {
 }
 `;
 
+// A shim that legitimately needs writes widens the method set explicitly.
+const WRITE_SHIM_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/api', { methods: ['GET', 'POST'] });
+  api.fastify.post('/api/echo', async (req) => ({ ok: true }));
+}
+`;
+
 // '//' normalizes to '' — pushed to appPaths it would match every URL
 // and disable WAC wholesale. Must be rejected at activate.
 const SLASHES_FIXTURE = `
@@ -101,6 +109,7 @@ describe('api.reservePath (#602)', () => {
     await fs.emptyDir(FIXTURE_DIR);
     await fs.writeFile(path.join(FIXTURE_DIR, 'plugin.js'), FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'rival.js'), RIVAL_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'write-shim.js'), WRITE_SHIM_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'shape-rival.js'), SHAPE_RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literalish.js'), LITERALISH_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literal-colon.js'), LITERAL_COLON_FIXTURE);
@@ -121,6 +130,25 @@ describe('api.reservePath (#602)', () => {
     const res = await fetch(`${baseUrl}/xrpc/ping`);
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(await res.json(), { pong: true });
+  });
+
+  it('a write under a read-only literal reservation stays WAC-guarded', async () => {
+    await start(MAIN());
+    // /xrpc is reserved read-only; the plugin only handles GET /xrpc/ping.
+    // Without the method gate this PUT would skip WAC and fall through to
+    // the LDP write wildcard as an unauthenticated storage write.
+    const res = await fetch(`${baseUrl}/xrpc/ping`, { method: 'PUT', body: 'x' });
+    assert.ok([401, 403].includes(res.status), `expected WAC rejection, got ${res.status}`);
+  });
+
+  it('a shim can widen its reservation to serve writes', async () => {
+    await start([{ id: 'writer', module: path.join(FIXTURE_DIR, 'write-shim.js'), prefix: '/w' }]);
+    // POST is in the widened set and handled → serves unauthenticated.
+    const ok = await fetch(`${baseUrl}/api/echo`, { method: 'POST', body: '{}' });
+    assert.strictEqual(ok.status, 200);
+    // PUT is NOT in the set → still WAC-guarded, no LDP fall-through.
+    const put = await fetch(`${baseUrl}/api/echo`, { method: 'PUT', body: '{}' });
+    assert.ok([401, 403].includes(put.status), `expected WAC rejection, got ${put.status}`);
   });
 
   it('WAC still guards unreserved paths', async () => {

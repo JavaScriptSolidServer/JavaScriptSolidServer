@@ -94,6 +94,15 @@ export function compilePathPattern(p) {
   return new RegExp(`^${pattern}(?:\\?.*)?$`);
 }
 
+/**
+ * A literal reservation ('/xrpc') claims its whole subtree — the path
+ * itself, everything under it, and either plus a query string.
+ */
+export function compileSubtreePattern(p) {
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${esc}(?:/.*)?(?:\\?.*)?$`);
+}
+
 // Collision key: two reservations conflict when they exempt the same
 // URLs, so parameter NAMES don't matter — '/:user/did.json' and
 // '/:acct/did.json' are the same claim. Each segment is tagged by TYPE
@@ -240,20 +249,20 @@ export async function loadPlugins(fastify, entries, ctx) {
           throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
         }
         reservations.set(claim, id);
-        if (isParamPath(key)) {
-          // Parameterized reservations are method-gated, read-only by
-          // default: the URL shape lives inside a WAC-governed pod
-          // namespace, and exempting PUT/DELETE would hand the LDP
-          // fallthrough an unauthenticated write path.
-          const methods = new Set((opts.methods ?? ['GET', 'HEAD', 'OPTIONS'])
-            .map((m) => String(m).toUpperCase()));
-          ctx.appPathPatterns?.push({ re: compilePathPattern(key), methods });
-        } else if (!ctx.appPaths.includes(key)) {
-          // Literal reservations behave exactly like an entry prefix:
-          // the plugin owns the subtree, every method.
-          ctx.appPaths.push(key);
-        }
-        log.info(`plugin ${id} reserved ${key}`);
+        // Read-only by default for BOTH lanes: a reserved path is
+        // WAC-exempt, and the LDP write wildcards (PUT/POST/PATCH/DELETE
+        // '/*') sit underneath it. Exempting a write method the plugin
+        // has NOT implemented would let that write fall through to the
+        // LDP handlers as an unauthenticated storage write — the exact
+        // trap core installs 405 blocks for under /.well-known/*. Widen
+        // with { methods } when the protocol genuinely needs writes.
+        const methods = new Set((opts.methods ?? ['GET', 'HEAD', 'OPTIONS'])
+          .map((m) => String(m).toUpperCase()));
+        // Parameterized shapes match exactly (they live inside a
+        // WAC-governed pod namespace); literals claim their subtree.
+        const re = isParamPath(key) ? compilePathPattern(key) : compileSubtreePattern(key);
+        ctx.appPathPatterns?.push({ re, methods });
+        log.info(`plugin ${id} reserved ${key} [${[...methods].join(', ')}]`);
       },
       serverInfo() {
         const o = ctx.origin ?? {};
