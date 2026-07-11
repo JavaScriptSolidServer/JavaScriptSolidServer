@@ -176,13 +176,15 @@ export async function loadPlugins(fastify, entries, ctx) {
   // A boot-time snapshot: there is no runtime add/remove yet.
   const roster = Object.freeze(entries.map((entry) => {
     const spec = typeof entry === 'string' ? { module: entry } : (entry ?? {});
+    // Only surface a well-formed module — a non-string/empty one makes the
+    // load loop below fail the boot, so don't fabricate a coerced value
+    // (e.g. "[object Object]") for the transient pre-failure window. Mirrors
+    // the loop's own `typeof spec.module === 'string'` gate; id is derived
+    // only from a valid module.
+    const module = typeof spec.module === 'string' && spec.module ? spec.module : null;
     let id = null;
-    try { if (spec.module) id = pluginId(spec); } catch { /* the loop reports it */ }
-    return Object.freeze({
-      id,
-      prefix: normalizePrefix(spec.prefix),
-      module: spec.module ? String(spec.module) : null,
-    });
+    try { if (module) id = pluginId(spec); } catch { /* the loop reports it */ }
+    return Object.freeze({ id, prefix: normalizePrefix(spec.prefix), module });
   }));
 
   for (const entry of entries) {
