@@ -438,8 +438,8 @@ A plugin whose protocol **pins absolute paths** outside its prefix can
 claim them with `api.reservePath(path)`:
 
 ```js
-api.reservePath('/xrpc');            // fixed root — WAC-exempt subtree, all methods
-api.reservePath('/:user/did.json');  // pinned document — exact shape, read-only
+api.reservePath('/xrpc', { methods: ['GET', 'POST'] });  // fixed root — subtree, methods opted in
+api.reservePath('/:user/did.json');                      // pinned document — exact shape, read-only
 ```
 
 Both kinds are **read-only by default** (`GET`/`HEAD`/`OPTIONS`; widen with

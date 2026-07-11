@@ -223,12 +223,13 @@ export async function loadPlugins(fastify, entries, ctx) {
       // logic in server.js.
       // Reserve a path the protocol pins outside the plugin's prefix
       // (#602): fixed roots like /xrpc or /_matrix (literal — exempts the
-      // subtree, like a prefix), or parameterized documents like
-      // /:user/did.json (exact-shape match only; see compilePathPattern).
-      // The claim is deliberate and cross-plugin: a second plugin
-      // reserving the same path fails the boot naming both claimants,
-      // instead of one silently losing. Registering the routes is still
-      // the plugin's job via api.fastify.
+      // subtree), or parameterized documents like /:user/did.json
+      // (exact-shape match only; see compilePathPattern). Both are
+      // read-only by default and method-gated ({ methods } to widen) —
+      // see the exemption note below. The claim is deliberate and
+      // cross-plugin: a second plugin reserving the same path fails the
+      // boot naming both claimants, instead of one silently losing.
+      // Registering the routes is still the plugin's job via api.fastify.
       reservePath(p, opts = {}) {
         // Validate AFTER normalization: '//' or '/ ' normalize to '',
         // and an empty string in appPaths would match every URL in the
