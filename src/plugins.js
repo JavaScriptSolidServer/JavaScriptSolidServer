@@ -19,6 +19,7 @@
  *   api.log                  server logger
  *   api.auth.getAgent(req)   -> agent id string | null   (#584)
  *   api.storage.pluginDir()  -> private server-side data dir for this plugin
+ *   api.serverInfo()         -> { baseUrl, protocol, host, port, listening } (#601)
  *   api.ws.route(path, (socket, request) => {})          (#588)
  *
  * The entry's `prefix` is added to appPaths automatically (#582), so the
@@ -151,6 +152,32 @@ export async function loadPlugins(fastify, entries, ctx) {
           fs.mkdirSync(dir, { recursive: true });
           return dir;
         },
+      },
+      // The server's own origin (#601) — for minting absolute URLs and
+      // loopback calls, so plugins stop repeating baseUrl in config where
+      // a wrong value fails quietly. A function, not a snapshot: with
+      // port 0 the real port exists only once the server is listening,
+      // so call it lazily (per request, or in an onListen hook via
+      // api.fastify) rather than caching the result during activate.
+      // An explicit idpIssuer is the deployment's canonical public origin
+      // and wins over the host:port derivation, mirroring the pod-seeding
+      // logic in server.js.
+      serverInfo() {
+        const o = ctx.origin ?? {};
+        const addr = fastify.server?.listening ? fastify.server.address() : null;
+        const live = addr && typeof addr === 'object' ? addr : null;
+        // Once listening, the live bind wins over configured values —
+        // listen() may be called with a different host/port than
+        // createServer() was given (tests do exactly this).
+        const port = live?.port ?? o.port ?? null;
+        const rawHost = live?.address ?? o.host;
+        // Unspecified binds aren't callable addresses; report the
+        // loopback name instead. IPv6 literals need brackets in URLs.
+        const host = !rawHost || rawHost === '0.0.0.0' || rawHost === '::' ? 'localhost' : rawHost;
+        const protocol = o.ssl ? 'https' : 'http';
+        const urlHost = host.includes(':') ? `[${host}]` : host;
+        const baseUrl = o.baseUrl || `${protocol}://${urlHost}:${port}`;
+        return { baseUrl, protocol, host, port, listening: !!live };
       },
       // Mount a node-style (req, res) handler — a wrapped HTTP app, reverse
       // proxy, or framework adapter — under the plugin's prefix (#583). This

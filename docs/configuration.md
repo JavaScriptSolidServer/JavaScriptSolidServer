@@ -424,8 +424,12 @@ Each entry:
 `activate(api)` receives: `api.fastify` (register routes here),
 `api.prefix`, `api.config`, `api.log`, `api.auth.getAgent(request)`
 (identity, as above), `api.storage.pluginDir()` (a private server-side
-directory under the data root, never served over HTTP), and
-`api.ws.route(path, (socket, request) => {})` for WebSocket endpoints —
+directory under the data root, never served over HTTP),
+`api.serverInfo()` → `{ baseUrl, protocol, host, port, listening }` (the
+server's own origin, for minting absolute URLs and loopback calls — call
+it lazily, e.g. per request: with `port: 0` the real port exists only once
+the server is listening, and an explicit `idpIssuer` wins as `baseUrl`),
+and `api.ws.route(path, (socket, request) => {})` for WebSocket endpoints —
 routed through the same upgrade path as the built-in realtime features, so
 plugins never attach their own `'upgrade'` listener. Return
 `{ deactivate }` to run teardown (state saves, timers) on server close.
