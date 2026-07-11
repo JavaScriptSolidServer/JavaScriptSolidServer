@@ -58,6 +58,21 @@ export async function activate(api) {
 }
 `;
 
+// A literal ':' segment ('/:/x') must NOT collide with the param shape
+// '/:user/x' — different claim types that only alias if the collision
+// key throws away the param-vs-literal distinction.
+const LITERAL_COLON_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/:user/x');    // param
+  api.fastify.get('/:user/x', async () => ({ param: true }));
+}
+`;
+const COLON_SEG_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/:/x');        // literal ':' segment
+}
+`;
+
 let server;
 let baseUrl;
 let originalDataRoot;
@@ -85,6 +100,8 @@ describe('api.reservePath (#602)', () => {
     await fs.writeFile(path.join(FIXTURE_DIR, 'rival.js'), RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'shape-rival.js'), SHAPE_RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literalish.js'), LITERALISH_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'literal-colon.js'), LITERAL_COLON_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'colon-seg.js'), COLON_SEG_FIXTURE);
   });
   after(async () => {
     await fs.remove(FIXTURE_DIR);
@@ -169,6 +186,18 @@ describe('api.reservePath (#602)', () => {
     // the segment had been treated as a param).
     const sibling = await fetch(`${baseUrl}/alice.json`, { method: 'PUT', body: 'x' });
     assert.ok([401, 403].includes(sibling.status), `expected WAC rejection, got ${sibling.status}`);
+  });
+
+  it("a literal ':' segment does not alias a param shape (no false collision)", async () => {
+    await start([
+      { id: 'litcolon', module: path.join(FIXTURE_DIR, 'literal-colon.js'), prefix: '/lc' },
+      { id: 'colonseg', module: path.join(FIXTURE_DIR, 'colon-seg.js'), prefix: '/cs' },
+    ]);
+    // Booted cleanly — the two reservations are distinct claims. The
+    // param route still serves its shape.
+    const res = await fetch(`${baseUrl}/alice/x`);
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(await res.json(), { param: true });
   });
 
   it('two plugins claiming the same path fail the boot naming both', async () => {

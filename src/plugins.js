@@ -92,9 +92,14 @@ export function compilePathPattern(p) {
 
 // Collision key: two reservations conflict when they exempt the same
 // URLs, so parameter NAMES don't matter — '/:user/did.json' and
-// '/:acct/did.json' are the same claim. Canonicalize param segments.
+// '/:acct/did.json' are the same claim. Each segment is tagged by TYPE
+// (param vs literal) so a canonicalized param can't alias a literal
+// segment that happens to be the placeholder text (e.g. a literal '/:/…').
+// '\x00' never occurs in a real path, so it's a safe framing prefix.
 export function reservationKey(p) {
-  return p.split('/').map((seg) => (PARAM_SEGMENT.test(seg) ? ':' : seg)).join('/');
+  return p.split('/')
+    .map((seg) => (PARAM_SEGMENT.test(seg) ? '\x00P' : `\x00L${seg}`))
+    .join('/');
 }
 
 /** Same normalization appPaths applies: no trailing slash, must be '/x…'. */
