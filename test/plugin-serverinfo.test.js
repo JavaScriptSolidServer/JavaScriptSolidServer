@@ -30,7 +30,7 @@ let server;
 let baseUrl;
 let originalDataRoot;
 
-async function start(extraOptions = {}) {
+async function start(extraOptions = {}, listenHost) {
   await fs.emptyDir(TEST_DATA_DIR);
   const { createServer } = await import('../src/server.js');
   server = createServer({
@@ -42,7 +42,9 @@ async function start(extraOptions = {}) {
     ],
     ...extraOptions,
   });
-  await server.listen({ port: 0, host: '127.0.0.1' });
+  // Bind to the host under test — serverInfo must reflect the real bind,
+  // not just the configured value.
+  await server.listen({ port: 0, host: listenHost ?? extraOptions.host ?? '127.0.0.1' });
   baseUrl = `http://127.0.0.1:${server.server.address().port}`;
 }
 
@@ -85,6 +87,16 @@ describe('api.serverInfo (#601)', () => {
     const { now } = await res.json();
     assert.strictEqual(now.host, 'localhost');
     assert.strictEqual(now.baseUrl, `http://localhost:${boundPort}`);
+  });
+
+  it('the live bind wins over the configured host once listening', async () => {
+    // Configured 0.0.0.0 but actually bound to 127.0.0.1 — the live
+    // address is the one a caller can use, so it must win.
+    await start({ host: '0.0.0.0' }, '127.0.0.1');
+    const res = await fetch(`${baseUrl}/info-app/now`);
+    const { now } = await res.json();
+    assert.strictEqual(now.host, '127.0.0.1');
+    assert.strictEqual(now.baseUrl, `http://127.0.0.1:${server.server.address().port}`);
   });
 
   it('an explicit idpIssuer wins as the canonical public baseUrl', async () => {

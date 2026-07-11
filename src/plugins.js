@@ -165,11 +165,19 @@ export async function loadPlugins(fastify, entries, ctx) {
       serverInfo() {
         const o = ctx.origin ?? {};
         const addr = fastify.server?.listening ? fastify.server.address() : null;
-        const port = (typeof addr === 'object' && addr?.port) || (o.port ?? null);
-        const host = !o.host || o.host === '0.0.0.0' ? 'localhost' : o.host;
+        const live = addr && typeof addr === 'object' ? addr : null;
+        // Once listening, the live bind wins over configured values —
+        // listen() may be called with a different host/port than
+        // createServer() was given (tests do exactly this).
+        const port = live?.port ?? o.port ?? null;
+        const rawHost = live?.address ?? o.host;
+        // Unspecified binds aren't callable addresses; report the
+        // loopback name instead. IPv6 literals need brackets in URLs.
+        const host = !rawHost || rawHost === '0.0.0.0' || rawHost === '::' ? 'localhost' : rawHost;
         const protocol = o.ssl ? 'https' : 'http';
-        const baseUrl = o.baseUrl || `${protocol}://${host}:${port}`;
-        return { baseUrl, protocol, host, port, listening: !!addr };
+        const urlHost = host.includes(':') ? `[${host}]` : host;
+        const baseUrl = o.baseUrl || `${protocol}://${urlHost}:${port}`;
+        return { baseUrl, protocol, host, port, listening: !!live };
       },
       // Mount a node-style (req, res) handler — a wrapped HTTP app, reverse
       // proxy, or framework adapter — under the plugin's prefix (#583). This
