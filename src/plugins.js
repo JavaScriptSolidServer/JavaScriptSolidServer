@@ -60,6 +60,15 @@ export function makePluginLog(base) {
   return { log: call('info'), info: call('info'), warn: call('warn'), error: call('error'), debug: call('debug') };
 }
 
+/**
+ * A loggable message from whatever a plugin threw — handlers can throw
+ * non-Errors (strings, undefined), and the failure guards must never
+ * throw themselves while reporting one.
+ */
+export function errMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Same normalization appPaths applies: no trailing slash, must be '/x…'. */
 export function normalizePrefix(p) {
   if (typeof p !== 'string') return '';
@@ -187,7 +196,7 @@ export async function loadPlugins(fastify, entries, ctx) {
           // as ws.route below): log, answer 500 if nothing went out yet,
           // else drop the one affected socket.
           const fail = (res, err) => {
-            log.error(`plugin ${id}: mounted app handler failed: ${err.message}`);
+            log.error(`plugin ${id}: mounted app handler failed: ${errMessage(err)}`);
             if (!res.headersSent && !res.writableEnded) {
               res.statusCode = 500;
               res.end();
@@ -224,11 +233,11 @@ export async function loadPlugins(fastify, entries, ctx) {
             // takes the host down: log it and close the one affected socket.
             try {
               Promise.resolve(handler(socket, request)).catch((err) => {
-                log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+                log.error(`plugin ${id}: ws handler failed: ${errMessage(err)}`);
                 socket.terminate?.();
               });
             } catch (err) {
-              log.error(`plugin ${id}: ws handler failed: ${err.message}`);
+              log.error(`plugin ${id}: ws handler failed: ${errMessage(err)}`);
               socket.terminate?.();
             }
           });

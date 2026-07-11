@@ -36,6 +36,9 @@ export async function activate(api) {
   // handler bug after hijack() answers 500 instead of hanging the client.
   await api.mountApp(() => { throw new Error('sync boom'); }, { prefix: '/boom' });
   await api.mountApp(async () => { throw new Error('async boom'); }, { prefix: '/boom-async' });
+  // Non-Error throw: the failure guard itself must not throw on err.message.
+  await api.mountApp(() => { throw 'string boom'; }, { prefix: '/boom-raw' });
+  await api.mountApp(async () => Promise.reject(undefined), { prefix: '/boom-undef' });
 }
 `;
 
@@ -128,6 +131,16 @@ describe('api.mountApp (#583)', () => {
     await start();
     const res = await fetch(`${baseUrl}/boom-async`);
     assert.strictEqual(res.status, 500);
+    const ok = await fetch(`${baseUrl}/wrapped2/still-up`);
+    assert.strictEqual(ok.status, 200);
+  });
+
+  it('a handler that throws a non-Error still answers 500 (guard must not throw on err.message)', async () => {
+    await start();
+    const raw = await fetch(`${baseUrl}/boom-raw`);
+    assert.strictEqual(raw.status, 500);
+    const undef = await fetch(`${baseUrl}/boom-undef`);
+    assert.strictEqual(undef.status, 500);
     const ok = await fetch(`${baseUrl}/wrapped2/still-up`);
     assert.strictEqual(ok.status, 200);
   });
