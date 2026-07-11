@@ -52,6 +52,13 @@ export async function activate(api) {
 }
 `;
 
+// A reservation carrying a query is malformed — must be rejected.
+const QUERY_FIXTURE = `
+export async function activate(api) {
+  api.reservePath('/xrpc?x=1');
+}
+`;
+
 // Same shape as the main plugin's /:user/did.json, different param name —
 // exempts the same URLs, so it's the same claim and must collide.
 const SHAPE_RIVAL_FIXTURE = `
@@ -110,6 +117,7 @@ describe('api.reservePath (#602)', () => {
     await fs.writeFile(path.join(FIXTURE_DIR, 'plugin.js'), FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'rival.js'), RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'write-shim.js'), WRITE_SHIM_FIXTURE);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'query.js'), QUERY_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'shape-rival.js'), SHAPE_RIVAL_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literalish.js'), LITERALISH_FIXTURE);
     await fs.writeFile(path.join(FIXTURE_DIR, 'literal-colon.js'), LITERAL_COLON_FIXTURE);
@@ -238,6 +246,23 @@ describe('api.reservePath (#602)', () => {
     const res = await fetch(`${baseUrl}/alice/x`);
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(await res.json(), { param: true });
+  });
+
+  it("reservePath with a query ('/xrpc?x=1') fails the boot as malformed", async () => {
+    await fs.emptyDir(TEST_DATA_DIR);
+    const { createServer } = await import('../src/server.js');
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      plugins: [
+        { id: 'q', module: path.join(FIXTURE_DIR, 'query.js'), prefix: '/q' },
+      ],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /must be a pathname without '\?' or '#'/,
+    );
   });
 
   it('two plugins claiming the same path fail the boot naming both', async () => {

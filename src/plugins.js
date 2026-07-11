@@ -238,6 +238,14 @@ export async function loadPlugins(fastify, entries, ctx) {
         if (!key.startsWith('/') || key.length < 2) {
           throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
         }
+        // A reservation is a pathname, not a URL: '?'/'#' don't belong.
+        // A query in the string would be escaped into the matcher (tying
+        // the exemption to that exact query), and fragments never reach
+        // request.url — both silently produce a reservation that matches
+        // nothing real.
+        if (key.includes('?') || key.includes('#')) {
+          throw new Error(`plugin ${id}: reservePath must be a pathname without '?' or '#', got ${JSON.stringify(p)}`);
+        }
         // Track by the shape, not the raw string: '/:user/did.json' and
         // '/:acct/did.json' exempt the same URLs, so they're the same
         // claim and must collide loudly like two literal reservations.
