@@ -9,7 +9,7 @@
 
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, parsePluginFlag } from '../src/config.js';
 
 describe('config — env var boolean coercion', () => {
   // Save/restore the env vars we touch so this test is hermetic.
@@ -188,5 +188,46 @@ describe('config — singleUserName default (#348)', () => {
     } finally {
       delete process.env.JSS_SINGLE_USER_NAME;
     }
+  });
+});
+
+describe('config — parsePluginFlag (#594)', () => {
+  it('parses module with prefix', () => {
+    assert.deepStrictEqual(parsePluginFlag('./chat/plugin.js@/chat'),
+      { module: './chat/plugin.js', prefix: '/chat' });
+  });
+
+  it('parses bare module (no prefix)', () => {
+    assert.deepStrictEqual(parsePluginFlag('./chat/plugin.js'),
+      { module: './chat/plugin.js' });
+  });
+
+  it('parses scoped package with prefix — scope @ is not the separator', () => {
+    assert.deepStrictEqual(parsePluginFlag('@scope/pkg/plugin.js@/app'),
+      { module: '@scope/pkg/plugin.js', prefix: '/app' });
+  });
+
+  it('parses bare scoped package as module only', () => {
+    assert.deepStrictEqual(parsePluginFlag('@scope/pkg/plugin.js'),
+      { module: '@scope/pkg/plugin.js' });
+  });
+
+  it('splits on the LAST @/ when several occur', () => {
+    assert.deepStrictEqual(parsePluginFlag('pkg@/weird/path.js@/mount'),
+      { module: 'pkg@/weird/path.js', prefix: '/mount' });
+  });
+
+  it('leaves a prefix without leading slash to the loader to reject', () => {
+    // '@chat' has no '@/', so the whole value is the module — the import
+    // fails loudly rather than mounting somewhere unexpected.
+    assert.deepStrictEqual(parsePluginFlag('./p.js@chat'),
+      { module: './p.js@chat' });
+  });
+
+  it('parses a missing module to module: "" for the loader to reject', () => {
+    // '@/app' splits at position 0 so the loader raises its clear
+    // "each entry needs a module" error instead of a confusing import failure.
+    assert.deepStrictEqual(parsePluginFlag('@/app'),
+      { module: '', prefix: '/app' });
   });
 });

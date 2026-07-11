@@ -11,7 +11,7 @@
 
 import { Command } from 'commander';
 import { createServer } from '../src/server.js';
-import { loadConfig, saveConfig, printConfig, defaults } from '../src/config.js';
+import { loadConfig, saveConfig, printConfig, defaults, parsePluginFlag } from '../src/config.js';
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
 import { findByUsername, updatePassword, deleteAccount } from '../src/idp/accounts.js';
 import { setQuotaLimit, getQuotaInfo, reconcileQuota, formatBytes } from '../src/storage/quota.js';
@@ -157,6 +157,7 @@ program
   .option('--mcp', 'Enable MCP (Model Context Protocol) server at /mcp — pod as a tool surface for agents (#490)')
   .option('--no-mcp', 'Disable MCP server')
   .option('-q, --quiet', 'Suppress log output')
+  .option('--plugin <module[@prefix]>', 'Mount an app plugin (repeatable; prefix must start with /). Appends to config-file plugins (#594)', (value, previous) => previous.concat([value]), [])
   .option('--log-level <level>', 'Log level: error, warn, info, debug (default: info)')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
@@ -168,6 +169,16 @@ program
       }
 
       const config = await loadConfig(options, options.config);
+
+      // --plugin entries APPEND to the config file's plugins rather than
+      // following the CLI-replaces-file rule — replacing would make -c plus
+      // one --plugin silently drop the file's declared apps (#594).
+      if (options.plugin?.length) {
+        config.plugins = [
+          ...(Array.isArray(config.plugins) ? config.plugins : []),
+          ...options.plugin.map(parsePluginFlag),
+        ];
+      }
 
       // Set DATA_ROOT env var so all modules use the same data directory
       process.env.DATA_ROOT = path.resolve(config.root);

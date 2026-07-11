@@ -433,6 +433,20 @@ plugins never attach their own `'upgrade'` listener. Return
 A plugin that fails to import or activate fails `listen()` loudly rather
 than booting a server silently missing an app.
 
+The simple module + prefix case also works straight from the CLI, no
+config file needed ([#594](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/594)):
+
+```bash
+jss start --root ./data --public \
+  --plugin './chat/plugin.js@/chat' \
+  --plugin '@scope/pkg/plugin.js@/app'
+```
+
+`--plugin` is repeatable; the prefix separator is the last `@` followed by
+`/`, so scoped package names parse unambiguously. CLI entries **append** to
+any `plugins` array from the config file (they don't replace it). Per-plugin
+`config` objects and explicit `id`s remain config-file-only.
+
 ## Storage Quotas
 
 Limit storage per pod to prevent abuse and manage resources:
