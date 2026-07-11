@@ -138,12 +138,14 @@ const GENERIC_BASENAMES = new Set(['plugin', 'index']);
  * parent (e.g. './plugin.js' at the cwd root). (#596)
  */
 export function fileStem(module) {
-  const base = path.basename(module);
-  if (GENERIC_BASENAMES.has(base.replace(/\.[cm]?js$/, '').toLowerCase())) {
+  const withoutExt = path.basename(module).replace(/\.[cm]?js$/, '');
+  if (GENERIC_BASENAMES.has(withoutExt.toLowerCase())) {
     const parent = path.basename(path.dirname(module));
+    // The parent directory name is returned AS-IS — a directory legitimately
+    // named 'foo.js' must stay 'foo.js', not be extension-stripped to 'foo'.
     if (parent && parent !== '.' && parent !== '..') return parent;
   }
-  return base;
+  return withoutExt;
 }
 
 /**
@@ -159,12 +161,17 @@ export function fileStem(module) {
  */
 export function pluginId(spec) {
   const module = String(spec.module);
-  const raw = typeof spec.id === 'string' && spec.id
-    ? spec.id
-    : (module.startsWith('.') || path.isAbsolute(module)
-        ? fileStem(module)
-        : module
-      ).replace(/\.[cm]?js$/, '');
+  // The extension is stripped where it applies — the file basename (via
+  // fileStem) and a bare specifier's tail — but NOT a parent directory name
+  // that fileStem may return for a generic basename.
+  let raw;
+  if (typeof spec.id === 'string' && spec.id) {
+    raw = spec.id.replace(/\.[cm]?js$/, '');
+  } else if (module.startsWith('.') || path.isAbsolute(module)) {
+    raw = fileStem(module);
+  } else {
+    raw = module.replace(/\.[cm]?js$/, '');
+  }
   const id = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!id) throw new Error(`plugins: cannot derive an id from ${JSON.stringify(spec.module)}; set entry.id`);
   return id;

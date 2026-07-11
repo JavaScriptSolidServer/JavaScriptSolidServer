@@ -242,6 +242,11 @@ describe('plugin loader (#206)', () => {
     // No usable parent → falls back to the basename; an explicit id still wins.
     assert.strictEqual(pluginId({ module: './plugin.js' }), 'plugin');
     assert.strictEqual(pluginId({ module: './relay/plugin.js', id: 'custom' }), 'custom');
+    // A parent directory whose own name ends in .js keeps it (only the FILE's
+    // extension is stripped, never the directory name) — so 'foo.js/' and
+    // 'foo/' don't both collapse to the same 'foo'.
+    assert.strictEqual(pluginId({ module: './foo.js/plugin.js' }), 'foo-js');
+    assert.strictEqual(pluginId({ module: './foo/plugin.js' }), 'foo');
   });
 
   it('two <name>/plugin.js files load together with no explicit ids (#596)', async () => {
