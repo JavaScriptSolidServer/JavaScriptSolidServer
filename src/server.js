@@ -578,6 +578,14 @@ export function createServer(options = {}) {
       return;
     }
 
+    // App plugins own their prefix (#206) — a plugin mounted at a dot path
+    // (e.g. the webrtc plugin at /.webrtc, matching core's historical URL)
+    // must stay reachable, exactly as the WAC hook already defers to
+    // appPaths. Read per request: plugin activation pushes entries.
+    if (appPaths.some(p => urlNoQuery === p || urlNoQuery.startsWith(p + '/'))) {
+      return;
+    }
+
     // Only inspect the path component — splitting the full URL on '/'
     // would catch dot-prefixed segments inside query-string values
     // (e.g. /proxy?url=https://example.com/.git/config), rejecting

@@ -177,6 +177,32 @@ describe('plugin loader (#206)', () => {
     assert.ok([401, 403].includes(res.status), `expected WAC rejection, got ${res.status}`);
   });
 
+  it('a plugin mounted at a dot prefix stays reachable (dotfile guard defers to the mount)', async () => {
+    // The webrtc plugin replaces core's wss://pod/.webrtc at the same URL,
+    // so a dot prefix must reach the app — HTTP and ws.route alike — while
+    // unrelated dotfiles keep the 403 guard.
+    await startWith([
+      { module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: '/.myapp' },
+    ]);
+    const res = await fetch(`${baseUrl}/.myapp/echo`, { method: 'POST' });
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual((await res.json()).app, true);
+    const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/.myapp/ws`);
+    await new Promise((resolve, reject) => {
+      ws.on('open', resolve);
+      ws.on('error', reject);
+    });
+    const reply = await new Promise((resolve, reject) => {
+      ws.on('message', (data) => resolve(String(data)));
+      ws.on('error', reject);
+      ws.send('hello');
+    });
+    assert.strictEqual(reply, 'pong:hello');
+    ws.close();
+    const guarded = await fetch(`${baseUrl}/.env`);
+    assert.strictEqual(guarded.status, 403);
+  });
+
   it('a plugin that cannot be imported fails listen() loudly', async () => {
     await fs.emptyDir(TEST_DATA_DIR);
     server = createServer({
