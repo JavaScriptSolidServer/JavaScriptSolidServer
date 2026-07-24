@@ -487,11 +487,17 @@ export async function resolveDidNostrLocally(pubkeyHex) {
 /**
  * Build a CID-shaped DID document for a Nostr pubkey + account pair.
  *
- * Uses the spec example's vocabulary (Multikey + publicKeyMultibase)
- * for max interop with our own resolver and the W3C VC track. The
- * Multikey value is computed deterministically from the pubkey via
- * the f-form recipe (multibase `f` + multicodec `e701` + parity byte
- * `02` + 32-byte xonly hex) — the same shape the doctor's B.2 emits.
+ * Uses the vocabulary of the updated did:nostr CG spec example
+ * (https://nostrcg.github.io/did-nostr/): Multikey + publicKeyMultibase,
+ * @context [https://www.w3.org/ns/cid/v1, https://w3id.org/nostr/context]
+ * (cid/v1 is the Controlled Identifiers v1.0 context that defines the
+ * Multikey term). The Multikey value is computed deterministically from
+ * the pubkey via the f-form recipe (multibase `f` + multicodec `e701` +
+ * parity byte `02` + 32-byte xonly hex) — the same shape the doctor's B.2
+ * emits. Verification-relationship refs are kept ABSOLUTE
+ * (`did:nostr:<hex>#key1`); the spec example shows the relative `#key1`
+ * form, but DID Core permits both and this indexer deliberately
+ * absolutizes auth refs (see the profile-absolutization path below).
  */
 function buildDidDocument({ pubkey, webId }) {
   const did = `did:nostr:${pubkey.toLowerCase()}`;
