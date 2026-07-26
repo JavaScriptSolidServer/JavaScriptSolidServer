@@ -492,13 +492,26 @@ export async function resolveDidNostrLocally(pubkeyHex) {
  * Multikey value is computed deterministically from the pubkey via
  * the f-form recipe (multibase `f` + multicodec `e701` + parity byte
  * `02` + 32-byte xonly hex) — the same shape the doctor's B.2 emits.
+ *
+ * `@context` MUST lead with the DID Core context — DID Core requires
+ * the first value to be `https://www.w3.org/ns/did/v1`, and did:nostr
+ * 0.1.1 adopted that ordering (nostrcg/did-nostr#136, fixed by #139).
+ * `cid/v1` still follows it, because this document's Multikey
+ * verification method comes from the Controlled Identifiers
+ * vocabulary. The ordering is normative only for DID documents, so
+ * standalone CID resources (src/keys/provision.js) and WebID profiles
+ * (src/webid/profile.js) correctly keep `cid/v1` alone.
  */
 function buildDidDocument({ pubkey, webId }) {
   const did = `did:nostr:${pubkey.toLowerCase()}`;
   const multikey = `f` + `e701` + `02` + pubkey.toLowerCase();
   const vmId = `${did}#key1`;
   return {
-    '@context': ['https://www.w3.org/ns/cid/v1', 'https://w3id.org/nostr/context'],
+    '@context': [
+      'https://www.w3.org/ns/did/v1',
+      'https://www.w3.org/ns/cid/v1',
+      'https://w3id.org/nostr/context',
+    ],
     'id': did,
     'type': 'DIDNostr',
     'alsoKnownAs': [webId],
