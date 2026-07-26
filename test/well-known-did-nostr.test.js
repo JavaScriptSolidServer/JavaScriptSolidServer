@@ -151,11 +151,15 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     const r = await fetch(`${baseUrl}/.well-known/did/nostr/${alicePk}.json`);
     assert.strictEqual(r.status, 200);
     const doc = await r.json();
-    assert.strictEqual(doc['@context'][0], 'https://www.w3.org/ns/did/v1',
+    // Assert the shape before indexing, so a dropped @context fails with
+    // this message rather than a TypeError.
+    const ctx = doc['@context'];
+    assert.ok(Array.isArray(ctx), '@context must be present and an array');
+    assert.strictEqual(ctx[0], 'https://www.w3.org/ns/did/v1',
       '@context must lead with the DID Core context');
     // The CID context must still be present — the document's Multikey
     // verification method is drawn from that vocabulary.
-    assert.ok(doc['@context'].includes('https://www.w3.org/ns/cid/v1'),
+    assert.ok(ctx.includes('https://www.w3.org/ns/cid/v1'),
       '@context must still include the CID v1 context');
   });
 
