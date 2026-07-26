@@ -129,7 +129,11 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     assert.ok(r.headers.get('last-modified'));
 
     const doc = await r.json();
-    assert.deepStrictEqual(doc['@context'], ['https://www.w3.org/ns/cid/v1', 'https://w3id.org/nostr/context']);
+    assert.deepStrictEqual(doc['@context'], [
+      'https://www.w3.org/ns/did/v1',
+      'https://www.w3.org/ns/cid/v1',
+      'https://w3id.org/nostr/context',
+    ]);
     assert.strictEqual(doc.id, `did:nostr:${alicePk}`);
     assert.strictEqual(doc.type, 'DIDNostr');
     assert.ok(Array.isArray(doc.alsoKnownAs));
@@ -137,6 +141,22 @@ describe('GET /.well-known/did/nostr/:pubkey (#407)', () => {
     assert.strictEqual(doc.verificationMethod[0].type, 'Multikey');
     assert.strictEqual(doc.verificationMethod[0].publicKeyMultibase, fformMultikey(alicePk));
     assert.strictEqual(doc.authentication[0], `did:nostr:${alicePk}#key1`);
+  });
+
+  it('leads @context with the DID Core context (did:nostr 0.1.1)', async () => {
+    // DID Core requires a DID document's @context to lead with
+    // https://www.w3.org/ns/did/v1; did:nostr 0.1.1 adopted that ordering
+    // (nostrcg/did-nostr#136 → #139). Asserted separately from the
+    // full-shape check above so a reordering regression names itself.
+    const r = await fetch(`${baseUrl}/.well-known/did/nostr/${alicePk}.json`);
+    assert.strictEqual(r.status, 200);
+    const doc = await r.json();
+    assert.strictEqual(doc['@context'][0], 'https://www.w3.org/ns/did/v1',
+      '@context must lead with the DID Core context');
+    // The CID context must still be present — the document's Multikey
+    // verification method is drawn from that vocabulary.
+    assert.ok(doc['@context'].includes('https://www.w3.org/ns/cid/v1'),
+      '@context must still include the CID v1 context');
   });
 
   it('accepts the .jsonld suffix (alias)', async () => {
