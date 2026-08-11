@@ -94,6 +94,56 @@ describe('WebID-TLS', () => {
     });
   });
 
+  describe('HTML JSON-LD extraction regex', () => {
+    // Test the regex pattern used to extract JSON-LD from HTML profiles
+    const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i;
+
+    it('should match basic script tag', () => {
+      const html = '<script type="application/ld+json">{"@id": "#me"}</script>';
+      const match = html.match(jsonLdRegex);
+      assert.ok(match, 'Should match basic script tag');
+      assert.strictEqual(match[1], '{"@id": "#me"}');
+    });
+
+    it('should match script tag with additional attributes', () => {
+      const html = '<script type="application/ld+json" id="me">{"@id": "#me"}</script>';
+      const match = html.match(jsonLdRegex);
+      assert.ok(match, 'Should match script tag with id attribute');
+      assert.strictEqual(match[1], '{"@id": "#me"}');
+    });
+
+    it('should match script tag with attributes before type', () => {
+      const html = '<script id="profile" type="application/ld+json">{"@id": "#me"}</script>';
+      const match = html.match(jsonLdRegex);
+      assert.ok(match, 'Should match script tag with id before type');
+      assert.strictEqual(match[1], '{"@id": "#me"}');
+    });
+
+    it('should match script tag with single quotes', () => {
+      const html = "<script type='application/ld+json'>{'@id': '#me'}</script>";
+      const match = html.match(jsonLdRegex);
+      assert.ok(match, 'Should match script tag with single quotes');
+    });
+
+    it('should match script tag with newlines in content', () => {
+      const html = `<script type="application/ld+json">
+{
+  "@id": "#me",
+  "name": "Test"
+}
+</script>`;
+      const match = html.match(jsonLdRegex);
+      assert.ok(match, 'Should match script tag with multiline content');
+      assert.ok(match[1].includes('"@id": "#me"'));
+    });
+
+    it('should not match non-jsonld script tags', () => {
+      const html = '<script type="text/javascript">console.log("test")</script>';
+      const match = html.match(jsonLdRegex);
+      assert.strictEqual(match, null, 'Should not match JavaScript script tag');
+    });
+  });
+
   describe('SAN format variations', () => {
     it('should handle lowercase uri prefix', () => {
       // Some certs might have lowercase
