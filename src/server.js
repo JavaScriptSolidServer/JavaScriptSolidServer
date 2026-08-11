@@ -419,6 +419,7 @@ export function createServer(options = {}) {
     } catch { /* keep 'unknown' */ }
     fastify.register(idpPlugin, {
       issuer: idpIssuer, inviteOnly, singleUser, singleUserName, jssVersion,
+      refreshMaxAge: options.refreshMaxAge, // #587: absolute /idp/refresh chain cap
     });
   }
 

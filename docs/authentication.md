@@ -59,6 +59,29 @@ Response:
 
 For DPoP-bound tokens (Solid-OIDC compliant), include a DPoP proof header.
 
+#### Refreshing a token
+
+`/idp/credentials` tokens expire after 3600s. To keep an active session
+alive without re-sending the password, slide the token forward with a
+**still-valid** token:
+
+```bash
+curl -X POST http://localhost:4443/idp/refresh \
+  -H "Authorization: Bearer YOUR_CURRENT_TOKEN"
+```
+
+Returns the same shape as `/idp/credentials` (a fresh `access_token`,
+`expires_in: 3600`, same `webid`). Clients should refresh **proactively** —
+e.g. at ~80% of the TTL — so a session lasts as long as the app is in use;
+an idle hour still ends it, preserving the short-TTL security posture.
+
+Only tokens this IdP issued can be refreshed (the token is verified against
+the server's own signing keys), and only within an absolute cap measured
+from the original password grant — a refresh chain maxes out at 24h by
+default, so a leaked token can't be renewed forever. Override the cap with
+`createServer({ refreshMaxAge: <seconds> })`. `401 invalid_grant` means the
+chain has aged out and the user must sign in again.
+
 ### Passkey Authentication (v0.0.77+)
 
 Enable passwordless login with WebAuthn/FIDO2:
