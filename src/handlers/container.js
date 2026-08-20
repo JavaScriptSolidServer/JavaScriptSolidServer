@@ -1,5 +1,5 @@
 import * as storage from '../storage/filesystem.js';
-import { initializeQuota, checkQuota, updateQuotaUsage } from '../storage/quota.js';
+import { initializeQuota, reserveQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders } from '../ldp/headers.js';
 import { isContainer, getEffectiveUrlPath, getPodName } from '../utils/url.js';
 import { generateProfile, generatePreferences, generateTypeIndex, serialize } from '../webid/profile.js';
@@ -159,8 +159,10 @@ export async function handlePost(request, reply) {
 
     // Check storage quota before writing (skip in public mode - no pod structure)
     const podName = request.config?.public ? null : getPodName(request);
+    // Atomically reserve before writing so concurrent creates can't both pass
+    // the check and overshoot the limit; release the reservation on failure.
     if (podName) {
-      const { allowed, error } = await checkQuota(podName, content.length, request.defaultQuota || 0);
+      const { allowed, error } = await reserveQuota(podName, content.length, request.defaultQuota || 0);
       if (!allowed) {
         return reply.code(507).send({ error: 'Insufficient Storage', message: error });
       }
@@ -168,9 +170,9 @@ export async function handlePost(request, reply) {
 
     success = await storage.write(newStoragePath, content);
 
-    // Update quota usage after successful write
-    if (success && podName) {
-      await updateQuotaUsage(podName, content.length);
+    // reserveQuota already recorded the usage; release it if the write failed.
+    if (!success && podName) {
+      await updateQuotaUsage(podName, -content.length);
     }
   }
 
