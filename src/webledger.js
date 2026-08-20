@@ -34,7 +34,11 @@ export function createLedger(options = {}) {
     defaultCurrency: options.defaultCurrency ?? 'satoshi',
     created: now,
     updated: now,
-    entries: []
+    entries: [],
+    // Idempotency keys for deposits already absorbed into balances. Seeded
+    // here so a freshly created ledger has the same shape readLedger's
+    // migration produces for a legacy one.
+    credited: []
   };
 }
 

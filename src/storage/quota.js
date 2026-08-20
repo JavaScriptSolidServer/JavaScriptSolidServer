@@ -204,9 +204,11 @@ export async function checkQuota(podName, additionalBytes, defaultQuota) {
  * instead, release the reservation with `updateQuotaUsage(pod, -bytes)` if the
  * write subsequently fails.
  *
- * checkQuota is retained as a cheap, lock-free cooperative pre-check; this is
- * the authoritative enforcement point. Mirrors QuotaPolicy::reserve in the
- * solid-pod-rs parity port.
+ * This is the authoritative enforcement point and the only one the write path
+ * uses. checkQuota remains exported as a lock-free read-only probe for callers
+ * that want to inspect headroom without reserving it, but it performs no
+ * pre-check for PUT/POST any more — do not go looking for one. Mirrors
+ * QuotaPolicy::reserve in the solid-pod-rs parity port.
  *
  * @param {string} podName - The pod name
  * @param {number} additionalBytes - Bytes to reserve (expected >= 0)
