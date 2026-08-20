@@ -27,7 +27,7 @@
 
 import crypto from 'crypto';
 import { getNostrPubkey, pubkeyToDidNostr } from '../auth/nostr.js';
-import { readLedger, writeLedger, getBalance, credit, debit } from '../webledger.js';
+import { readLedger, writeLedger, getBalance, credit, creditOnce, debit } from '../webledger.js';
 import { verifyMrc20Deposit, verifyMrc20Anchor, jcs, btAddress } from '../mrc20.js';
 import { loadTrail, transferToken, buildTransaction, broadcastTx, p2trScript, btDeriveChainedPrivkey } from '../token.js';
 import { secp256k1 } from '@noble/curves/secp256k1';
@@ -341,9 +341,14 @@ export function createPayHandler(options = {}) {
                 }
               } catch { /* best effort */ }
               const currency = chain.unit;
-              credit(ledger, didUri, u.value, currency);
+              // Idempotent credit keyed on the outpoint: the balance and the
+              // "already counted" marker commit together in the ledger, so a
+              // crash before saveUtxos below can't double-credit on the next
+              // balance poll (the scanner re-runs on every GET /pay/.balance).
+              const depositKey = `${chainId}:${u.txid}:${u.vout}`;
+              const { credited: didCredit } = creditOnce(ledger, depositKey, didUri, u.value, currency);
               utxos.push({ txid: u.txid, vout: u.vout, amount: u.value, scriptpubkey, chain: chainId, tweak: didUri, spent: false });
-              credited += u.value;
+              if (didCredit) credited += u.value;
             }
           }
 
