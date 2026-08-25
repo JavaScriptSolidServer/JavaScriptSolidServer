@@ -14,6 +14,35 @@ const QUOTA_FILE = '.quota.json';
 const QUOTA_TMP_PREFIX = `${QUOTA_FILE}.tmp.`;
 
 /**
+ * Per-pod serialization of read-modify-write on .quota.json.
+ *
+ * saveQuota is already atomic (temp file + rename), which stops a concurrent
+ * reader from seeing a truncated file (#309). But atomicity of a single write
+ * does not stop a lost update: two writers that both `loadQuota` the same
+ * `used` value, each add their bytes and `saveQuota`, race to clobber one
+ * another — and, worse, both can pass a `checkQuota` before either records its
+ * usage, letting concurrent writes overshoot the limit. Serializing the whole
+ * load→mutate→save critical section per pod closes both windows. This mirrors
+ * QuotaPolicy::reserve in the solid-pod-rs parity port, which holds a per-pod
+ * lock for atomic check-and-commit.
+ */
+const podLocks = new Map();
+
+function withPodLock(podName, fn) {
+  const prev = podLocks.get(podName) || Promise.resolve();
+  // Chain onto the previous holder regardless of how it settled.
+  const run = prev.then(fn, fn);
+  // Store a tail that never rejects so the chain can't wedge on an error.
+  const tail = run.then(() => {}, () => {});
+  podLocks.set(podName, tail);
+  // Opportunistic cleanup so the map doesn't grow unbounded across many pods.
+  tail.then(() => {
+    if (podLocks.get(podName) === tail) podLocks.delete(podName);
+  });
+  return run;
+}
+
+/**
  * Get quota file path for a pod
  */
 function getQuotaPath(podName) {
@@ -168,19 +197,75 @@ export async function checkQuota(podName, additionalBytes, defaultQuota) {
 }
 
 /**
- * Update quota usage after a write
+ * Atomically reserve quota for a pending write: check-and-commit under a
+ * per-pod lock so concurrent writers cannot both pass the check and then
+ * overshoot the limit. On success the reserved bytes are already recorded in
+ * `used`, so callers must NOT also call updateQuotaUsage for the same bytes —
+ * instead, release the reservation with `updateQuotaUsage(pod, -bytes)` if the
+ * write subsequently fails.
+ *
+ * This is the authoritative enforcement point and the only one the write path
+ * uses. checkQuota remains exported as a lock-free read-only probe for callers
+ * that want to inspect headroom without reserving it, but it performs no
+ * pre-check for PUT/POST any more — do not go looking for one. Mirrors
+ * QuotaPolicy::reserve in the solid-pod-rs parity port.
+ *
+ * @param {string} podName - The pod name
+ * @param {number} additionalBytes - Bytes to reserve (expected >= 0)
+ * @param {number} defaultQuota - Default quota limit
+ * @returns {Promise<{allowed: boolean, quota: object, error?: string}>}
+ */
+export async function reserveQuota(podName, additionalBytes, defaultQuota) {
+  return withPodLock(podName, async () => {
+    let quota = await loadQuota(podName);
+
+    // Initialize limit from the default on first use, preserving any usage
+    // reconciled from a recovered corrupt/empty file (see checkQuota).
+    if (quota.limit === 0 && defaultQuota > 0) {
+      quota = { limit: defaultQuota, used: quota.used };
+    }
+
+    // No enforcement (and no tracking) when no limit is in effect — matches
+    // updateQuotaUsage, which skips uninitialized quotas.
+    if (quota.limit === 0) {
+      return { allowed: true, quota };
+    }
+
+    const projectedUsage = quota.used + additionalBytes;
+
+    if (additionalBytes > 0 && projectedUsage > quota.limit) {
+      const usedMB = (quota.used / (1024 * 1024)).toFixed(2);
+      const limitMB = (quota.limit / (1024 * 1024)).toFixed(2);
+      return {
+        allowed: false,
+        quota,
+        error: `Storage quota exceeded. Used: ${usedMB}MB / ${limitMB}MB`
+      };
+    }
+
+    // Commit the reservation as part of the same locked critical section.
+    quota.used = Math.max(0, projectedUsage);
+    await saveQuota(podName, quota);
+    return { allowed: true, quota };
+  });
+}
+
+/**
+ * Update quota usage after a write (or to release a reservation).
  * @param {string} podName - The pod name
  * @param {number} bytesChange - Bytes added (positive) or removed (negative)
  */
 export async function updateQuotaUsage(podName, bytesChange) {
-  const quota = await loadQuota(podName);
+  return withPodLock(podName, async () => {
+    const quota = await loadQuota(podName);
 
-  // Skip if no quota initialized
-  if (quota.limit === 0) return quota;
+    // Skip if no quota initialized
+    if (quota.limit === 0) return quota;
 
-  quota.used = Math.max(0, quota.used + bytesChange);
-  await saveQuota(podName, quota);
-  return quota;
+    quota.used = Math.max(0, quota.used + bytesChange);
+    await saveQuota(podName, quota);
+    return quota;
+  });
 }
 
 /**

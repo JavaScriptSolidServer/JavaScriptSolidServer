@@ -1,5 +1,5 @@
 import * as storage from '../storage/filesystem.js';
-import { checkQuota, updateQuotaUsage } from '../storage/quota.js';
+import { reserveQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse, getPodName } from '../utils/url.js';
@@ -1045,8 +1045,11 @@ export async function handlePut(request, reply) {
   const oldSize = stats?.size || 0;
   const sizeDelta = content.length - oldSize;
 
+  // Atomically reserve the growth before writing so concurrent writers can't
+  // both pass the check and overshoot the limit. reserveQuota commits the
+  // reservation, so we must release it if the write then fails.
   if (podName && sizeDelta > 0) {
-    const { allowed, error } = await checkQuota(podName, sizeDelta, request.defaultQuota || 0);
+    const { allowed, error } = await reserveQuota(podName, sizeDelta, request.defaultQuota || 0);
     if (!allowed) {
       return reply.code(507).send({ error: 'Insufficient Storage', message: error });
     }
@@ -1054,11 +1057,14 @@ export async function handlePut(request, reply) {
 
   const success = await storage.write(storagePath, content);
   if (!success) {
+    if (podName && sizeDelta > 0) {
+      await updateQuotaUsage(podName, -sizeDelta); // release the reservation
+    }
     return reply.code(500).send({ error: 'Write failed' });
   }
 
-  // Update quota usage after successful write
-  if (podName && sizeDelta !== 0) {
+  // Growth was already recorded by reserveQuota; only a shrink needs recording.
+  if (podName && sizeDelta < 0) {
     await updateQuotaUsage(podName, sizeDelta);
   }
 
