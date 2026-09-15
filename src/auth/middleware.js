@@ -7,6 +7,8 @@
 import { getWebIdFromRequestAsync } from './token.js';
 import { checkAccess, getRequiredMode } from '../wac/checker.js';
 import { AccessMode } from '../wac/parser.js';
+import { parseN3Patch } from '../patch/n3-patch.js';
+import { parseSparqlUpdate } from '../patch/sparql-update.js';
 import * as storage from '../storage/filesystem.js';
 import { getEffectiveUrlPath } from '../utils/url.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml } from '../mashlib/index.js';
@@ -111,7 +113,13 @@ export async function authorize(request, reply, options = {}) {
   const resourceUrl = buildResourceUrl(request, urlPath);
 
   // Get required access mode - use override if provided, otherwise derive from method
-  const requiredMode = options.requiredMode || getRequiredMode(method);
+  let requiredMode = options.requiredMode || getRequiredMode(method);
+
+  // PATCH can be authorized as Append when it is insert-only.
+  // Any delete operation (or parse ambiguity) stays Write.
+  if (!options.requiredMode && method === 'PATCH') {
+    requiredMode = getPatchRequiredMode(request, resourceUrl);
+  }
 
   // For write operations on non-existent resources, check parent container
   let checkPath = storagePath;
@@ -142,6 +150,36 @@ export async function authorize(request, reply, options = {}) {
   });
 
   return { authorized: allowed, webId, wacAllow, authError, paymentRequired, paid, balance, currency };
+}
+
+/**
+ * Determine PATCH required mode from patch payload semantics.
+ * Insert-only patches require Append; delete-capable patches require Write.
+ */
+function getPatchRequiredMode(request, baseUri) {
+  const contentType = (request.headers['content-type'] || '').toLowerCase();
+  const rawBody = Buffer.isBuffer(request.body) ? request.body.toString() : request.body;
+
+  if (typeof rawBody !== 'string') {
+    return AccessMode.WRITE;
+  }
+
+  try {
+    if (contentType.includes('application/sparql-update')) {
+      const update = parseSparqlUpdate(rawBody, baseUri);
+      return update.deletes.length === 0 ? AccessMode.APPEND : AccessMode.WRITE;
+    }
+
+    if (contentType.includes('text/n3') || contentType.includes('application/n3')) {
+      const patch = parseN3Patch(rawBody, baseUri);
+      return patch.deletes.length === 0 ? AccessMode.APPEND : AccessMode.WRITE;
+    }
+  } catch {
+    // Fail closed to Write when patch parsing is invalid/ambiguous.
+    return AccessMode.WRITE;
+  }
+
+  return AccessMode.WRITE;
 }
 
 /**

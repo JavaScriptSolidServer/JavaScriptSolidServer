@@ -142,6 +142,148 @@ describe('Authentication', () => {
       assertStatus(res, 201);
     });
 
+    it('should allow append-only PATCH for insert-only patch', async () => {
+      await createTestPod('appendpatch1');
+      await createTestPod('appendwriter1');
+
+      const baseUrl = getBaseUrl();
+
+      // Create target resource and container first.
+      await request('/appendpatch1/public/item.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify({
+          '@context': { ex: 'http://example.org/' },
+          '@id': '#it',
+          'ex:name': 'initial'
+        }),
+        auth: 'appendpatch1'
+      });
+
+      // Set container ACL: owner full control + authenticated append only.
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/appendpatch1/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated-append',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch1/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Append' }
+            ]
+          }
+        ]
+      };
+
+      await request('/appendpatch1/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'appendpatch1'
+      });
+
+      const insertOnlyPatch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix ex: <http://example.org/>.
+        _:patch a solid:InsertDeletePatch;
+          solid:inserts { <#it> ex:added "yes" }.
+      `;
+
+      const res = await request('/appendpatch1/public/item.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/n3' },
+        body: insertOnlyPatch,
+        auth: 'appendwriter1'
+      });
+
+      assertStatus(res, 204);
+    });
+
+    it('should deny append-only PATCH when patch includes deletes', async () => {
+      await createTestPod('appendpatch2');
+      await createTestPod('appendwriter2');
+
+      const baseUrl = getBaseUrl();
+
+      await request('/appendpatch2/public/item.json', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify({
+          '@context': { ex: 'http://example.org/' },
+          '@id': '#it',
+          'ex:name': 'initial'
+        }),
+        auth: 'appendpatch2'
+      });
+
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#' },
+        '@graph': [
+          {
+            '@id': '#owner',
+            '@type': 'acl:Authorization',
+            'acl:agent': { '@id': `${baseUrl}/appendpatch2/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Write' },
+              { '@id': 'acl:Control' }
+            ]
+          },
+          {
+            '@id': '#authenticated-append',
+            '@type': 'acl:Authorization',
+            'acl:agentClass': { '@id': 'acl:AuthenticatedAgent' },
+            'acl:accessTo': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:default': { '@id': `${baseUrl}/appendpatch2/public/` },
+            'acl:mode': [
+              { '@id': 'acl:Read' },
+              { '@id': 'acl:Append' }
+            ]
+          }
+        ]
+      };
+
+      await request('/appendpatch2/public/.acl', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/ld+json' },
+        body: JSON.stringify(acl),
+        auth: 'appendpatch2'
+      });
+
+      const deletePatch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix ex: <http://example.org/>.
+        _:patch a solid:InsertDeletePatch;
+          solid:deletes { <#it> ex:name "initial" }.
+      `;
+
+      const res = await request('/appendpatch2/public/item.json', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'text/n3' },
+        body: deletePatch,
+        auth: 'appendwriter2'
+      });
+
+      assertStatus(res, 403);
+    });
+
     it('should deny public read on inbox', async () => {
       await createTestPod('inboxread');
 
