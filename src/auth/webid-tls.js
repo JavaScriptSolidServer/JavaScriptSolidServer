@@ -139,7 +139,7 @@ function parseKeyObject(keyObj) {
 async function fetchProfileKeys(webId) {
   const response = await fetchWithTimeout(webId, {
     headers: {
-      'Accept': 'application/ld+json, text/turtle, application/json'
+      'Accept': 'text/html'
     }
   });
 
@@ -157,7 +157,7 @@ async function fetchProfileKeys(webId) {
     jsonLd = await turtleToJsonLd(text, webId);
   } else if (contentType.includes('text/html')) {
     // Try to extract JSON-LD from HTML data island
-    const jsonLdMatch = text.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
+    const jsonLdMatch = text.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/i);
     if (jsonLdMatch) {
       jsonLd = JSON.parse(jsonLdMatch[1]);
     } else {
