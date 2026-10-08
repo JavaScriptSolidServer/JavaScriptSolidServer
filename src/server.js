@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import sjson from 'secure-json-parse';
 import rateLimit from '@fastify/rate-limit';
+import websocket from '@fastify/websocket';
 import { readFile } from 'fs/promises';
 import { readFileSync } from 'fs';
 import { STATUS_CODES } from 'node:http';
@@ -390,6 +391,21 @@ export function createServer(options = {}) {
       contentLength: reply.getHeader('content-length') || undefined,
     }, `${request.method} ${request.url} ${reply.statusCode} ${Math.round(reply.elapsedTime)}ms`);
   });
+
+  // @fastify/websocket must be registered exactly once, here at the root.
+  // Every registration adds an 'upgrade' listener to the one shared HTTP
+  // server, and the websocketServer decorator it sets is scoped to the
+  // registering context, so a child plugin's `if (!fastify.websocketServer)`
+  // guard cannot see a sibling plugin's registration. Registering at the root
+  // makes the decorator visible to all children, so each guard below skips
+  // and the server keeps a single listener. With one listener per feature,
+  // every upgrade logged N-1 spurious "websocket upgrade failed" warnings
+  // (ERR_HTTP_SOCKET_ASSIGNED) — see #545.
+  const websocketNeeded = notificationsEnabled || liveReloadEnabled || nostrEnabled
+    || webrtcEnabled || terminalEnabled || tunnelEnabled || pluginEntries.length > 0;
+  if (websocketNeeded) {
+    fastify.register(websocket);
+  }
 
   // Register WebSocket notifications plugin if enabled (or live reload needs it)
   if (notificationsEnabled || liveReloadEnabled) {

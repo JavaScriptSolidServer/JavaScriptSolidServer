@@ -27,8 +27,12 @@ export { emitChange } from './events.js';
  * @param {object} options
  */
 export async function notificationsPlugin(fastify, options) {
-  // Register the WebSocket plugin
-  await fastify.register(websocket);
+  // Register the WebSocket plugin unless the root already did (it normally
+  // has; see the note in server.js). Registering again would add a second
+  // 'upgrade' listener to the shared HTTP server (#545).
+  if (!fastify.websocketServer) {
+    await fastify.register(websocket);
+  }
 
   // WebSocket route for notifications (dedicated path to avoid route conflicts)
   // Clients discover this via Updates-Via header
