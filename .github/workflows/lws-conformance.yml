@@ -8,11 +8,12 @@
 # workflow or unreachable server — still fails, so a broken scoreboard is
 # visible rather than silently empty.
 #
-# The server runs unauthenticated in single-user mode with no capabilities
-# declared, so the auth suites are reported inapplicable and anything that
-# needs to write will fail WAC. That is the honest baseline. Flip the
-# comment-outs below once there is an LWS authorization server that can
-# mint alice/bob tokens.
+# The server runs as an "open target": single-user mode, no capabilities
+# declared, and a public-write root ACL so the harness can provision its run
+# root. The auth suites are reported inapplicable and alice/bob are
+# indistinguishable, so authorization tests can't pass yet. That is the
+# honest baseline. Flip the comment-outs below once there is an LWS
+# authorization server that can mint alice/bob tokens.
 
 name: LWS conformance
 
@@ -43,6 +44,27 @@ jobs:
       - name: Start JSS
         run: |
           mkdir -p "$RUNNER_TEMP/jss-data"
+          # Open target: Touchstone provisions its run root by POSTing to the
+          # base URL as alice, and on a target that enforces no authentication
+          # alice and bob send nothing (EXECUTION.md 4.1, 7). The default root
+          # ACL is public-read, so seed a public-write one before start — the
+          # server honours an existing .acl rather than regenerating it.
+          cat > "$RUNNER_TEMP/jss-data/.acl" <<'EOF'
+          {
+            "@context": { "acl": "http://www.w3.org/ns/auth/acl#", "foaf": "http://xmlns.com/foaf/0.1/" },
+            "@graph": [{
+              "@id": "#public",
+              "@type": "acl:Authorization",
+              "acl:agentClass": { "@id": "foaf:Agent" },
+              "acl:accessTo": { "@id": "./" },
+              "acl:default": { "@id": "./" },
+              "acl:mode": [
+                { "@id": "acl:Read" }, { "@id": "acl:Write" },
+                { "@id": "acl:Append" }, { "@id": "acl:Control" }
+              ]
+            }]
+          }
+          EOF
           node bin/jss.js start --port 3000 --host 127.0.0.1 \
             --root "$RUNNER_TEMP/jss-data" --no-idp --no-multi-user \
             > "$RUNNER_TEMP/jss.log" 2>&1 &
