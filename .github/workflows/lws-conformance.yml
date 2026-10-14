@@ -1,0 +1,90 @@
+# LWS conformance scoreboard (#621).
+#
+# Runs Erich Bremer's Touchstone harness against a freshly started JSS and
+# publishes the EARL / HTML / JUnit report as a workflow artifact. JSS does
+# not implement the LWS core protocol yet, so this job is a scoreboard, not
+# a gate: fail-on-nonconformance is off and the job stays green as long as
+# the harness produced a verdict (exit 0 or 1). Exit 2 — misconfigured
+# workflow or unreachable server — still fails, so a broken scoreboard is
+# visible rather than silently empty.
+#
+# The server runs unauthenticated in single-user mode with no capabilities
+# declared, so the auth suites are reported inapplicable and anything that
+# needs to write will fail WAC. That is the honest baseline. Flip the
+# comment-outs below once there is an LWS authorization server that can
+# mint alice/bob tokens.
+
+name: LWS conformance
+
+on:
+  push:
+    branches: [gh-pages]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "What to run: all, core, auth, core/containers, or one test id"
+        default: all
+
+jobs:
+  touchstone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Start JSS
+        run: |
+          mkdir -p "$RUNNER_TEMP/jss-data"
+          node bin/jss.js start --port 3000 --host 127.0.0.1 \
+            --root "$RUNNER_TEMP/jss-data" --no-idp --no-multi-user \
+            > "$RUNNER_TEMP/jss.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://127.0.0.1:3000/ && exit 0
+            sleep 1
+          done
+          echo "JSS did not come up" >&2
+          cat "$RUNNER_TEMP/jss.log" >&2
+          exit 1
+
+      - name: Run Touchstone
+        id: touchstone
+        uses: ebremer/touchstone/.github/actions/lws-conformance@master
+        # env:
+        #   TOUCHSTONE_TOKEN_ALICE: ${{ secrets.LWS_TOKEN_ALICE }}
+        #   TOUCHSTONE_TOKEN_BOB: ${{ secrets.LWS_TOKEN_BOB }}
+        with:
+          target-url: http://127.0.0.1:3000/
+          module: ${{ github.event.inputs.module || 'all' }}
+          # capabilities: Authentication
+          fail-on-nonconformance: "false"
+          report-path: touchstone-reports
+
+      - name: Summarize
+        if: always()
+        run: |
+          md=$(find touchstone-reports/runs -name report.md | head -1)
+          if [ -n "$md" ]; then
+            cat "$md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No Touchstone report produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: touchstone-report
+          path: touchstone-reports/runs
+          if-no-files-found: warn
+
+      - name: Server log
+        if: always()
+        run: cat "$RUNNER_TEMP/jss.log"
