@@ -56,7 +56,11 @@ jobs:
 
       - name: Run Touchstone
         id: touchstone
-        uses: ebremer/touchstone/.github/actions/lws-conformance@master
+        # Pinned to the last commit before harness-clients was added (7b13c27,
+        # 5 Oct 2026): master's pom.xml lists that module but the Dockerfile
+        # never COPYs it, so the image build fails. Move back to master (or a
+        # tag) once upstream fixes the Dockerfile.
+        uses: ebremer/touchstone/.github/actions/lws-conformance@5c49679385de2ec087787a46e533cb741c018274
         # env:
         #   TOUCHSTONE_TOKEN_ALICE: ${{ secrets.LWS_TOKEN_ALICE }}
         #   TOUCHSTONE_TOKEN_BOB: ${{ secrets.LWS_TOKEN_BOB }}
