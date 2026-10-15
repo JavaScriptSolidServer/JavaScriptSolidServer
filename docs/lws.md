@@ -75,6 +75,17 @@ Built on top of the LWS-CID infrastructure ([#400](https://github.com/JavaScript
 
 So: anyone who's used the doctor's B.2 to add a Nostr Multikey VM gets WebID-based NIP-98 sign-in for free.
 
+## Protocol conformance (Touchstone)
+
+The auth work above is the authentication suite; the LWS **core protocol** (storage description, `application/lws+json` containers, linksets, access grants, webhooks) is tracked in [#621](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/621), with Erich Bremer's [Touchstone](https://github.com/ebremer/touchstone) harness as the acceptance test.
+
+```bash
+scripts/lws-conformance.sh                    # all modules
+scripts/lws-conformance.sh --module core      # or auth, core/containers, one test id
+```
+
+Starts a throwaway single-user JSS as an open target, runs Touchstone (Docker if present, else a JDK 21+ build of the CLI jar), and leaves EARL / HTML / JUnit / Markdown reports under `.touchstone/runs/`. It is a scoreboard, not a gate — exit 1 means "a verdict was reached and it's non-conformant", which is the expected state while #621 is open. The baseline and per-manifest tallies are posted on that issue.
+
 ## Spec references
 
 - [W3C CID v1.0 — Controlled Identifiers](https://www.w3.org/TR/cid-1.0/)
