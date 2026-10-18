@@ -628,6 +628,17 @@ export function createServer(options = {}) {
         return;
       }
 
+      // App plugins own their prefix (#206, #616): a plugin that serves git
+      // smart-HTTP under its mount (the forge at /forge/<owner>/<name>.git)
+      // does its own authorization and runs its own backend. Core's git lane
+      // is for the pod's repos; a git-looking URL below an app path falls
+      // through to the plugin, exactly as the WAC hook and the dotfile guard
+      // already defer to appPaths. Read per request: activation pushes entries.
+      const urlNoQuery = request.url.split('?')[0];
+      if (appPaths.some(p => urlNoQuery === p || urlNoQuery.startsWith(p + '/'))) {
+        return;
+      }
+
       // Determine required mode: Write for push, Read for clone/fetch
       const needsWrite = isGitWriteOperation(request.url);
       const requiredMode = needsWrite ? AccessMode.WRITE : AccessMode.READ;
