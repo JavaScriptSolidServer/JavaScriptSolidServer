@@ -17,6 +17,7 @@ import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 import { turtleToJsonLd } from '../rdf/turtle.js';
+import { parseAcl } from '../wac/parser.js';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -972,6 +973,28 @@ export async function handlePut(request, reply) {
       error: 'Unsupported Media Type',
       message: 'ACL resources must be sent as application/ld+json or application/json.'
     });
+  }
+
+  // An ACL that parses to no authorizations would lock everyone out of the
+  // resource (and of the .acl itself, so it couldn't be repaired over HTTP).
+  // Refuse it up front instead of storing it. See #631.
+  if (urlPath.endsWith('.acl')) {
+    let aclDoc = request.body;
+    if (Buffer.isBuffer(aclDoc)) aclDoc = aclDoc.toString('utf8');
+    if (typeof aclDoc === 'string') {
+      try {
+        aclDoc = safeJsonParse(aclDoc);
+      } catch (e) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'ACL body is not valid JSON: ' + e.message });
+      }
+    }
+    const authorizations = await parseAcl(aclDoc, resourceUrl);
+    if (authorizations.length === 0) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'ACL document contains no acl:Authorization with recognisable properties; refusing to store it, as it would grant nobody access.'
+      });
+    }
   }
 
   // Check if we can accept this input type

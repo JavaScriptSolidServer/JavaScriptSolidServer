@@ -3,7 +3,7 @@
  * Parses ACL files (JSON-LD or Turtle) into authorization rules
  */
 
-import { turtleToJsonLd } from '../rdf/turtle.js';
+import { turtleToJsonLd, expandUri } from '../rdf/turtle.js';
 import { safeJsonParse } from '../utils/url.js';
 
 const ACL = 'http://www.w3.org/ns/auth/acl#';
@@ -57,9 +57,17 @@ export async function parseAcl(content, aclUrl) {
   // Handle @graph array or single object
   const nodes = Array.isArray(doc) ? doc : (doc['@graph'] || [doc]);
 
+  // The document's @context (plus any node-level @context) decides what the
+  // keys mean. Contexts are merged leniently across the whole document, as
+  // jsonLdToTurtle does; remote context URLs are never fetched (#389).
+  const docContext = mergeContext({}, Array.isArray(doc) ? undefined : doc['@context']);
+
   for (const node of nodes) {
-    if (isAuthorization(node)) {
-      const auth = parseAuthorization(node, aclUrl);
+    if (!node || typeof node !== 'object') continue;
+    const context = mergeContext(docContext, node['@context']);
+    const expanded = expandNode(node, context);
+    if (isAuthorization(expanded, context)) {
+      const auth = parseAuthorization(expanded, context, aclUrl);
       if (auth) {
         authorizations.push(auth);
       }
@@ -70,18 +78,74 @@ export async function parseAcl(content, aclUrl) {
 }
 
 /**
+ * Merge a JSON-LD @context value (object, or array of objects / strings) into
+ * an accumulated context object. String entries (remote contexts) are skipped
+ * on purpose — JSS never dereferences contexts at parse time (#389).
+ */
+function mergeContext(base, ctx) {
+  if (!ctx) return base;
+  const entries = Array.isArray(ctx) ? ctx : [ctx];
+  let merged = base;
+  for (const entry of entries) {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      merged = { ...merged, ...entry };
+    }
+  }
+  return merged;
+}
+
+/**
+ * Expand a property key or @type value to a full IRI. Falls back to @vocab
+ * for bare terms the context doesn't define.
+ */
+function expandTerm(term, context) {
+  if (typeof term !== 'string' || !term) return term;
+  const expanded = expandUri(term, context);
+  if (expanded === term && !term.includes(':') && typeof context['@vocab'] === 'string') {
+    return context['@vocab'] + term;
+  }
+  return expanded;
+}
+
+/**
+ * Return a view of the node keyed by full predicate IRIs (#631). Keyword
+ * entries (`@id`, `@type`, …) are kept as-is. Keys that expand to the same
+ * IRI (e.g. `acl:mode` and the expanded form in one node) are concatenated.
+ */
+function expandNode(node, context) {
+  const out = {};
+  for (const [key, value] of Object.entries(node)) {
+    const iri = key.startsWith('@') ? key : expandTerm(key, context);
+    if (iri in out && !key.startsWith('@')) {
+      out[iri] = [].concat(out[iri], value);
+    } else {
+      out[iri] = value;
+    }
+  }
+  return out;
+}
+
+/**
+ * Read an ACL property from an expanded node. The full IRI is what a
+ * correctly-expanded key becomes; the `acl:`-prefixed and bare forms are
+ * kept as fallbacks for documents without any usable context.
+ */
+function aclProp(node, term) {
+  return node[`${ACL}${term}`] ?? node[`acl:${term}`] ?? node[term];
+}
+
+/**
  * Check if node is an Authorization
  */
-function isAuthorization(node) {
+function isAuthorization(node, context = {}) {
   const type = node['@type'];
   if (!type) return false;
 
   const types = Array.isArray(type) ? type : [type];
-  return types.some(t =>
-    t === 'acl:Authorization' ||
-    t === `${ACL}Authorization` ||
-    t === 'Authorization'
-  );
+  return types.some(t => {
+    const full = expandTerm(t, context);
+    return full === `${ACL}Authorization` || t === 'Authorization';
+  });
 }
 
 /**
@@ -123,8 +187,9 @@ function resolveUri(uri, baseUrl) {
 /**
  * Parse a single Authorization node
  */
-function parseAuthorization(node, aclUrl) {
+function parseAuthorization(node, context, aclUrl) {
   const baseUrl = getBaseUrl(aclUrl);
+  const uris = term => parseUriArray(aclProp(node, term)).map(u => expandUri(u, context));
 
   const auth = {
     id: node['@id'],
@@ -138,28 +203,25 @@ function parseAuthorization(node, aclUrl) {
   };
 
   // Parse accessTo - resolve relative URLs
-  auth.accessTo = parseUriArray(node['acl:accessTo'] || node['accessTo'])
-    .map(uri => resolveUri(uri, baseUrl));
+  auth.accessTo = uris('accessTo').map(uri => resolveUri(uri, baseUrl));
 
   // Parse default (for containers) - resolve relative URLs
-  auth.default = parseUriArray(node['acl:default'] || node['default'])
-    .map(uri => resolveUri(uri, baseUrl));
+  auth.default = uris('default').map(uri => resolveUri(uri, baseUrl));
 
   // Parse agents (WebIDs can be relative too) - resolve against ACL URL
-  auth.agents = parseUriArray(node['acl:agent'] || node['agent'])
-    .map(uri => resolveUri(uri, aclUrl));
+  auth.agents = uris('agent').map(uri => resolveUri(uri, aclUrl));
 
   // Parse agentClass
-  auth.agentClasses = parseUriArray(node['acl:agentClass'] || node['agentClass']);
+  auth.agentClasses = uris('agentClass');
 
   // Parse agentGroup
-  auth.agentGroups = parseUriArray(node['acl:agentGroup'] || node['agentGroup']);
+  auth.agentGroups = uris('agentGroup');
 
   // Parse modes
-  auth.modes = parseUriArray(node['acl:mode'] || node['mode']).map(normalizeMode);
+  auth.modes = uris('mode').map(normalizeMode);
 
   // Parse conditions
-  auth.conditions = parseConditions(node['acl:condition'] || node['condition']);
+  auth.conditions = parseConditions(aclProp(node, 'condition'));
 
   return auth;
 }
