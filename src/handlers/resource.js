@@ -17,7 +17,10 @@ import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 import { turtleToJsonLd } from '../rdf/turtle.js';
-import { parseAcl } from '../wac/parser.js';
+import { parseAcl, grantsAccess } from '../wac/parser.js';
+
+// Shared by the PUT and PATCH guards for .acl resources (#631).
+const ACL_GRANTS_NOTHING = 'ACL document has no authorization that grants a mode to an agent, agent class or group; refusing to store it, as it would grant nobody access.';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -988,12 +991,8 @@ export async function handlePut(request, reply) {
         return reply.code(400).send({ error: 'Bad Request', message: 'ACL body is not valid JSON: ' + e.message });
       }
     }
-    const authorizations = await parseAcl(aclDoc, resourceUrl);
-    if (authorizations.length === 0) {
-      return reply.code(400).send({
-        error: 'Bad Request',
-        message: 'ACL document contains no acl:Authorization with recognisable properties; refusing to store it, as it would grant nobody access.'
-      });
+    if (!grantsAccess(await parseAcl(aclDoc, resourceUrl))) {
+      return reply.code(400).send({ error: 'Bad Request', message: ACL_GRANTS_NOTHING });
     }
   }
 
@@ -1406,6 +1405,11 @@ export async function handlePatch(request, reply) {
         message: 'Failed to apply patch: ' + e.message
       });
     }
+  }
+
+  // A patch must not leave an ACL that grants nobody access (#631).
+  if (urlPath.endsWith('.acl') && !grantsAccess(await parseAcl(updatedDocument, resourceUrl))) {
+    return reply.code(409).send({ error: 'Conflict', message: ACL_GRANTS_NOTHING });
   }
 
   // Write updated document

@@ -938,6 +938,69 @@ describe('WAC Integration: ACL PUT guard (#631)', () => {
     assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
   });
 
+  it('rejects an ACL whose authorizations name an agent but no mode', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@context': { acl: ACL },
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:agent': { '@id': `${baseUrl}/aclguard/profile/card.jsonld#me` },
+        'acl:accessTo': { '@id': `${baseUrl}/aclguard/public/exp.jsonld` }
+      })
+    });
+    assertStatus(res, 400);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects an ACL whose authorizations name a mode but no agent', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@context': { acl: ACL },
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:accessTo': { '@id': `${baseUrl}/aclguard/public/exp.jsonld` },
+        'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Control' }]
+      })
+    });
+    assertStatus(res, 400);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects a PATCH that would leave the ACL granting nobody access', async () => {
+    const webId = `${baseUrl}/aclguard/profile/card.jsonld#me`;
+    // Single expanded node (the N3 patch engine matches full-IRI keys and
+    // does not handle top-level arrays), so the delete below is applied.
+    const put = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@id': '#owner',
+        '@type': `${ACL}Authorization`,
+        [`${ACL}agent`]: { '@id': webId },
+        [`${ACL}accessTo`]: { '@id': `${baseUrl}/aclguard/public/exp.jsonld` },
+        [`${ACL}mode`]: [{ '@id': `${ACL}Read` }, { '@id': `${ACL}Write` }, { '@id': `${ACL}Control` }]
+      })
+    });
+    assertStatus(put, 204);
+    const patch = `
+      @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+      @prefix acl: <${ACL}>.
+      _:patch a solid:InsertDeletePatch;
+        solid:deletes { <#owner> acl:agent <${webId}> }.
+    `;
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PATCH', auth: 'aclguard',
+      headers: { 'Content-Type': 'text/n3' },
+      body: patch
+    });
+    assertStatus(res, 409);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
   it('rejects an ACL body that is not valid JSON', async () => {
     const res = await request('/aclguard/public/exp.jsonld.acl', {
       method: 'PUT', auth: 'aclguard',

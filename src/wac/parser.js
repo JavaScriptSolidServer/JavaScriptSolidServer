@@ -149,6 +149,21 @@ function isAuthorization(node, context = {}) {
 }
 
 /**
+ * True when at least one authorization can grant something: it names a mode
+ * and an agent, agent class or group. An ACL for which this is false grants
+ * nobody access, including the writer, so writes that would leave a resource
+ * with such an ACL are refused (#631).
+ * @param {Array<Authorization>} authorizations
+ * @returns {boolean}
+ */
+export function grantsAccess(authorizations) {
+  return authorizations.some(a =>
+    a.modes.length > 0 &&
+    (a.agents.length > 0 || a.agentClasses.length > 0 || a.agentGroups.length > 0)
+  );
+}
+
+/**
  * Get base URL from ACL URL (the container the ACL applies to)
  * e.g., https://example.com/foo/.acl -> https://example.com/foo/
  *       https://example.com/foo/bar.acl -> https://example.com/foo/
