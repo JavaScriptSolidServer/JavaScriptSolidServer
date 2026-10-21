@@ -81,7 +81,7 @@ describe('WAC Parser', () => {
       assert.ok(ownerAuth.modes.includes(AccessMode.WRITE));
       assert.ok(ownerAuth.modes.includes(AccessMode.CONTROL));
       // Check public authorization
-      const publicAuth = auths.find(a => a.agentClasses.includes('foaf:Agent'));
+      const publicAuth = auths.find(a => a.agentClasses.includes('http://xmlns.com/foaf/0.1/Agent'));
       assert.ok(publicAuth, 'Should have public authorization');
       assert.ok(publicAuth.modes.includes(AccessMode.READ));
     });
@@ -101,7 +101,7 @@ describe('WAC Parser', () => {
       const auths = await parseAcl(JSON.stringify(acl), 'https://alice.example/public/.acl');
 
       assert.strictEqual(auths.length, 1);
-      assert.ok(auths[0].agentClasses.includes('foaf:Agent'));
+      assert.ok(auths[0].agentClasses.includes('http://xmlns.com/foaf/0.1/Agent'));
       assert.ok(auths[0].modes.includes(AccessMode.READ));
     });
 
@@ -444,8 +444,8 @@ describe('WAC Parser', () => {
       const auths1 = await parseAcl(wire, 'http://localhost:4444/.acl');
       const auths2 = await parseAcl(wire, 'http://0.0.0.0:4444/.acl');
 
-      const pub1 = auths1.find(a => a.agentClasses.includes('foaf:Agent'));
-      const pub2 = auths2.find(a => a.agentClasses.includes('foaf:Agent'));
+      const pub1 = auths1.find(a => a.agentClasses.includes('http://xmlns.com/foaf/0.1/Agent'));
+      const pub2 = auths2.find(a => a.agentClasses.includes('http://xmlns.com/foaf/0.1/Agent'));
       assert.ok(pub1.accessTo.includes('http://localhost:4444/'),
         `Expected localhost resolution, got: ${JSON.stringify(pub1.accessTo)}`);
       assert.ok(pub2.accessTo.includes('http://0.0.0.0:4444/'),
@@ -786,5 +786,227 @@ describe('WAC PaymentCondition noDebit (secondary/guard checks must not charge)'
     assert.strictEqual(res.allowed, false, 'paid grant is not satisfied without charging');
     assert.ok(res.paymentRequired, 'should surface paymentRequired instead of debiting');
     assert.strictEqual(await balanceNow(), 100, 'balance must be unchanged');
+  });
+});
+
+describe('WAC Parser: JSON-LD expansion (#631)', () => {
+  const ACL = 'http://www.w3.org/ns/auth/acl#';
+  const aclUrl = 'http://127.0.0.1:8732/me/public/doc.ttl.acl';
+  const webId = 'http://127.0.0.1:8732/me/profile/card.jsonld#me';
+  const target = 'http://127.0.0.1:8732/me/public/doc.ttl';
+
+  function expectOwner(auths) {
+    assert.strictEqual(auths.length, 1, `expected one authorization, got ${JSON.stringify(auths)}`);
+    assert.deepStrictEqual(auths[0].agents, [webId]);
+    assert.deepStrictEqual(auths[0].accessTo, [target]);
+    assert.deepStrictEqual(auths[0].modes.sort(), [AccessMode.CONTROL, AccessMode.READ, AccessMode.WRITE].sort());
+  }
+
+  it('reads an ACL in expanded form (full IRIs, no @context)', async () => {
+    const acl = [{
+      '@id': '#owner',
+      '@type': [`${ACL}Authorization`],
+      [`${ACL}agent`]: [{ '@id': webId }],
+      [`${ACL}accessTo`]: [{ '@id': target }],
+      [`${ACL}mode`]: [{ '@id': `${ACL}Read` }, { '@id': `${ACL}Write` }, { '@id': `${ACL}Control` }]
+    }];
+    expectOwner(await parseAcl(JSON.stringify(acl), aclUrl));
+  });
+
+  it('reads an ACL that uses a different prefix than acl:', async () => {
+    const acl = {
+      '@context': { wac: ACL },
+      '@graph': [{
+        '@id': '#owner',
+        '@type': 'wac:Authorization',
+        'wac:agent': { '@id': webId },
+        'wac:accessTo': { '@id': target },
+        'wac:mode': [{ '@id': 'wac:Read' }, { '@id': 'wac:Write' }, { '@id': 'wac:Control' }]
+      }]
+    };
+    expectOwner(await parseAcl(JSON.stringify(acl), aclUrl));
+  });
+
+  it('reads an ACL whose @context is an array with a remote entry', async () => {
+    const acl = {
+      '@context': ['https://www.w3.org/ns/solid/context', { auth: ACL }],
+      '@graph': [{
+        '@id': '#owner',
+        '@type': 'auth:Authorization',
+        'auth:agent': { '@id': webId },
+        'auth:accessTo': { '@id': target },
+        'auth:mode': [{ '@id': 'auth:Read' }, { '@id': 'auth:Write' }, { '@id': 'auth:Control' }]
+      }]
+    };
+    expectOwner(await parseAcl(JSON.stringify(acl), aclUrl));
+  });
+
+  it('reads an ACL that relies on @vocab and term definitions', async () => {
+    const acl = {
+      '@context': {
+        '@vocab': ACL,
+        agent: { '@id': `${ACL}agent`, '@type': '@id' },
+        accessTo: { '@id': `${ACL}accessTo`, '@type': '@id' },
+        mode: { '@id': `${ACL}mode`, '@type': '@id' }
+      },
+      '@id': '#owner',
+      '@type': 'Authorization',
+      agent: webId,
+      accessTo: target,
+      mode: ['Read', 'Write', 'Control']
+    };
+    expectOwner(await parseAcl(JSON.stringify(acl), aclUrl));
+  });
+
+  it('reads a Turtle ACL that declares a non-acl prefix', async () => {
+    const ttl = `@prefix wac: <${ACL}> .
+<#owner> a wac:Authorization ;
+  wac:agent <${webId}> ;
+  wac:accessTo <${target}> ;
+  wac:mode wac:Read, wac:Write, wac:Control .`;
+    expectOwner(await parseAcl(ttl, aclUrl));
+  });
+
+  it('normalises agent classes to full IRIs', async () => {
+    const acl = {
+      '@context': { wac: ACL, people: 'http://xmlns.com/foaf/0.1/' },
+      '@id': '#public',
+      '@type': 'wac:Authorization',
+      'wac:agentClass': { '@id': 'people:Agent' },
+      'wac:accessTo': { '@id': target },
+      'wac:mode': { '@id': 'wac:Read' }
+    };
+    const auths = await parseAcl(JSON.stringify(acl), aclUrl);
+    assert.deepStrictEqual(auths[0].agentClasses, ['http://xmlns.com/foaf/0.1/Agent']);
+  });
+});
+
+describe('WAC Integration: ACL PUT guard (#631)', () => {
+  let baseUrl;
+
+  before(async () => {
+    const result = await startTestServer();
+    baseUrl = result.baseUrl;
+    await createTestPod('aclguard');
+  });
+
+  after(async () => {
+    await stopTestServer();
+  });
+
+  const ACL = 'http://www.w3.org/ns/auth/acl#';
+
+  it('accepts an expanded-form ACL and the owner keeps access', async () => {
+    const put = await request('/aclguard/public/exp.jsonld', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({ '@id': '', 'http://schema.org/name': 'x' })
+    });
+    assert.ok(put.status === 201 || put.status === 204, `PUT resource: ${put.status}`);
+
+    const webId = `${baseUrl}/aclguard/profile/card.jsonld#me`;
+    const acl = [{
+      '@id': '#owner',
+      '@type': [`${ACL}Authorization`],
+      [`${ACL}agent`]: [{ '@id': webId }],
+      [`${ACL}accessTo`]: [{ '@id': `${baseUrl}/aclguard/public/exp.jsonld` }],
+      [`${ACL}mode`]: [{ '@id': `${ACL}Read` }, { '@id': `${ACL}Write` }, { '@id': `${ACL}Control` }]
+    }];
+    const putAcl = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify(acl)
+    });
+    assert.ok(putAcl.status === 201 || putAcl.status === 204, `PUT acl: ${putAcl.status}`);
+
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+    assertStatus(await request('/aclguard/public/exp.jsonld.acl', { auth: 'aclguard' }), 200);
+    // The expanded ACL grants nothing to the public.
+    assertStatus(await request('/aclguard/public/exp.jsonld'), 401);
+  });
+
+  it('rejects an ACL document that yields no authorizations', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({ '@context': { acl: ACL }, '@id': '#owner', 'acl:agent': { '@id': 'x' } })
+    });
+    assertStatus(res, 400);
+    const body = await res.json();
+    assert.match(body.message, /authorization/i);
+    // The previous ACL is still in place.
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects an ACL whose authorizations name an agent but no mode', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@context': { acl: ACL },
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:agent': { '@id': `${baseUrl}/aclguard/profile/card.jsonld#me` },
+        'acl:accessTo': { '@id': `${baseUrl}/aclguard/public/exp.jsonld` }
+      })
+    });
+    assertStatus(res, 400);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects an ACL whose authorizations name a mode but no agent', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@context': { acl: ACL },
+        '@id': '#owner',
+        '@type': 'acl:Authorization',
+        'acl:accessTo': { '@id': `${baseUrl}/aclguard/public/exp.jsonld` },
+        'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Control' }]
+      })
+    });
+    assertStatus(res, 400);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects a PATCH that would leave the ACL granting nobody access', async () => {
+    const webId = `${baseUrl}/aclguard/profile/card.jsonld#me`;
+    // Single expanded node (the N3 patch engine matches full-IRI keys and
+    // does not handle top-level arrays), so the delete below is applied.
+    const put = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: JSON.stringify({
+        '@id': '#owner',
+        '@type': `${ACL}Authorization`,
+        [`${ACL}agent`]: { '@id': webId },
+        [`${ACL}accessTo`]: { '@id': `${baseUrl}/aclguard/public/exp.jsonld` },
+        [`${ACL}mode`]: [{ '@id': `${ACL}Read` }, { '@id': `${ACL}Write` }, { '@id': `${ACL}Control` }]
+      })
+    });
+    assertStatus(put, 204);
+    const patch = `
+      @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+      @prefix acl: <${ACL}>.
+      _:patch a solid:InsertDeletePatch;
+        solid:deletes { <#owner> acl:agent <${webId}> }.
+    `;
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PATCH', auth: 'aclguard',
+      headers: { 'Content-Type': 'text/n3' },
+      body: patch
+    });
+    assertStatus(res, 409);
+    assertStatus(await request('/aclguard/public/exp.jsonld', { auth: 'aclguard' }), 200);
+  });
+
+  it('rejects an ACL body that is not valid JSON', async () => {
+    const res = await request('/aclguard/public/exp.jsonld.acl', {
+      method: 'PUT', auth: 'aclguard',
+      headers: { 'Content-Type': 'application/ld+json' },
+      body: '{not json'
+    });
+    assertStatus(res, 400);
   });
 });

@@ -17,6 +17,10 @@ import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
 import { turtleToJsonLd } from '../rdf/turtle.js';
+import { parseAcl, grantsAccess } from '../wac/parser.js';
+
+// Shared by the PUT and PATCH guards for .acl resources (#631).
+const ACL_GRANTS_NOTHING = 'ACL document has no authorization that grants a mode to an agent, agent class or group; refusing to store it, as it would grant nobody access.';
 
 /**
  * Live reload script - injected into HTML when --live-reload is enabled
@@ -974,6 +978,24 @@ export async function handlePut(request, reply) {
     });
   }
 
+  // An ACL that parses to no authorizations would lock everyone out of the
+  // resource (and of the .acl itself, so it couldn't be repaired over HTTP).
+  // Refuse it up front instead of storing it. See #631.
+  if (urlPath.endsWith('.acl')) {
+    let aclDoc = request.body;
+    if (Buffer.isBuffer(aclDoc)) aclDoc = aclDoc.toString('utf8');
+    if (typeof aclDoc === 'string') {
+      try {
+        aclDoc = safeJsonParse(aclDoc);
+      } catch (e) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'ACL body is not valid JSON: ' + e.message });
+      }
+    }
+    if (!grantsAccess(await parseAcl(aclDoc, resourceUrl))) {
+      return reply.code(400).send({ error: 'Bad Request', message: ACL_GRANTS_NOTHING });
+    }
+  }
+
   // Check if we can accept this input type
   if (!canAcceptInput(contentType, connegEnabled)) {
     const acceptValue = connegEnabled
@@ -1383,6 +1405,11 @@ export async function handlePatch(request, reply) {
         message: 'Failed to apply patch: ' + e.message
       });
     }
+  }
+
+  // A patch must not leave an ACL that grants nobody access (#631).
+  if (urlPath.endsWith('.acl') && !grantsAccess(await parseAcl(updatedDocument, resourceUrl))) {
+    return reply.code(409).send({ error: 'Conflict', message: ACL_GRANTS_NOTHING });
   }
 
   // Write updated document
