@@ -233,34 +233,11 @@ export async function registerNostrRelay(fastify, options = {}) {
     await fastify.register(websocket);
   }
 
-  // Register WebSocket route for Nostr relay
-  fastify.get(path, { websocket: true }, (connection, request) => {
-    const socket = connection.socket;
-
-    socket.on('message', async (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        const [type, value, ...rest] = message;
-        await processMessage(type, value, rest, socket);
-      } catch (e) {
-        socket.send(JSON.stringify(['NOTICE', `Error: ${e.message}`]));
-      }
-    });
-
-    socket.on('close', () => {
-      subscribers.delete(socket);
-      rateLimits.delete(socket);
-    });
-
-    socket.on('error', () => {
-      subscribers.delete(socket);
-      rateLimits.delete(socket);
-    });
-  });
-
-  // NIP-11: Relay Information Document at /relay/info
-  fastify.get(path + '/info', (request, reply) => {
-    const relayInfo = {
+  // NIP-11 relay information document. Served at the relay URL itself when
+  // the client sends `Accept: application/nostr+json` (what the spec and
+  // tools such as `nak relay` expect), and at <path>/info for older callers.
+  function relayInfo() {
+    return {
       name: 'JSS Nostr Relay',
       description: 'Nostr relay integrated with JavaScript Solid Server',
       pubkey: '',
@@ -269,11 +246,55 @@ export async function registerNostrRelay(fastify, options = {}) {
       software: 'https://github.com/JavaScriptSolidServer/JavaScriptSolidServer',
       version: '0.0.1'
     };
+  }
 
+  function wantsRelayInfo(request) {
+    return (request.headers.accept || '').toLowerCase().includes('application/nostr+json');
+  }
+
+  // Register the relay route: WebSocket upgrades go to wsHandler, plain HTTP
+  // GETs to handler (NIP-11 when asked for, 404 otherwise, as before).
+  fastify.route({
+    method: 'GET',
+    url: path,
+    handler: (request, reply) => {
+      if (!wantsRelayInfo(request)) return reply.code(404).send();
+      return reply
+        .header('Access-Control-Allow-Origin', '*')
+        .header('Content-Type', 'application/nostr+json')
+        .send(JSON.stringify(relayInfo()));
+    },
+    wsHandler: (connection, request) => {
+      const socket = connection.socket;
+
+      socket.on('message', async (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          const [type, value, ...rest] = message;
+          await processMessage(type, value, rest, socket);
+        } catch (e) {
+          socket.send(JSON.stringify(['NOTICE', `Error: ${e.message}`]));
+        }
+      });
+
+      socket.on('close', () => {
+        subscribers.delete(socket);
+        rateLimits.delete(socket);
+      });
+
+      socket.on('error', () => {
+        subscribers.delete(socket);
+        rateLimits.delete(socket);
+      });
+    }
+  });
+
+  // NIP-11 at <path>/info, kept for existing callers
+  fastify.get(path + '/info', (request, reply) => {
     return reply
       .header('Access-Control-Allow-Origin', '*')
       .header('Content-Type', 'application/json')
-      .send(relayInfo);
+      .send(relayInfo());
   });
 
   return {
