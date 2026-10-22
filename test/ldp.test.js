@@ -242,6 +242,41 @@ describe('LDP CRUD Operations', () => {
       assert.ok(location.includes('my-custom-name'), 'Should use slug in filename');
     });
 
+    it('stores a non-RDF body (an image) as-is, so Append is enough to add a file', async () => {
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
+        '@graph': [
+          { '@id': '#owner', '@type': 'acl:Authorization', 'acl:agent': { '@id': `${baseUrl}/ldptest/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': './' }, 'acl:default': { '@id': './' },
+            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }] },
+          { '@id': '#public', '@type': 'acl:Authorization', 'acl:agentClass': { '@id': 'foaf:Agent' },
+            'acl:accessTo': { '@id': './' }, 'acl:default': { '@id': './' },
+            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Append' }] }
+        ]
+      };
+      await request('/ldptest/public/dropbox/.acl', {
+        method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(acl), auth: 'ldptest'
+      });
+      const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
+      const res = await request('/ldptest/public/dropbox/', {
+        method: 'POST', headers: { 'Content-Type': 'image/png', 'Slug': 'pixel.png' }, body: png
+        // anonymous: public Append
+      });
+      assertStatus(res, 201);
+      const location = res.headers.get('location');
+      assert.ok(location && location.endsWith('/ldptest/public/dropbox/pixel.png'), `location ${location}`);
+      const got = await request('/ldptest/public/dropbox/pixel.png');
+      assertStatus(got, 200);
+      assert.ok(got.headers.get('content-type').startsWith('image/png'), 'served with its own type');
+      assert.strictEqual(Buffer.from(await got.arrayBuffer()).toString('hex'), png.toString('hex'), 'bytes stored untouched');
+
+      // RDF bodies are still checked: Turtle needs conneg (the test server has none).
+      const ttl = await request('/ldptest/public/dropbox/', {
+        method: 'POST', headers: { 'Content-Type': 'text/turtle', 'Slug': 'x.ttl' }, body: '<#a> <http://x/p> "y" .', auth: 'ldptest'
+      });
+      assertStatus(ttl, 415);
+    });
+
     it('should create container with Link header', async () => {
       const res = await request('/ldptest/public/', {
         method: 'POST',

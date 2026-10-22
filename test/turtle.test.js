@@ -153,6 +153,19 @@ describe('turtle converter — unit (#320 follow-ups)', () => {
       `node n3 should appear:\n${content}`);
   });
 
+  it('a document that describes itself keeps its own IRI through a round trip', async () => {
+    const base = 'https://pod.example/alice/settings/publicTypeIndex.jsonld';
+    const turtle = `<${base}> a <http://www.w3.org/ns/solid/terms#TypeIndex> .`;
+    const jsonLd = await toJsonLd(turtle, 'text/turtle', base, true);
+    assert.strictEqual(jsonLd['@id'], '', 'the document is "" in JSON-LD, not "." (which would be its folder)');
+    const { content } = await fromJsonLd(jsonLd, 'text/turtle', base, true);
+    assert.ok(content.includes(`<${base}>`), `round trip keeps the document IRI: ${content}`);
+    assert.ok(!content.includes('/alice/settings/>'), 'and does not turn it into the container');
+    // Files stored earlier with "." still mean the document.
+    const legacy = await fromJsonLd({ '@id': '.', '@type': 'http://www.w3.org/ns/solid/terms#TypeIndex' }, 'text/turtle', base, true);
+    assert.ok(legacy.content.includes(`<${base}>`), `legacy "." reads as the document: ${legacy.content}`);
+  });
+
   it('emits a space before `;` and `.` terminators (#419)', async () => {
     // The de-facto convention in W3C spec examples and Apache Jena
     // RIOT is to separate the statement-terminator from the previous

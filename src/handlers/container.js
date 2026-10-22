@@ -8,7 +8,7 @@ import { checkAccess } from '../wac/checker.js';
 import { buildResourceUrl } from '../auth/middleware.js';
 import { provisionOwnerKey, assertProvisionKeysCompatible } from '../keys/provision.js';
 import { createToken } from '../auth/token.js';
-import { canAcceptInput, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
+import { canAcceptInput, isRdfType, toJsonLd, RDF_TYPES } from '../rdf/conneg.js';
 import { emitChange } from '../notifications/events.js';
 
 /**
@@ -43,8 +43,13 @@ export async function handlePost(request, reply) {
   const connegEnabled = request.connegEnabled || false;
   const contentType = request.headers['content-type'] || '';
 
-  // Check if we can accept this input type
-  if (!canAcceptInput(contentType, connegEnabled)) {
+  // Check if we can accept this input type. Non-RDF bodies (images, audio, any file)
+  // are stored as-is: POST with acl:Append is how a client without Write adds a file
+  // to a container (Solid Protocol, "Creating resources"). RDF bodies still need a
+  // type the server can read.
+  const inputMediaType = contentType.split(';')[0].trim().toLowerCase();
+  const isRdfInput = !inputMediaType || isRdfType(inputMediaType) || inputMediaType === 'application/json';
+  if (isRdfInput && !canAcceptInput(contentType, connegEnabled)) {
     const acceptValue = connegEnabled
       ? 'application/ld+json, application/json, text/turtle, text/n3'
       : 'application/ld+json, application/json';
