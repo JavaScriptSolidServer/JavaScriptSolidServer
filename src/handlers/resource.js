@@ -1190,7 +1190,9 @@ export async function handleOptions(request, reply) {
  */
 // PATCH is read-modify-write. Two patches to the same resource at once (two people
 // posting in a chat) must not interleave, or one of them is lost and the file can be
-// left with the tail of a longer earlier write. Patches to one resource run one at a time.
+// left with the tail of a longer earlier write. Patches to one resource run one at a
+// time: queued within this process, and under a lock file on disk across processes
+// that share the data directory (storage.withLock).
 const patchQueues = new Map(); // storagePath -> tail promise
 
 export async function handlePatch(request, reply) {
@@ -1202,7 +1204,10 @@ export async function handlePatch(request, reply) {
   patchQueues.set(storagePath, tail);
   await previous;
   try {
-    return await applyPatchRequest(request, reply);
+    return await storage.withLock(storagePath, () => applyPatchRequest(request, reply));
+  } catch (err) {
+    if (err.code === 'ELOCKED') return reply.code(503).header('Retry-After', '1').send({ error: 'Service Unavailable', message: 'The resource is being written by another request; retry shortly' });
+    throw err;
   } finally {
     release();
     if (patchQueues.get(storagePath) === tail) patchQueues.delete(storagePath);

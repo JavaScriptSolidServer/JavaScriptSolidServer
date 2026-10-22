@@ -4,6 +4,8 @@
 
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
+import fs from 'fs-extra';
+import path from 'path';
 import {
   startTestServer,
   stopTestServer,
@@ -412,6 +414,38 @@ and a "quote" end\"\"\";
         method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: empty, auth: 'patchtest'
       });
       assertStatus(again, 204);
+    });
+  });
+
+  describe('Cross-process lock file', () => {
+    const lockFile = path.join('./data', 'patchtest', 'public', '.locked.ttl.lock');
+    const patch = (i) => `
+      @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+      _:p a solid:InsertDeletePatch; solid:inserts { <#l${i}> <http://example.org/p> "x" }.`;
+    const send = (i) => request('/patchtest/public/locked.ttl', {
+      method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch(i), auth: 'patchtest'
+    });
+
+    it('waits for a lock held by another writer and proceeds once it is released', async () => {
+      await fs.ensureFile(lockFile);
+      const pending = send(1).then(res => ({ res }));
+      const early = await Promise.race([pending, new Promise(r => setTimeout(() => r('still waiting'), 400))]);
+      assert.strictEqual(early, 'still waiting', 'the patch does not run while the lock is held');
+      await fs.remove(lockFile);
+      const { res } = await pending;
+      assertStatus(res, 201);
+      await new Promise(r => setTimeout(r, 100)); // the handler releases just after replying
+      assert.ok(!(await fs.pathExists(lockFile)), 'the lock is released afterwards');
+    });
+
+    it('breaks a stale lock left by a crashed process', async () => {
+      await fs.ensureFile(lockFile);
+      const old = new Date(Date.now() - 60000);
+      await fs.utimes(lockFile, old, old);
+      const res = await send(2);
+      assertStatus(res, 204);
+      await new Promise(r => setTimeout(r, 100));
+      assert.ok(!(await fs.pathExists(lockFile)), 'the stale lock is gone');
     });
   });
 
