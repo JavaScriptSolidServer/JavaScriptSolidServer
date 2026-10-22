@@ -3,8 +3,7 @@ import { reserveQuota, updateQuotaUsage } from '../storage/quota.js';
 import { getAllHeaders, getNotFoundHeaders } from '../ldp/headers.js';
 import { generateContainerJsonLd, serializeJsonLd } from '../ldp/container.js';
 import { isContainer, getContentType, isRdfContentType, getEffectiveUrlPath, safeJsonParse, getPodName } from '../utils/url.js';
-import { parseN3Patch, applyN3Patch, validatePatch } from '../patch/n3-patch.js';
-import { parseSparqlUpdate, applySparqlUpdate } from '../patch/sparql-update.js';
+import { parsePatch, applyPatch } from '../patch/quads.js';
 import {
   selectContentType,
   canAcceptInput,
@@ -16,7 +15,7 @@ import {
 import { emitChange } from '../notifications/events.js';
 import { checkIfMatch, checkIfNoneMatchForGet, checkIfNoneMatchForWrite } from '../utils/conditional.js';
 import { generateDatabrowserHtml, generateModuleDatabrowserHtml, shouldServeMashlib, DATA_ISLAND_MAX_BYTES } from '../mashlib/index.js';
-import { turtleToJsonLd } from '../rdf/turtle.js';
+import { turtleToJsonLd, jsonLdToQuads, quadsToJsonLd } from '../rdf/turtle.js';
 import { parseAcl, grantsAccess } from '../wac/parser.js';
 
 // Shared by the PUT and PATCH guards for .acl resources (#631).
@@ -1181,10 +1180,41 @@ export async function handleOptions(request, reply) {
 }
 
 /**
- * Handle PATCH request
- * Supports N3 Patch format (text/n3) and SPARQL Update for updating RDF resources
+ * PATCH handler: N3 Patch (text/n3) and SPARQL Update (application/sparql-update).
+ *
+ * The resource is loaded as quads (from its stored JSON-LD, an HTML data
+ * island, or raw Turtle), the patch is applied to the quads
+ * (src/patch/quads.js), and the result is stored again in the same form.
+ * Going through quads instead of editing the JSON-LD tree keeps every
+ * predicate and literal intact whatever prefixes the client used.
  */
+// PATCH is read-modify-write. Two patches to the same resource at once (two people
+// posting in a chat) must not interleave, or one of them is lost and the file can be
+// left with the tail of a longer earlier write. Patches to one resource run one at a
+// time: queued within this process, and under a lock file on disk across processes
+// that share the data directory (storage.withLock).
+const patchQueues = new Map(); // storagePath -> tail promise
+
 export async function handlePatch(request, reply) {
+  const { storagePath } = getRequestPaths(request);
+  const previous = patchQueues.get(storagePath) ?? Promise.resolve();
+  let release;
+  const mine = new Promise((resolve) => { release = resolve; });
+  const tail = previous.then(() => mine);
+  patchQueues.set(storagePath, tail);
+  await previous;
+  try {
+    return await storage.withLock(storagePath, () => applyPatchRequest(request, reply));
+  } catch (err) {
+    if (err.code === 'ELOCKED') return reply.code(503).header('Retry-After', '1').send({ error: 'Service Unavailable', message: 'The resource is being written by another request; retry shortly' });
+    throw err;
+  } finally {
+    release();
+    if (patchQueues.get(storagePath) === tail) patchQueues.delete(storagePath);
+  }
+}
+
+async function applyPatchRequest(request, reply) {
   // Read-only mode - block all writes
   if (request.config?.readOnly) {
     return reply.code(405).send({ error: 'Method Not Allowed', message: 'Server is in read-only mode' });
@@ -1224,203 +1254,129 @@ export async function handlePatch(request, reply) {
     }
   }
 
-  // Read existing content or start with empty JSON-LD document
-  let document;
-  let htmlWrapper = null; // Track HTML wrapper for data island re-embedding
+  const patchError = (e) => reply.code(e.status || 400).send({
+    error: e.status === 409 ? 'Conflict' : 'Bad Request',
+    message: e.message
+  });
+
+  // Parse the patch (the authorization hook may already have done so to
+  // decide between Append and Write).
+  let patch = request.parsedPatch;
+  if (!patch) {
+    const patchContent = Buffer.isBuffer(request.body) ? request.body.toString() : String(request.body ?? '');
+    try {
+      patch = parsePatch(patchContent, contentType, resourceUrl);
+    } catch (e) {
+      return patchError(e);
+    }
+  }
+
+  // Load the resource as quads, remembering how it is stored.
+  let quads = [];
+  let storedAs = 'jsonld'; // 'jsonld' | 'turtle'
+  let htmlWrapper = null; // HTML data island: { before, after }
+  let prefixes = {}; // the document's own prefix map, kept for compaction
+  let hadGraph = false; // the document used @graph (or was an array): keep that shape
 
   if (resourceExists) {
     const existingContent = await storage.read(storagePath);
     if (existingContent === null) {
       return reply.code(500).send({ error: 'Read error' });
     }
-
     const contentStr = existingContent.toString();
+    let document = null;
 
-    // Check if this is HTML with embedded JSON-LD data island
     if (contentStr.trimStart().startsWith('<!DOCTYPE') || contentStr.trimStart().startsWith('<html')) {
-      // Extract JSON-LD from <script type="application/ld+json"> tag
       const jsonLdMatch = contentStr.match(/<script\s+type=["']application\/ld\+json["']\s*>([\s\S]*?)<\/script>/i);
-
       if (!jsonLdMatch) {
-        return reply.code(409).send({
-          error: 'Conflict',
-          message: 'HTML document does not contain a JSON-LD data island'
-        });
+        return reply.code(409).send({ error: 'Conflict', message: 'HTML document does not contain a JSON-LD data island' });
       }
-
       try {
         document = safeJsonParse(jsonLdMatch[1]);
-        // Save the HTML parts for re-embedding after patch
-        const jsonLdStart = contentStr.indexOf(jsonLdMatch[0]) + jsonLdMatch[0].indexOf('>') + 1;
-        const jsonLdEnd = jsonLdStart + jsonLdMatch[1].length;
-        htmlWrapper = {
-          before: contentStr.substring(0, jsonLdStart),
-          after: contentStr.substring(jsonLdEnd)
-        };
       } catch (e) {
-        return reply.code(409).send({
-          error: 'Conflict',
-          message: 'HTML data island contains invalid JSON-LD'
-        });
+        return reply.code(409).send({ error: 'Conflict', message: 'HTML data island contains invalid JSON-LD' });
       }
+      const jsonLdStart = contentStr.indexOf(jsonLdMatch[0]) + jsonLdMatch[0].indexOf('>') + 1;
+      htmlWrapper = { before: contentStr.substring(0, jsonLdStart), after: contentStr.substring(jsonLdStart + jsonLdMatch[1].length) };
     } else {
-      // Try to parse as JSON-LD first
       try {
         document = safeJsonParse(contentStr);
       } catch (e) {
-        // Not JSON - might be Turtle, handle with RDF store for SPARQL Update
-        if (isSparqlUpdate) {
-          // Parse Turtle and apply SPARQL Update directly
-          const { Parser, Writer } = await import('n3');
+        // Not JSON: Turtle (or N3) stored as-is is patched as Turtle. Anything
+        // else is not RDF and cannot be patched.
+        const { Parser } = await import('n3');
+        try {
           const parser = new Parser({ baseIRI: resourceUrl });
-          let quads;
-          try {
-            quads = parser.parse(contentStr);
-          } catch (parseErr) {
-            return reply.code(409).send({
-              error: 'Conflict',
-              message: 'Resource is not valid Turtle: ' + parseErr.message
-            });
-          }
-
-          // Parse the SPARQL Update
-          const patchContent = Buffer.isBuffer(request.body) ? request.body.toString() : request.body;
-          let update;
-          try {
-            update = parseSparqlUpdate(patchContent, resourceUrl);
-          } catch (parseErr) {
-            return reply.code(400).send({
-              error: 'Bad Request',
-              message: 'Invalid SPARQL Update: ' + parseErr.message
-            });
-          }
-
-          // Apply deletes
-          for (const triple of update.deletes) {
-            quads = quads.filter(q => {
-              const matches = q.subject.value === triple.subject &&
-                             q.predicate.value === triple.predicate &&
-                             (q.object.value === (triple.object['@id'] || triple.object['@value'] || triple.object));
-              return !matches;
-            });
-          }
-
-          // Apply inserts
-          const { DataFactory } = await import('n3');
-          const { namedNode, literal } = DataFactory;
-          for (const triple of update.inserts) {
-            const subj = namedNode(triple.subject);
-            const pred = namedNode(triple.predicate);
-            let obj;
-            if (triple.object['@id']) {
-              obj = namedNode(triple.object['@id']);
-            } else if (typeof triple.object === 'string') {
-              obj = literal(triple.object);
-            } else {
-              obj = literal(triple.object['@value'] || triple.object);
-            }
-            quads.push(DataFactory.quad(subj, pred, obj));
-          }
-
-          // Serialize back to Turtle
-          const writer = new Writer({ prefixes: {} });
-          quads.forEach(q => writer.addQuad(q));
-          let turtleOutput;
-          writer.end((err, result) => { turtleOutput = result; });
-
-          const success = await storage.write(storagePath, Buffer.from(turtleOutput));
-          if (!success) {
-            return reply.code(500).send({ error: 'Write failed' });
-          }
-
-          const origin = request.headers.origin;
-          const headers = getAllHeaders({ isContainer: false, origin, resourceUrl });
-          Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
-
-          if (request.notificationsEnabled) {
-            emitChange(resourceUrl);
-          }
-
-          return reply.code(resourceExists ? 204 : 201).send();
+          quads = parser.parse(contentStr, null, (prefix, iri) => { prefixes[prefix] = iri.value; });
+          storedAs = 'turtle';
+        } catch (parseErr) {
+          return reply.code(409).send({ error: 'Conflict', message: 'Resource is not valid JSON-LD or Turtle and cannot be patched' });
         }
-
-        return reply.code(409).send({
-          error: 'Conflict',
-          message: 'Resource is not valid JSON-LD and cannot be patched'
-        });
       }
     }
-  } else {
-    // Create empty JSON-LD document for new resource
-    document = {
-      '@context': {},
-      '@graph': []
-    };
+
+    if (document !== null) {
+      if (typeof document !== 'object' || document === null) {
+        return reply.code(409).send({ error: 'Conflict', message: 'Resource is not valid JSON-LD and cannot be patched' });
+      }
+      // jsonLdToQuads walks documents with an @id; spread a @graph into nodes
+      // that each carry the document's context.
+      const docs = Array.isArray(document) ? document : [document];
+      if (Array.isArray(document)) hadGraph = true;
+      const nodes = [];
+      for (const doc of docs) {
+        const context = doc['@context'];
+        if (context && typeof context === 'object' && !Array.isArray(context)) {
+          for (const [k, v] of Object.entries(context)) if (typeof v === 'string' && k && !k.startsWith('@')) prefixes[k] = v;
+        }
+        if (Array.isArray(doc['@graph'])) {
+          hadGraph = true;
+          for (const node of doc['@graph']) nodes.push(context ? { '@context': context, ...node } : node);
+        }
+        if (doc['@id'] !== undefined || doc.id !== undefined) nodes.push(doc);
+      }
+      try {
+        quads = jsonLdToQuads(nodes, resourceUrl);
+      } catch (e) {
+        return reply.code(409).send({ error: 'Conflict', message: 'Resource is not valid JSON-LD and cannot be patched' });
+      }
+    }
   }
 
-  // Parse the patch
-  const patchContent = Buffer.isBuffer(request.body)
-    ? request.body.toString()
-    : request.body;
+  let updatedQuads;
+  try {
+    updatedQuads = applyPatch(quads, patch);
+  } catch (e) {
+    return patchError(e);
+  }
 
-  let updatedDocument;
-
-  if (isSparqlUpdate) {
-    // Handle SPARQL Update
-    let update;
-    try {
-      update = parseSparqlUpdate(patchContent, resourceUrl);
-    } catch (e) {
-      return reply.code(400).send({
-        error: 'Bad Request',
-        message: 'Invalid SPARQL Update: ' + e.message
-      });
-    }
-
-    try {
-      updatedDocument = applySparqlUpdate(document, update, resourceUrl);
-    } catch (e) {
-      return reply.code(409).send({
-        error: 'Conflict',
-        message: 'Failed to apply SPARQL Update: ' + e.message
-      });
-    }
+  // Serialize in the stored form.
+  let updatedContent;
+  let updatedDocument = null;
+  if (storedAs === 'turtle') {
+    const { Writer } = await import('n3');
+    const writer = new Writer({ prefixes });
+    for (const q of updatedQuads) writer.addQuad(q);
+    updatedContent = await new Promise((resolve, reject) => writer.end((err, result) => (err ? reject(err) : resolve(result))));
   } else {
-    // Handle N3 Patch
-    let patch;
-    try {
-      patch = parseN3Patch(patchContent, resourceUrl);
-    } catch (e) {
-      return reply.code(400).send({
-        error: 'Bad Request',
-        message: 'Invalid N3 Patch format: ' + e.message
-      });
+    let doc = quadsToJsonLd(updatedQuads, resourceUrl, prefixes);
+    if (Array.isArray(doc) || (hadGraph && !Array.isArray(doc['@graph']))) {
+      // Several subjects (or a document that was a @graph to begin with): one
+      // document with a shared @context and a @graph.
+      const list = Array.isArray(doc) ? doc : updatedQuads.length ? [doc] : [];
+      const context = list[0]?.['@context'] ?? doc['@context'] ?? {};
+      doc = { '@context': context, '@graph': list.map(({ '@context': _, ...node }) => node) };
     }
-
-    try {
-      updatedDocument = applyN3Patch(document, patch, resourceUrl);
-    } catch (e) {
-      return reply.code(409).send({
-        error: 'Conflict',
-        message: 'Failed to apply patch: ' + e.message
-      });
-    }
+    updatedDocument = doc;
+    const jsonLdStr = JSON.stringify(doc, null, 2);
+    updatedContent = htmlWrapper ? htmlWrapper.before + '\n' + jsonLdStr + '\n  ' + htmlWrapper.after : jsonLdStr;
   }
 
   // A patch must not leave an ACL that grants nobody access (#631).
-  if (urlPath.endsWith('.acl') && !grantsAccess(await parseAcl(updatedDocument, resourceUrl))) {
+  if (urlPath.endsWith('.acl') && updatedDocument && !grantsAccess(await parseAcl(updatedDocument, resourceUrl))) {
     return reply.code(409).send({ error: 'Conflict', message: ACL_GRANTS_NOTHING });
   }
 
-  // Write updated document
-  let updatedContent;
-  if (htmlWrapper) {
-    // Re-embed JSON-LD into HTML wrapper
-    const jsonLdStr = JSON.stringify(updatedDocument, null, 2);
-    updatedContent = htmlWrapper.before + '\n' + jsonLdStr + '\n  ' + htmlWrapper.after;
-  } else {
-    updatedContent = JSON.stringify(updatedDocument, null, 2);
-  }
   const success = await storage.write(storagePath, Buffer.from(updatedContent));
 
   if (!success) {

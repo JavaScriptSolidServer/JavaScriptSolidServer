@@ -132,6 +132,52 @@ export async function write(urlPath, content, options = {}) {
   }
 }
 
+// ---------- Cross-process resource locks ----------
+// A read-modify-write (PATCH) must not interleave with another on the same file. The
+// in-process queue in the PATCH handler covers one Node process; this lock file covers
+// several processes sharing the data directory (PM2 cluster, instances behind a proxy).
+// The lock is `.<name>.lock` next to the file (a dotfile, so never listed or served),
+// created with O_EXCL. A lock older than LOCK_STALE_MS belongs to a crashed process and
+// is broken.
+const LOCK_STALE_MS = 15000;
+const LOCK_WAIT_MS = 30000;
+
+export function lockPathFor(urlPath) {
+  const filePath = urlToPath(urlPath);
+  return path.join(path.dirname(filePath), `.${path.basename(filePath)}.lock`);
+}
+
+export async function withLock(urlPath, fn) {
+  const lockPath = lockPathFor(urlPath);
+  await fs.ensureDir(path.dirname(lockPath));
+  const started = Date.now();
+  for (;;) {
+    try {
+      const fd = await fs.open(lockPath, 'wx');
+      await fs.close(fd);
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      const stat = await fs.stat(lockPath).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+        await fs.remove(lockPath).catch(() => {});
+        continue;
+      }
+      if (Date.now() - started > LOCK_WAIT_MS) {
+        const e = new Error('Resource is locked by another writer');
+        e.code = 'ELOCKED';
+        throw e;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await fs.remove(lockPath).catch(() => {});
+  }
+}
+
 /**
  * Delete resource
  * @param {string} urlPath
