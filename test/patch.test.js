@@ -228,7 +228,7 @@ describe('PATCH Operations', () => {
       assert.ok(node, 'Should have the reg1 node');
 
       // Check rdf:type value (from 'a' keyword)
-      const rdfType = node['rdf:type'] || node['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'];
+      const rdfType = node['@type'] || node['rdf:type'] || node['http://www.w3.org/1999/02/22-rdf-syntax-ns#type'];
       assert.ok(rdfType, 'Should have rdf:type (from "a" keyword)');
       const typeId = rdfType['@id'] || rdfType;
       assert.ok(String(typeId).includes('TypeRegistration'), `rdf:type should be TypeRegistration, got ${typeId}`);
@@ -245,6 +245,173 @@ describe('PATCH Operations', () => {
       const instanceId = instance['@id'] || instance;
       assert.strictEqual(instanceId, 'https://example.com/todo/data.jsonld#this',
         'solid:instance should have full IRI preserved');
+    });
+  });
+
+  describe('Quad-based patching (chat files)', () => {
+    const base = () => `${getBaseUrl()}/patchtest/public/chat.ttl`;
+
+    it('creates a resource with typed literals, prefixed names and multi-line strings intact', async () => {
+      const patch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix dct: <http://purl.org/dc/terms/>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        @prefix foaf: <http://xmlns.com/foaf/0.1/>.
+        @prefix wf: <http://www.w3.org/2005/01/wf/flow#>.
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#>.
+        _:p a solid:InsertDeletePatch; solid:inserts {
+          <index.ttl#this> wf:message <#m1>.
+          <#m1> dct:created "2026-10-22T10:00:00Z"^^xsd:dateTime;
+            sioc:content \"\"\"two lines; with a dot.
+and a "quote" end\"\"\";
+            foaf:maker <did:nostr:5a3f1927662535ffee11f2457200f0fe6ea3fcd7b00aee4771855eda74944ede>.
+        }.`;
+      const res = await request('/patchtest/public/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch, auth: 'patchtest'
+      });
+      assertStatus(res, 201);
+
+      // The test server runs without conneg, so read the stored JSON-LD.
+      const json = await (await request('/patchtest/public/chat.ttl')).json();
+      const nodes = json['@graph'] || [json];
+      const node = nodes.find(n => String(n['@id']).includes('#m1'));
+      assert.ok(node, 'message node stored');
+      assert.deepStrictEqual(node['dc:created'], { '@value': '2026-10-22T10:00:00Z', '@type': 'xsd:dateTime' }, 'typed literal kept');
+      assert.strictEqual(node['http://rdfs.org/sioc/ns#content'], 'two lines; with a dot.\nand a "quote" end', 'multi-line content kept');
+      assert.strictEqual(node['foaf:maker']['@id'], 'did:nostr:5a3f1927662535ffee11f2457200f0fe6ea3fcd7b00aee4771855eda74944ede', 'maker kept');
+      const chat = nodes.find(n => String(n['@id']).includes('index.ttl#this'));
+      assert.ok(chat && chat['http://www.w3.org/2005/01/wf/flow#message'], 'relative IRI resolved against the resource and link kept');
+    });
+
+    it('appends to an existing day file without touching other messages', async () => {
+      const patch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch; solid:inserts { <#m2> sioc:content "second" }.`;
+      const res = await request('/patchtest/public/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch, auth: 'patchtest'
+      });
+      assertStatus(res, 204);
+      const text = JSON.stringify(await (await request('/patchtest/public/chat.ttl')).json());
+      assert.ok(text.includes('"second"'), 'new message present');
+      assert.ok(text.includes('2026-10-22T10:00:00Z'), 'earlier message still present');
+    });
+
+    it('applies a where clause once and rejects a non-matching one with 409', async () => {
+      const edit = (old, text) => `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch;
+          solid:where { <#m2> sioc:content ?old };
+          solid:deletes { <#m2> sioc:content ?old };
+          solid:inserts { <#m2> sioc:content "${text}" }.`;
+      const res = await request('/patchtest/public/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: edit('second', 'second, edited'), auth: 'patchtest'
+      });
+      assertStatus(res, 204);
+      const text = JSON.stringify(await (await request('/patchtest/public/chat.ttl')).json());
+      assert.ok(text.includes('"second, edited"') && !text.includes('"second"'), 'content replaced');
+
+      const miss = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch;
+          solid:where { <#nope> sioc:content ?old };
+          solid:deletes { <#nope> sioc:content ?old }.`;
+      const bad = await request('/patchtest/public/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: miss, auth: 'patchtest'
+      });
+      assertStatus(bad, 409);
+    });
+
+    it('rejects a delete of a triple that is not there with 409', async () => {
+      const patch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch; solid:deletes { <#m2> sioc:content "never" }.`;
+      const res = await request('/patchtest/public/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch, auth: 'patchtest'
+      });
+      assertStatus(res, 409);
+    });
+
+    it('lets the public append (insert-only) under acl:Append but not delete', async () => {
+      const acl = {
+        '@context': { acl: 'http://www.w3.org/ns/auth/acl#', foaf: 'http://xmlns.com/foaf/0.1/' },
+        '@graph': [
+          { '@id': '#owner', '@type': 'acl:Authorization', 'acl:agent': { '@id': `${getBaseUrl()}/patchtest/profile/card.jsonld#me` },
+            'acl:accessTo': { '@id': './' }, 'acl:default': { '@id': './' },
+            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Write' }, { '@id': 'acl:Control' }] },
+          { '@id': '#public', '@type': 'acl:Authorization', 'acl:agentClass': { '@id': 'foaf:Agent' },
+            'acl:accessTo': { '@id': './' }, 'acl:default': { '@id': './' },
+            'acl:mode': [{ '@id': 'acl:Read' }, { '@id': 'acl:Append' }] }
+        ]
+      };
+      let res = await request('/patchtest/public/room/.acl', {
+        method: 'PUT', headers: { 'Content-Type': 'application/ld+json' }, body: JSON.stringify(acl), auth: 'patchtest'
+      });
+      assert.ok([200, 201, 204].includes(res.status), `acl stored: ${res.status}`);
+
+      const insert = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch; solid:inserts { <#a1> sioc:content "anonymous append" }.`;
+      res = await request('/patchtest/public/room/2026/10/22/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: insert
+      });
+      assertStatus(res, 201, 'public append creates the day file');
+      res = await request('/patchtest/public/room/2026/10/22/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: insert.replace('#a1', '#a2')
+      });
+      assertStatus(res, 204, 'public append to an existing day file');
+
+      const remove = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch; solid:deletes { <#a1> sioc:content "anonymous append" }.`;
+      res = await request('/patchtest/public/room/2026/10/22/chat.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: remove
+      });
+      assertStatus(res, 401, 'deleting needs Write');
+      const text = JSON.stringify(await (await request('/patchtest/public/room/2026/10/22/chat.ttl')).json());
+      assert.ok(text.includes('#a1') && text.includes('#a2'), 'both appends kept');
+    });
+  });
+
+  describe('Concurrent patches', () => {
+    it('applies simultaneous appends to one resource without losing any', async () => {
+      const patch = (i) => `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        @prefix sioc: <http://rdfs.org/sioc/ns#>.
+        _:p a solid:InsertDeletePatch; solid:inserts { <#c${i}> sioc:content "message ${i}" }.`;
+      const results = await Promise.all(Array.from({ length: 12 }, (_, i) => request('/patchtest/public/concurrent.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch(i), auth: 'patchtest'
+      })));
+      for (const res of results) assert.ok([201, 204].includes(res.status), `status ${res.status}`);
+      const text = await (await request('/patchtest/public/concurrent.ttl')).text();
+      const doc = JSON.parse(text); // a half-overwritten file would not parse
+      const ids = (doc['@graph'] || [doc]).map(n => n['@id']);
+      for (let i = 0; i < 12; i++) assert.ok(ids.some(id => id.endsWith(`#c${i}`)), `message ${i} kept`);
+    });
+  });
+
+  describe('Empty formulas', () => {
+    it('treats an empty solid:deletes block as a no-op instead of failing', async () => {
+      const patch = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        _:p a solid:InsertDeletePatch; solid:deletes { } ; solid:inserts { <#e1> <http://example.org/p> "x" }.`;
+      const res = await request('/patchtest/public/empty-formula.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: patch, auth: 'patchtest'
+      });
+      assertStatus(res, 201);
+      const empty = `
+        @prefix solid: <http://www.w3.org/ns/solid/terms#>.
+        _:p a solid:InsertDeletePatch; solid:deletes {
+        }.`;
+      const again = await request('/patchtest/public/empty-formula.ttl', {
+        method: 'PATCH', headers: { 'Content-Type': 'text/n3' }, body: empty, auth: 'patchtest'
+      });
+      assertStatus(again, 204);
     });
   });
 

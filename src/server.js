@@ -8,10 +8,11 @@ import { STATUS_CODES } from 'node:http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { handleGet, handleHead, handlePut, handleDelete, handleOptions, handlePatch } from './handlers/resource.js';
+import { parsePatch, isInsertOnly } from './patch/quads.js';
 import { handlePost, handleCreatePod, createPodStructure } from './handlers/container.js';
 import * as storage from './storage/filesystem.js';
 import { getCorsHeaders } from './ldp/headers.js';
-import { authorize, handleUnauthorized } from './auth/middleware.js';
+import { authorize, handleUnauthorized, buildResourceUrl } from './auth/middleware.js';
 import { notificationsPlugin } from './notifications/index.js';
 import { startFileWatcher } from './notifications/events.js';
 import { idpPlugin } from './idp/index.js';
@@ -804,7 +805,22 @@ export function createServer(options = {}) {
       return;
     }
 
-    const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } = await authorize(request, reply);
+    // A PATCH that only adds triples (no deletes, no where clause) needs
+    // acl:Append, not acl:Write: Solid Protocol §Writing Resources. This is
+    // what lets a chat room grant the public Append so anyone can post but
+    // nobody can rewrite or remove what others wrote.
+    const authOptions = {};
+    if (request.method === 'PATCH') {
+      try {
+        const body = Buffer.isBuffer(request.body) ? request.body.toString() : String(request.body ?? '');
+        const parsed = parsePatch(body, request.headers['content-type'] || '', buildResourceUrl(request, request.url.split('?')[0]));
+        request.parsedPatch = parsed;
+        if (isInsertOnly(parsed)) authOptions.requiredMode = AccessMode.APPEND;
+      } catch {
+        // Malformed patches are reported by the handler; authorize as Write.
+      }
+    }
+    const { authorized, webId, wacAllow, authError, paymentRequired, paid, balance, currency } = await authorize(request, reply, authOptions);
 
     // Store webId and wacAllow on request for handlers to use
     request.webId = webId;
