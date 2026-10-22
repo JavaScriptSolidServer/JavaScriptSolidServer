@@ -150,3 +150,6 @@ src/mashlib-local/
 
 # Server data directory
 data/
+
+# Touchstone checkout and reports (scripts/lws-conformance.sh)
+.touchstone/
