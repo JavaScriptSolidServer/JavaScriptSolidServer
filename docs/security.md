@@ -60,6 +60,15 @@ refused even for the allowed names. A path that cannot be decoded, or that
 hides a path separator behind `%2F`, is refused with `400` instead of
 being passed on.
 
+### Conditional writes are atomic
+
+`If-Match` and `If-None-Match` on PUT, DELETE and PATCH are checked and acted on as one
+step. Writes to a resource are queued within the process and held under a lock file next
+to the resource (`.<name>.lock`, never listed or served) across processes that share the
+data directory. Two clients racing with the same, still valid, ETag get one `2xx` and one
+`412`; the loser's write is never silently overwritten. A request that cannot take the lock
+within 30 seconds gets `503` with `Retry-After: 1`.
+
 ## Subdomain Mode (XSS Protection)
 
 By default, JSS uses **path-based pods** (`/alice/`, `/bob/`). This is simple but has a security limitation: all pods share the same origin, making cross-site scripting (XSS) attacks possible between pods.

@@ -911,6 +911,35 @@ export async function handleHead(request, reply) {
 /**
  * Handle PUT request
  */
+// Writes to one resource run one at a time. A conditional write (If-Match,
+// If-None-Match) is stat → compare → write; two of them racing with the same, still
+// valid, ETag would both pass the check and the loser's write would vanish with a 2xx
+// (#600). PATCH is read-modify-write and was already serialised this way. So PUT,
+// DELETE and PATCH on a path are queued within this process and run under a lock file
+// on disk across processes that share the data directory (storage.withLock).
+const writeQueues = new Map(); // resolved lock path -> tail promise
+
+async function serialised(storagePath, reply, fn) {
+  // Key the queue by the same resolved file the disk lock uses, so two spellings of
+  // one resource share a queue as well as a lock.
+  const key = storage.lockPathFor(storagePath);
+  const previous = writeQueues.get(key) ?? Promise.resolve();
+  let release;
+  const mine = new Promise((resolve) => { release = resolve; });
+  const tail = previous.then(() => mine);
+  writeQueues.set(key, tail);
+  await previous;
+  try {
+    return await storage.withLock(storagePath, fn);
+  } catch (err) {
+    if (err.code === 'ELOCKED') return reply.code(503).header('Retry-After', '1').send({ error: 'Service Unavailable', message: 'The resource is being written by another request; retry shortly' });
+    throw err;
+  } finally {
+    release();
+    if (writeQueues.get(key) === tail) writeQueues.delete(key);
+  }
+}
+
 export async function handlePut(request, reply) {
   // Read-only mode - block all writes
   if (request.config?.readOnly) {
@@ -1010,6 +1039,25 @@ export async function handlePut(request, reply) {
     });
   }
 
+  // If-Match on a resource that is not there is 412 whatever happens next. Answer
+  // before taking the lock, so that a failed conditional PUT into a container that does
+  // not exist yet never creates it (the lock file lives next to the resource). This is
+  // consistent under contention: if another writer creates the resource between this
+  // probe and the lock, our 412 is the answer this request would have got had it run
+  // first, and the client's ETag cannot match a resource it has never seen. The check
+  // is repeated under the lock for the ordinary case.
+  const ifMatchEarly = request.headers['if-match'];
+  if (ifMatchEarly && !await storage.stat(storagePath)) {
+    const check = checkIfMatch(ifMatchEarly, null);
+    if (!check.ok) return reply.code(check.status).send({ error: check.error });
+  }
+
+  // From here on the request holds the resource: the precondition check and the
+  // write must not be split by another writer (#600).
+  return serialised(storagePath, reply, () => writeResource(request, reply, { storagePath, resourceUrl, contentType, connegEnabled }));
+}
+
+async function writeResource(request, reply, { storagePath, resourceUrl, contentType, connegEnabled }) {
   // Check if resource already exists and get current ETag
   const stats = await storage.stat(storagePath);
   const existed = stats !== null;
@@ -1114,15 +1162,27 @@ export async function handleDelete(request, reply) {
 
   const { storagePath, resourceUrl } = getRequestPaths(request);
 
-  // Check if resource exists and get current ETag
-  const stats = await storage.stat(storagePath);
-  if (!stats) {
+  const notFound = () => {
     const origin = request.headers.origin;
     const connegEnabled = request.connegEnabled || false;
     const headers = getNotFoundHeaders({ resourceUrl, origin, connegEnabled });
     Object.entries(headers).forEach(([k, v]) => reply.header(k, v));
     return reply.code(404).send({ error: 'Not Found' });
-  }
+  };
+
+  // A missing resource is 404 before taking the lock, so that a DELETE of nothing
+  // never creates the lock's directory. Under contention this is the answer the
+  // request would have got had it run first; the stat is repeated under the lock.
+  if (!await storage.stat(storagePath)) return notFound();
+
+  // The precondition check and the removal must not be split by another writer (#600).
+  return serialised(storagePath, reply, () => removeResource(request, reply, { storagePath, resourceUrl, notFound }));
+}
+
+async function removeResource(request, reply, { storagePath, resourceUrl, notFound }) {
+  // Stat again under the lock: the resource may have gone while we waited
+  const stats = await storage.stat(storagePath);
+  if (!stats) return notFound();
 
   // Check If-Match header (for safe deletes)
   const ifMatch = request.headers['if-match'];
@@ -1191,27 +1251,10 @@ export async function handleOptions(request, reply) {
 // PATCH is read-modify-write. Two patches to the same resource at once (two people
 // posting in a chat) must not interleave, or one of them is lost and the file can be
 // left with the tail of a longer earlier write. Patches to one resource run one at a
-// time: queued within this process, and under a lock file on disk across processes
-// that share the data directory (storage.withLock).
-const patchQueues = new Map(); // storagePath -> tail promise
-
+// time, through the same queue and lock as PUT and DELETE (see serialised above).
 export async function handlePatch(request, reply) {
   const { storagePath } = getRequestPaths(request);
-  const previous = patchQueues.get(storagePath) ?? Promise.resolve();
-  let release;
-  const mine = new Promise((resolve) => { release = resolve; });
-  const tail = previous.then(() => mine);
-  patchQueues.set(storagePath, tail);
-  await previous;
-  try {
-    return await storage.withLock(storagePath, () => applyPatchRequest(request, reply));
-  } catch (err) {
-    if (err.code === 'ELOCKED') return reply.code(503).header('Retry-After', '1').send({ error: 'Service Unavailable', message: 'The resource is being written by another request; retry shortly' });
-    throw err;
-  } finally {
-    release();
-    if (patchQueues.get(storagePath) === tail) patchQueues.delete(storagePath);
-  }
+  return serialised(storagePath, reply, () => applyPatchRequest(request, reply));
 }
 
 async function applyPatchRequest(request, reply) {
