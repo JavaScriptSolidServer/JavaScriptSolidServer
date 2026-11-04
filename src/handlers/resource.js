@@ -917,14 +917,17 @@ export async function handleHead(request, reply) {
 // (#600). PATCH is read-modify-write and was already serialised this way. So PUT,
 // DELETE and PATCH on a path are queued within this process and run under a lock file
 // on disk across processes that share the data directory (storage.withLock).
-const writeQueues = new Map(); // storagePath -> tail promise
+const writeQueues = new Map(); // resolved lock path -> tail promise
 
 async function serialised(storagePath, reply, fn) {
-  const previous = writeQueues.get(storagePath) ?? Promise.resolve();
+  // Key the queue by the same resolved file the disk lock uses, so two spellings of
+  // one resource share a queue as well as a lock.
+  const key = storage.lockPathFor(storagePath);
+  const previous = writeQueues.get(key) ?? Promise.resolve();
   let release;
   const mine = new Promise((resolve) => { release = resolve; });
   const tail = previous.then(() => mine);
-  writeQueues.set(storagePath, tail);
+  writeQueues.set(key, tail);
   await previous;
   try {
     return await storage.withLock(storagePath, fn);
@@ -933,7 +936,7 @@ async function serialised(storagePath, reply, fn) {
     throw err;
   } finally {
     release();
-    if (writeQueues.get(storagePath) === tail) writeQueues.delete(storagePath);
+    if (writeQueues.get(key) === tail) writeQueues.delete(key);
   }
 }
 
@@ -1038,7 +1041,11 @@ export async function handlePut(request, reply) {
 
   // If-Match on a resource that is not there is 412 whatever happens next. Answer
   // before taking the lock, so that a failed conditional PUT into a container that does
-  // not exist yet never creates it (the lock file lives next to the resource).
+  // not exist yet never creates it (the lock file lives next to the resource). This is
+  // consistent under contention: if another writer creates the resource between this
+  // probe and the lock, our 412 is the answer this request would have got had it run
+  // first, and the client's ETag cannot match a resource it has never seen. The check
+  // is repeated under the lock for the ordinary case.
   const ifMatchEarly = request.headers['if-match'];
   if (ifMatchEarly && !await storage.stat(storagePath)) {
     const check = checkIfMatch(ifMatchEarly, null);
@@ -1164,7 +1171,8 @@ export async function handleDelete(request, reply) {
   };
 
   // A missing resource is 404 before taking the lock, so that a DELETE of nothing
-  // never creates the lock's directory.
+  // never creates the lock's directory. Under contention this is the answer the
+  // request would have got had it run first; the stat is repeated under the lock.
   if (!await storage.stat(storagePath)) return notFound();
 
   // The precondition check and the removal must not be split by another writer (#600).

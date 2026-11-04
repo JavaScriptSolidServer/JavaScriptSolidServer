@@ -137,8 +137,9 @@ export async function write(urlPath, content, options = {}) {
 // in-process queue in the PATCH handler covers one Node process; this lock file covers
 // several processes sharing the data directory (PM2 cluster, instances behind a proxy).
 // The lock is `.<name>.lock` next to the file (a dotfile, so never listed or served),
-// created with O_EXCL. A lock older than LOCK_STALE_MS belongs to a crashed process and
-// is broken.
+// created with O_EXCL. Staleness is measured from the lock file's mtime: the holder
+// touches it every LOCK_STALE_MS / 3 while it works, so a lock older than LOCK_STALE_MS
+// belongs to a crashed process, not a slow one, and is broken.
 const LOCK_STALE_MS = 15000;
 const LOCK_WAIT_MS = 30000;
 
@@ -147,7 +148,7 @@ export function lockPathFor(urlPath) {
   return path.join(path.dirname(filePath), `.${path.basename(filePath)}.lock`);
 }
 
-export async function withLock(urlPath, fn) {
+export async function withLock(urlPath, fn, { staleMs = LOCK_STALE_MS, waitMs = LOCK_WAIT_MS } = {}) {
   const lockPath = lockPathFor(urlPath);
   await fs.ensureDir(path.dirname(lockPath));
   const started = Date.now();
@@ -159,11 +160,11 @@ export async function withLock(urlPath, fn) {
     } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       const stat = await fs.stat(lockPath).catch(() => null);
-      if (stat && Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+      if (stat && Date.now() - stat.mtimeMs > staleMs) {
         await fs.remove(lockPath).catch(() => {});
         continue;
       }
-      if (Date.now() - started > LOCK_WAIT_MS) {
+      if (Date.now() - started > waitMs) {
         const e = new Error('Resource is locked by another writer');
         e.code = 'ELOCKED';
         throw e;
@@ -171,9 +172,17 @@ export async function withLock(urlPath, fn) {
       await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40));
     }
   }
+  // Heartbeat: keep the lock's mtime fresh while fn runs, so a long write is never
+  // mistaken for a dead holder and has its lock broken from under it.
+  const beat = setInterval(() => {
+    const now = new Date();
+    fs.utimes(lockPath, now, now).catch(() => {});
+  }, Math.max(20, Math.floor(staleMs / 3)));
+  beat.unref?.();
   try {
     return await fn();
   } finally {
+    clearInterval(beat);
     await fs.remove(lockPath).catch(() => {});
   }
 }
