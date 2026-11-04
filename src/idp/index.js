@@ -25,6 +25,7 @@ import {
   handleChangePassword,
   handleDeleteAccount,
   handleAccountDeleteForm,
+  handleRefresh,
   setNoCacheClickjackHeaders,
 } from './credentials.js';
 import { handleExportAccount } from './export.js';
@@ -51,7 +52,7 @@ import { landingPage, accountDeletePage } from './views.js';
  *   purposes. Defaults to 'unknown' inside the export handler.
  */
 export async function idpPlugin(fastify, options) {
-  const { issuer, inviteOnly = false, singleUser = false, singleUserName = null, jssVersion } = options;
+  const { issuer, inviteOnly = false, singleUser = false, singleUserName = null, jssVersion, refreshMaxAge } = options;
 
   if (!issuer) {
     throw new Error('IdP requires issuer URL');
@@ -297,6 +298,21 @@ export async function idpPlugin(fastify, options) {
     }
   }, async (request, reply) => {
     return handleChangePassword(request, reply);
+  });
+
+  // POST refresh - slide a still-valid Bearer token forward (#587), so an
+  // active session outlives the fixed 3600s TTL without re-sending the
+  // password, while an idle hour still ends it. Rate limited like the rest.
+  fastify.post('/idp/refresh', {
+    config: {
+      rateLimit: {
+        max: 10,
+        timeWindow: '1 minute',
+        keyGenerator: (request) => request.ip
+      }
+    }
+  }, async (request, reply) => {
+    return handleRefresh(request, reply, issuer, { refreshMaxAge });
   });
 
   // DELETE account - authenticated owner deletes their own account (#352).

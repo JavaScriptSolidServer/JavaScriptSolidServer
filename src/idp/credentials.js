@@ -122,6 +122,10 @@ export async function handleCredentials(request, reply, issuer) {
     webid: account.webId,
     iat: now,
     exp: now + expiresIn,
+    // Original auth time — the moment the password was actually presented.
+    // Preserved across /idp/refresh so a refresh chain can be capped
+    // absolutely (a stolen token can't be renewed forever). See #587.
+    oat: now,
     jti: crypto.randomUUID(),
     client_id: 'credentials_client',
     scope: 'openid webid',
@@ -153,6 +157,107 @@ export async function handleCredentials(request, reply, issuer) {
   reply.header('Pragma', 'no-cache');
 
   return response;
+}
+
+// Absolute lifetime of a refresh chain: a token may be renewed only within
+// this window of its ORIGINAL password grant (oat), so a leaked token can't
+// be kept alive indefinitely. 24h; overridable via createServer or env.
+const DEFAULT_REFRESH_MAX_AGE = 24 * 60 * 60;
+
+/**
+ * Handle POST /idp/refresh (#587)
+ *
+ * Slides a still-valid IdP Bearer token forward: a client refreshes
+ * proactively (e.g. at 80% of TTL) so an active session outlives the fixed
+ * 3600s credential TTL, while an idle hour still ends it. Only tokens THIS
+ * IdP issued (verified against our JWKS) can be refreshed — not arbitrary
+ * credentials — and only within the absolute chain cap from the original
+ * grant.
+ *
+ * Auth: Authorization: Bearer <current, unexpired token>.
+ * Response: same shape as POST /idp/credentials.
+ */
+export async function handleRefresh(request, reply, issuer, options = {}) {
+  const maxAge = options.refreshMaxAge ?? DEFAULT_REFRESH_MAX_AGE;
+
+  const authz = request.headers['authorization'] || '';
+  const m = /^Bearer\s+(.+)$/i.exec(authz);
+  if (!m) {
+    return reply.code(401).send({
+      error: 'invalid_token',
+      error_description: 'A valid Bearer token is required to refresh',
+    });
+  }
+  const token = m[1].trim();
+
+  // Verify against our own JWKS: refresh renews IdP-issued tokens only.
+  let payload;
+  try {
+    const jwks = await getJwks();
+    const keyStore = jose.createLocalJWKSet({
+      keys: jwks.keys.map(({ d, p, q, dp, dq, qi, ...pub }) => pub), // public halves only
+    });
+    ({ payload } = await jose.jwtVerify(token, keyStore, { issuer }));
+  } catch (err) {
+    return reply.code(401).send({
+      error: 'invalid_token',
+      error_description: `Token is expired or not issued by this server: ${err.message}`,
+    });
+  }
+
+  if (!payload.webid || !payload.sub) {
+    return reply.code(401).send({
+      error: 'invalid_token',
+      error_description: 'Token lacks the webid/sub claims required to refresh',
+    });
+  }
+
+  // Absolute chain cap from the original grant. Tokens minted before #587
+  // have no `oat`; fall back to `iat` (conservative — caps from issuance).
+  const now = Math.floor(Date.now() / 1000);
+  const originalAuth = typeof payload.oat === 'number' ? payload.oat : payload.iat;
+  if (typeof originalAuth === 'number' && now - originalAuth >= maxAge) {
+    return reply.code(401).send({
+      error: 'invalid_grant',
+      error_description: 'Refresh chain has reached its maximum age; sign in again',
+    });
+  }
+
+  // Mint a fresh token for the same subject, preserving the original grant
+  // time so the cap is honored across the whole chain.
+  const expiresIn = 3600;
+  const jwks = await getJwks();
+  const signingKey = jwks.keys[0];
+  const signingAlg = signingKey.alg || 'ES256';
+  const privateKey = await jose.importJWK(signingKey, signingAlg);
+
+  const tokenPayload = {
+    iss: issuer,
+    sub: payload.sub,
+    aud: 'solid',
+    webid: payload.webid,
+    iat: now,
+    exp: now + expiresIn,
+    oat: originalAuth ?? now,
+    jti: crypto.randomUUID(),
+    client_id: 'credentials_client',
+    scope: payload.scope || 'openid webid',
+  };
+
+  const accessToken = await new jose.SignJWT(tokenPayload)
+    .setProtectedHeader({ alg: signingAlg, kid: signingKey.kid })
+    .sign(privateKey);
+
+  reply.header('Cache-Control', 'no-store');
+  reply.header('Pragma', 'no-cache');
+
+  return {
+    access_token: accessToken,
+    token_type: 'Bearer',
+    expires_in: expiresIn,
+    webid: payload.webid,
+    id: payload.sub,
+  };
 }
 
 /**
