@@ -33,6 +33,31 @@ const allowAll = async () => ({ valid: true });
 function startTrickleServer(contentType) {
   const closed = [];
   const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/redirect-trickle')) {
+      // 302 whose own body trickles forever: the hop must be abandoned
+      // AND its socket released before the next hop is fetched.
+      res.writeHead(302, { Location: '/ok', 'Content-Type': 'text/plain' });
+      res.write('moved');
+      const iv = setInterval(() => res.write(' '), TRICKLE_MS);
+      const stop = () => { clearInterval(iv); closed.push(req.url); };
+      req.on('close', stop);
+      res.on('close', stop);
+      return;
+    }
+    if (req.url.startsWith('/error-trickle')) {
+      res.writeHead(500, { 'Content-Type': contentType });
+      res.write('{');
+      const iv = setInterval(() => res.write(' '), TRICKLE_MS);
+      const stop = () => { clearInterval(iv); closed.push(req.url); };
+      req.on('close', stop);
+      res.on('close', stop);
+      return;
+    }
+    if (req.url === '/ok') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"ok":true}');
+      return;
+    }
     if (req.url.startsWith('/trickle')) {
       res.writeHead(200, { 'Content-Type': contentType });
       res.write('{');
@@ -93,6 +118,28 @@ describe('#641 auth document fetch: deadline covers the body read', () => {
     assert.ok(await waitFor(() => srv.closed.includes('/trickle/tls')), 'upstream request was not closed');
   });
 
+  it('did-nostr releases a trickling redirect body before following the hop', async () => {
+    const started = Date.now();
+    const r = await fetchWithRedirectGuard(`http://127.0.0.1:${srv.port}/redirect-trickle/did`, {
+      _validateUrl: allowAll,
+      timeout: TIMEOUT_MS,
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body, '{"ok":true}');
+    assert.ok(Date.now() - started < MAX_ELAPSED_MS);
+    assert.ok(await waitFor(() => srv.closed.includes('/redirect-trickle/did')), 'redirect hop socket was not released');
+  });
+
+  it('WebID-TLS releases a trickling error-status body', async () => {
+    clearTlsCache();
+    const cert = { modulus: 'abc123def456', exponent: '10001' };
+    const started = Date.now();
+    const verified = await verifyWebIdTls(cert, `http://127.0.0.1:${srv.port}/error-trickle/tls`, { timeout: TIMEOUT_MS });
+    assert.strictEqual(verified, false);
+    assert.ok(Date.now() - started < 200, 'should fail on the status, not wait for the deadline');
+    assert.ok(await waitFor(() => srv.closed.includes('/error-trickle/tls')), 'error response socket was not released');
+  });
+
   describe('cid-doc-fetch fetchCidDocument (stubbed fetch, trickling stream)', () => {
     const realFetch = global.fetch;
     let cancelled = 0;
@@ -100,6 +147,7 @@ describe('#641 auth document fetch: deadline covers the body read', () => {
     before(() => {
       global.fetch = async (url, init = {}) => {
         const signal = init.signal;
+        const status = String(url).includes('/err') ? 404 : 200;
         let stop;
         const stream = new ReadableStream({
           start(controller) {
@@ -116,7 +164,7 @@ describe('#641 auth document fetch: deadline covers the body read', () => {
           },
           cancel() { stop?.(); },
         });
-        return new Response(stream, { status: 200, headers: { 'content-type': 'application/ld+json' } });
+        return new Response(stream, { status, headers: { 'content-type': 'application/ld+json' } });
       };
     });
     after(() => { global.fetch = realFetch; });
@@ -131,6 +179,16 @@ describe('#641 auth document fetch: deadline covers the body read', () => {
       const elapsed = Date.now() - started;
       assert.ok(elapsed < MAX_ELAPSED_MS, `took ${elapsed}ms`);
       assert.ok(cancelled >= 1, 'body stream was not released');
+    });
+
+    it('releases a trickling body on an error status instead of leaving it to GC', async () => {
+      const started = Date.now();
+      await assert.rejects(
+        () => fetchCidDocument('https://example.com/profile/err.jsonld', { timeoutMs: TIMEOUT_MS }),
+        /HTTP 404/,
+      );
+      assert.ok(Date.now() - started < 200, 'should fail on the status, not wait for the deadline');
+      assert.ok(await waitFor(() => cancelled >= 1), 'body stream was not released');
     });
 
     it('caches the timeout as a failure like any other fetch error', async () => {

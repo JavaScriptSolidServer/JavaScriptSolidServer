@@ -8,7 +8,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
-import { readBodyWithCap } from '../utils/bounded-body.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 import { extractNostrPubkeysFromProfile } from './nostr-keys.js';
 
 // Default DID resolver endpoint
@@ -115,8 +115,9 @@ export async function fetchWithRedirectGuard(initialUrl, {
     // read (#641); the timer is cleared only after the body is in.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
+    let res;
     try {
-      const res = await fetch(currentUrl, {
+      res = await fetch(currentUrl, {
         headers: accept ? { Accept: accept } : {},
         redirect: 'manual',
         signal: controller.signal,
@@ -144,6 +145,8 @@ export async function fetchWithRedirectGuard(initialUrl, {
       return { url: currentUrl, status: res.status, headers: res.headers, body };
     } finally {
       clearTimeout(timer);
+      // Redirect hops and error exits never read the body; release the socket.
+      discardBody(res);
     }
   }
   throw new Error('fetch loop exited unexpectedly');

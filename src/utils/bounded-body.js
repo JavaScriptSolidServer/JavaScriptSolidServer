@@ -75,3 +75,15 @@ function raceAbort(promise, signal, makeError) {
     promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
   });
 }
+
+/**
+ * Release a Response whose body will not be read (redirect hop, error
+ * status, unexpected content-type, oversize, abort). Without this the
+ * upstream socket stays busy until the Response is garbage-collected,
+ * which on a trickling host means well past the deadline. Fire and
+ * forget: cancel() on undici tears the connection down at once.
+ */
+export function discardBody(res) {
+  if (!res?.body || res.bodyUsed) return;
+  try { res.body.cancel().catch(() => { /* locked or already closed */ }); } catch { /* noop */ }
+}

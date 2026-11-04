@@ -28,7 +28,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
-import { readBodyWithCap } from '../utils/bounded-body.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 
 // Default body cap (256 KB) — CID documents are tiny in practice.
 const DEFAULT_MAX_BYTES = 256 * 1024;
@@ -143,8 +143,9 @@ async function fetchCidDocumentNoCache(docUrl, opts = {}) {
     // the body has been consumed or the hop has been abandoned.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
     try {
-      const res = await fetch(currentUrl, {
+      res = await fetch(currentUrl, {
         headers: { Accept: 'application/ld+json, application/json;q=0.9' },
         redirect: 'manual',
         signal: controller.signal,
@@ -184,6 +185,9 @@ async function fetchCidDocumentNoCache(docUrl, opts = {}) {
       return JSON.parse(text);
     } finally {
       clearTimeout(timer);
+      // Every exit that did not consume the body (redirect hop, error
+      // status, bad content-type, oversize, abort) releases the socket.
+      discardBody(res);
     }
   }
   throw new Error('profile fetch loop exited unexpectedly');

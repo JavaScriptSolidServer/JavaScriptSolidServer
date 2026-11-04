@@ -12,7 +12,7 @@
  */
 
 import { turtleToJsonLd } from '../rdf/turtle.js';
-import { readBodyWithCap } from '../utils/bounded-body.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 
 // cert: ontology namespace
 const CERT_NS = 'http://www.w3.org/ns/auth/cert#';
@@ -33,8 +33,9 @@ const PROFILE_MAX_BYTES = 1024 * 1024; // 1 MB — profiles are tiny
 async function fetchProfileText(url, options = {}, timeout = PROFILE_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  let response;
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
+    response = await fetch(url, { ...options, signal: controller.signal });
     if (!response.ok) {
       throw new Error(`Failed to fetch WebID profile: ${response.status}`);
     }
@@ -47,6 +48,8 @@ async function fetchProfileText(url, options = {}, timeout = PROFILE_FETCH_TIMEO
     return { contentType, text };
   } finally {
     clearTimeout(timer);
+    // An error status or abort leaves the body unread; release the socket.
+    discardBody(response);
   }
 }
 
