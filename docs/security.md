@@ -69,6 +69,10 @@ data directory. Two clients racing with the same, still valid, ETag get one `2xx
 `412`; the loser's write is never silently overwritten. A request that cannot take the lock
 within 30 seconds gets `503` with `Retry-After: 1`.
 
+### Identity document fetches are bounded
+
+Authentication can make the server fetch a document it does not control: a CID document for LWS-CID tokens, a DID document and WebID back-link for did:nostr, or a WebID profile for WebID-TLS. Every such fetch runs under one deadline (5 seconds per hop) that covers the connection, the response headers **and** the body read, plus a byte cap and the SSRF guard. A host that answers promptly and then trickles the body cannot hold an authentication attempt, or the outbound socket, open beyond the deadline; the fetch fails, the failure is cached briefly, and the request is answered as unauthenticated.
+
 ## Subdomain Mode (XSS Protection)
 
 By default, JSS uses **path-based pods** (`/alice/`, `/bob/`). This is simple but has a security limitation: all pods share the same origin, making cross-site scripting (XSS) attacks possible between pods.

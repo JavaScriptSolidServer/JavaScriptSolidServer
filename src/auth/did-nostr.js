@@ -8,6 +8,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { readBodyWithCap } from '../utils/bounded-body.js';
 import { extractNostrPubkeysFromProfile } from './nostr-keys.js';
 
 // Default DID resolver endpoint
@@ -68,6 +69,7 @@ function rateLimitedError(key, message) {
 //     bypass the initial validateExternalUrl check)
 //   - cross-origin redirects refused (open-redirect → arbitrary host)
 //   - response size cap before reading the body
+//   - the per-hop timeout covers the body read too (#641)
 const MAX_REDIRECTS = 5;
 const DEFAULT_FETCH_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles are tiny
@@ -109,60 +111,40 @@ export async function fetchWithRedirectGuard(initialUrl, {
     if (!validation.valid) {
       throw new Error(`SSRF protection: ${validation.error}`);
     }
+    // One deadline covers the connection, the headers AND the body
+    // read (#641); the timer is cleared only after the body is in.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
-    let res;
     try {
-      res = await fetch(currentUrl, {
+      const res = await fetch(currentUrl, {
         headers: accept ? { Accept: accept } : {},
         redirect: 'manual',
         signal: controller.signal,
       });
+      if (res.status >= 300 && res.status < 400) {
+        if (isLastAllowedHop) throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+        const loc = res.headers.get('location');
+        if (!loc) throw new Error(`redirect ${res.status} without Location`);
+        const nextUrl = new URL(loc, currentUrl).toString();
+        const nextOrigin = new URL(nextUrl).origin;
+        if (nextOrigin !== originalOrigin) {
+          throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
+        }
+        currentUrl = nextUrl;
+        continue;
+      }
+      // Cap the body before reading. Content-Length pre-check rejects
+      // a server that advertises an oversized response; the streaming
+      // cap rejects servers that lie about Content-Length.
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        throw new Error(`response too large (Content-Length=${declared} > ${maxBytes})`);
+      }
+      const body = await readBodyWithCap(res, { maxBytes, signal: controller.signal });
+      return { url: currentUrl, status: res.status, headers: res.headers, body };
     } finally {
       clearTimeout(timer);
     }
-    if (res.status >= 300 && res.status < 400) {
-      if (isLastAllowedHop) throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
-      const loc = res.headers.get('location');
-      if (!loc) throw new Error(`redirect ${res.status} without Location`);
-      const nextUrl = new URL(loc, currentUrl).toString();
-      const nextOrigin = new URL(nextUrl).origin;
-      if (nextOrigin !== originalOrigin) {
-        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
-      }
-      currentUrl = nextUrl;
-      continue;
-    }
-    // Cap the body before reading. Content-Length pre-check rejects
-    // a server that advertises an oversized response; the streaming
-    // cap rejects servers that lie about Content-Length.
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new Error(`response too large (Content-Length=${declared} > ${maxBytes})`);
-    }
-    const reader = res.body?.getReader?.();
-    let body = '';
-    if (!reader) {
-      body = await res.text();
-      if (Buffer.byteLength(body, 'utf8') > maxBytes) {
-        throw new Error(`response too large (>${maxBytes} bytes)`);
-      }
-    } else {
-      const chunks = [];
-      let total = 0;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > maxBytes) {
-          try { await reader.cancel(); } catch { /* noop */ }
-          throw new Error(`response too large (>${maxBytes} bytes)`);
-        }
-        chunks.push(value);
-      }
-      body = Buffer.concat(chunks).toString('utf8');
-    }
-    return { url: currentUrl, status: res.status, headers: res.headers, body };
   }
   throw new Error('fetch loop exited unexpectedly');
 }
