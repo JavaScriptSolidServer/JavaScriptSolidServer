@@ -372,6 +372,14 @@ built-in `/storage/` and `/db/` routes. Everything outside the declared
 prefixes keeps full WAC enforcement. Entries must start with `/` and be
 longer than `/`; anything else is ignored.
 
+A path under an app prefix that the application did **not** register is a
+404 inside the app's namespace
+([#611](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/611)):
+the LDP handlers never read or write pod storage below an app path, since
+WAC has already been skipped there. Files an app wants served from the pod
+belong outside its prefix (for example `/public/apps/<name>/`), where WAC
+applies.
+
 Because the WAC hook is also what populates `request.webId`, requests under
 an app path never carry it — don't rely on `request.webId` in app handlers.
 Resolve identity with the public accessor

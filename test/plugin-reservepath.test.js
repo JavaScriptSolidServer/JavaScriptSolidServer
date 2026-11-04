@@ -175,6 +175,17 @@ describe('api.reservePath (#602)', () => {
     assert.ok([401, 403].includes(put.status), `expected WAC rejection, got ${put.status}`);
   });
 
+  // #611 residual after #607: a widened method at a path the shim did NOT
+  // register must not fall through to the WAC-skipped LDP wildcard.
+  it('a widened method at an unhandled reserved path is 404, not a storage write', async () => {
+    await start([{ id: 'writer', module: path.join(FIXTURE_DIR, 'write-shim.js'), prefix: '/w' }]);
+    await fs.ensureDir(path.join(TEST_DATA_DIR, 'api'));
+    const res = await fetch(`${baseUrl}/api/unhandled`, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: 'planted' });
+    assert.strictEqual(res.status, 404);
+    const planted = await fs.readdir(path.join(TEST_DATA_DIR, 'api'));
+    assert.deepStrictEqual(planted, [], `nothing may be written: ${planted.join(', ')}`);
+  });
+
   it('WAC still guards unreserved paths', async () => {
     await start(MAIN());
     const res = await fetch(`${baseUrl}/somepod/private/x`, { method: 'PUT', body: 'data' });
