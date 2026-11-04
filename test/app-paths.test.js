@@ -23,6 +23,8 @@ import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from '../src/server.js';
 import fs from 'fs-extra';
+import path from 'path';
+import os from 'os';
 
 const TEST_DATA_DIR = './test-data-app-paths';
 
@@ -30,18 +32,38 @@ let server;
 let baseUrl;
 let originalDataRoot;
 
-async function startWith(appPaths) {
+// A plugin that mounts at its prefix but handles ONE path only (#611).
+const PARTIAL_PLUGIN = `export async function activate(api) {
+  api.fastify.get(api.prefix + '/echo', async () => ({ app: true, plugin: true }));
+}
+`;
+const FIXTURE_DIR = path.join(os.tmpdir(), 'jss-app-paths-fixture');
+
+// routes: 'all' mounts the app on the prefix and its whole subtree (the
+// #582 shape); 'partial' registers one route only, leaving the rest of
+// the subtree unhandled (#611); 'plugin' loads PARTIAL_PLUGIN instead.
+async function startWith(appPaths, routes = 'all') {
   await fs.emptyDir(TEST_DATA_DIR);
+  if (routes === 'plugin') {
+    await fs.ensureDir(FIXTURE_DIR);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'partial.js'), PARTIAL_PLUGIN);
+  }
   server = createServer({
     logger: false,
     forceCloseConnections: true,
     root: TEST_DATA_DIR,
-    appPaths,
+    ...(routes === 'plugin'
+      ? { plugins: [{ id: 'partial', module: path.join(FIXTURE_DIR, 'partial.js'), prefix: '/myapp' }] }
+      : { appPaths }),
   });
   // An app in the #206 plugin-zero shape: routes registered on the returned
   // instance, answering with its own status codes (its own "auth").
-  server.all('/myapp', echo);
-  server.all('/myapp/*', echo);
+  if (routes === 'all') {
+    server.all('/myapp', echo);
+    server.all('/myapp/*', echo);
+  } else if (routes === 'partial') {
+    server.get('/myapp/echo', echo);
+  }
   async function echo(request, reply) {
     reply.code(200).send({
       app: true,
@@ -147,5 +169,49 @@ describe('appPaths application mount points (#582)', () => {
     const res = await fetch(`${baseUrl}/myapp/api/action`, { method: 'POST' });
     assert.ok(res.status === 401 || res.status === 403,
       `expected WAC rejection with no appPaths, got ${res.status}`);
+  });
+
+  // #611: WAC is skipped under an app path, and the LDP wildcards sit
+  // beneath every app route. A path the app never registered must be a
+  // 404 inside the app's namespace, never an unauthenticated storage
+  // read or write.
+  describe('unhandled paths under an app subtree (#611)', () => {
+    for (const shape of ['partial', 'plugin']) {
+      it(`${shape}: anonymous PUT below the prefix is 404 and writes nothing`, async () => {
+        await startWith(['/myapp'], shape);
+        // The container exists, which is when the fall-through used to 201.
+        await fs.ensureDir(path.join(TEST_DATA_DIR, 'myapp'));
+        const res = await fetch(`${baseUrl}/myapp/planted.txt`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain' },
+          body: 'planted',
+        });
+        assert.strictEqual(res.status, 404);
+        assert.strictEqual(await fs.pathExists(path.join(TEST_DATA_DIR, 'myapp', 'planted.txt')), false);
+      });
+
+      it(`${shape}: anonymous GET, DELETE and PATCH below the prefix are 404, the app route still answers`, async () => {
+        await startWith(['/myapp'], shape);
+        await fs.ensureDir(path.join(TEST_DATA_DIR, 'myapp'));
+        await fs.writeFile(path.join(TEST_DATA_DIR, 'myapp', 'secret.txt'), 'private');
+        for (const method of ['GET', 'DELETE', 'PATCH']) {
+          const res = await fetch(`${baseUrl}/myapp/secret.txt`, {
+            method,
+            ...(method === 'PATCH' ? { headers: { 'Content-Type': 'text/n3' }, body: '' } : {}),
+          });
+          assert.strictEqual(res.status, 404, `${method} should be 404`);
+        }
+        assert.strictEqual(await fs.readFile(path.join(TEST_DATA_DIR, 'myapp', 'secret.txt'), 'utf8'), 'private');
+        const ok = await fetch(`${baseUrl}/myapp/echo`);
+        assert.strictEqual(ok.status, 200);
+        assert.strictEqual((await ok.json()).app, true);
+      });
+    }
+
+    it('a sibling LDP path is untouched: PUT is still 401, not 404', async () => {
+      await startWith(['/myapp'], 'partial');
+      const res = await fetch(`${baseUrl}/elsewhere.txt`, { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: 'x' });
+      assert.strictEqual(res.status, 401);
+    });
   });
 });

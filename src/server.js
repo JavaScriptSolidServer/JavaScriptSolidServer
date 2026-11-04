@@ -799,9 +799,19 @@ export function createServer(options = {}) {
         (webrtcEnabled && (request.url === webrtcPath || request.url.startsWith(webrtcPath + '?'))) ||
         (terminalEnabled && (request.url === '/.terminal' || request.url.startsWith('/.terminal?'))) ||
         (tunnelEnabled && (request.url === tunnelPath || request.url.startsWith(tunnelPath + '?') || request.url.startsWith('/tunnel/'))) ||
-        appPaths.some(p => request.url === p || request.url.startsWith(p + '/') || request.url.startsWith(p + '?')) ||
-        appPathPatterns.some(m => m.methods.has(request.method) && m.re.test(request.url)) ||
         mashlibPaths.some(p => request.url === p || request.url.startsWith(p + '.'))) {
+      return;
+    }
+
+    // An app-owned subtree (appPaths from createServer or a plugin prefix,
+    // #582; reservePath claims, #602) skips WAC because the app owns auth
+    // there. The LDP wildcards ('/*') sit beneath every app route, so a
+    // path the app did NOT register would otherwise fall through to pod
+    // storage with WAC already skipped: an unauthenticated read or write
+    // (#611). Mark the request; the wildcard handlers answer 404 for it.
+    if (appPaths.some(p => request.url === p || request.url.startsWith(p + '/') || request.url.startsWith(p + '?')) ||
+        appPathPatterns.some(m => m.methods.has(request.method) && m.re.test(request.url))) {
+      request.appPathExempt = true;
       return;
     }
 
@@ -965,15 +975,27 @@ export function createServer(options = {}) {
 
   // LDP routes - using wildcard routing
   // Read operations - no rate limit (handled by bodyLimit)
-  fastify.get('/*', handleGet);
-  fastify.head('/*', handleHead);
+  // The LDP wildcards never serve an app-owned subtree (#611): a request
+  // the WAC hook exempted as app-owned (request.appPathExempt) reaches
+  // these only because the app registered no route for it, so it is a 404
+  // inside the app's namespace, not a storage read or write.
+  const notAppRoute = async (request, reply) => {
+    if (!request.appPathExempt) return;
+    reply.code(404).send({
+      error: 'Not Found',
+      message: `${request.method} ${request.url.split('?')[0]} is inside an application path but the application registered no route for it`,
+    });
+    return reply;
+  };
+  fastify.get('/*', { preHandler: notAppRoute }, handleGet);
+  fastify.head('/*', { preHandler: notAppRoute }, handleHead);
   fastify.options('/*', handleOptions);
 
   // Write operations - rate limited
-  fastify.put('/*', writeRateLimit, handlePut);
-  fastify.delete('/*', writeRateLimit, handleDelete);
-  fastify.post('/*', writeRateLimit, handlePost);
-  fastify.patch('/*', writeRateLimit, handlePatch);
+  fastify.put('/*', { ...writeRateLimit, preHandler: notAppRoute }, handlePut);
+  fastify.delete('/*', { ...writeRateLimit, preHandler: notAppRoute }, handleDelete);
+  fastify.post('/*', { ...writeRateLimit, preHandler: notAppRoute }, handlePost);
+  fastify.patch('/*', { ...writeRateLimit, preHandler: notAppRoute }, handlePatch);
 
   // Root route
   fastify.get('/', handleGet);
