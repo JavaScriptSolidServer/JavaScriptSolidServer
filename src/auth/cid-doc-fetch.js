@@ -18,7 +18,9 @@
  *   - Body size cap enforced via Content-Length up front AND a
  *     streaming reader cap (cancel on overage), so untrusted hosts
  *     can't OOM us with a large payload.
- *   - 5-second timeout per request via AbortController.
+ *   - 5-second timeout per request via AbortController, covering the
+ *     connection, the headers AND the body read, so a host that
+ *     trickles the body cannot hold the auth attempt open (#641).
  *
  * Throws on any failure; callers convert to whatever they want
  * (LWS-CID surfaces the error string, the NIP-98 path treats
@@ -26,6 +28,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 
 // Default body cap (256 KB) — CID documents are tiny in practice.
 const DEFAULT_MAX_BYTES = 256 * 1024;
@@ -73,6 +76,8 @@ export function _clearProfileCacheForTests() {
  *   claims or is derived from a request).
  * @param {object} [opts]
  * @param {number} [opts.maxBytes=DEFAULT_MAX_BYTES]
+ * @param {number} [opts.timeoutMs=FETCH_TIMEOUT_MS] - deadline per hop,
+ *   covering headers and body
  * @returns {Promise<object>} parsed JSON
  * @throws on any validation, network, redirect, size, or parse failure
  */
@@ -118,6 +123,7 @@ function setCached(url, entry) {
 
 async function fetchCidDocumentNoCache(docUrl, opts = {}) {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const timeoutMs = opts.timeoutMs ?? FETCH_TIMEOUT_MS;
   const originalOrigin = new URL(docUrl).origin;
   let currentUrl = docUrl;
 
@@ -132,8 +138,11 @@ async function fetchCidDocumentNoCache(docUrl, opts = {}) {
       throw new Error(`SSRF protection: ${validation.error}`);
     }
 
+    // One deadline covers the connection, the headers AND the body
+    // read (#641). The timer is only cleared in the finally, after
+    // the body has been consumed or the hop has been abandoned.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
     try {
       res = await fetch(currentUrl, {
@@ -141,62 +150,46 @@ async function fetchCidDocumentNoCache(docUrl, opts = {}) {
         redirect: 'manual',
         signal: controller.signal,
       });
+
+      if (res.status >= 300 && res.status < 400) {
+        if (isLastAllowedHop) {
+          throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+        }
+        const loc = res.headers.get('location');
+        if (!loc) throw new Error(`redirect ${res.status} without Location`);
+        const nextUrl = new URL(loc, currentUrl).toString();
+        const nextOrigin = new URL(nextUrl).origin;
+        if (nextOrigin !== originalOrigin) {
+          throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
+        }
+        currentUrl = nextUrl;
+        continue;
+      }
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const ct = (res.headers.get('content-type') || '').toLowerCase();
+      if (!ct.includes('json')) {
+        throw new Error(`unexpected content-type: ${ct || '(none)'}`);
+      }
+
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        throw new Error(`CID document too large (Content-Length=${declared} > ${maxBytes})`);
+      }
+      const text = await readBodyWithCap(res, {
+        maxBytes,
+        signal: controller.signal,
+        label: 'CID document',
+      });
+      return JSON.parse(text);
     } finally {
       clearTimeout(timer);
+      // Every exit that did not consume the body (redirect hop, error
+      // status, bad content-type, oversize, abort) releases the socket.
+      discardBody(res);
     }
-
-    if (res.status >= 300 && res.status < 400) {
-      if (isLastAllowedHop) {
-        throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
-      }
-      const loc = res.headers.get('location');
-      if (!loc) throw new Error(`redirect ${res.status} without Location`);
-      const nextUrl = new URL(loc, currentUrl).toString();
-      const nextOrigin = new URL(nextUrl).origin;
-      if (nextOrigin !== originalOrigin) {
-        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
-      }
-      currentUrl = nextUrl;
-      continue;
-    }
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (!ct.includes('json')) {
-      throw new Error(`unexpected content-type: ${ct || '(none)'}`);
-    }
-
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new Error(`CID document too large (Content-Length=${declared} > ${maxBytes})`);
-    }
-    const text = await readBodyWithCap(res, maxBytes);
-    return JSON.parse(text);
   }
   throw new Error('profile fetch loop exited unexpectedly');
 }
 
-async function readBodyWithCap(res, maxBytes) {
-  const reader = res.body?.getReader?.();
-  if (!reader) {
-    const text = await res.text();
-    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
-      throw new Error(`CID document too large (>${maxBytes} bytes)`);
-    }
-    return text;
-  }
-  const chunks = [];
-  let total = 0;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      try { await reader.cancel(); } catch { /* noop */ }
-      throw new Error(`CID document too large (>${maxBytes} bytes)`);
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))).toString('utf8');
-}

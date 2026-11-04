@@ -12,6 +12,7 @@
  */
 
 import { turtleToJsonLd } from '../rdf/turtle.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 
 // cert: ontology namespace
 const CERT_NS = 'http://www.w3.org/ns/auth/cert#';
@@ -20,19 +21,35 @@ const CERT_NS = 'http://www.w3.org/ns/auth/cert#';
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+const PROFILE_FETCH_TIMEOUT_MS = 5000;
+const PROFILE_MAX_BYTES = 1024 * 1024; // 1 MB — profiles are tiny
+
 /**
- * Fetch with timeout
+ * Fetch a profile document as text under one deadline that covers
+ * the connection, the headers AND the body read (#641), plus a byte
+ * cap. Returns `{ contentType, text }`; throws on HTTP error, timeout
+ * or overage.
  */
-async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+async function fetchProfileText(url, options = {}, timeout = PROFILE_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const timer = setTimeout(() => controller.abort(), timeout);
+  let response;
   try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    clearTimeout(id);
-    return response;
-  } catch (err) {
-    clearTimeout(id);
-    throw err;
+    response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch WebID profile: ${response.status}`);
+    }
+    const contentType = response.headers.get('content-type') || '';
+    const text = await readBodyWithCap(response, {
+      maxBytes: PROFILE_MAX_BYTES,
+      signal: controller.signal,
+      label: 'WebID profile',
+    });
+    return { contentType, text };
+  } finally {
+    clearTimeout(timer);
+    // An error status or abort leaves the body unread; release the socket.
+    discardBody(response);
   }
 }
 
@@ -134,21 +151,16 @@ function parseKeyObject(keyObj) {
 /**
  * Fetch and parse WebID profile
  * @param {string} webId - WebID URI to fetch
+ * @param {object} [opts]
+ * @param {number} [opts.timeout] - deadline in ms covering headers and body
  * @returns {Promise<Array<{modulus: string, exponent: string}>>}
  */
-async function fetchProfileKeys(webId) {
-  const response = await fetchWithTimeout(webId, {
+async function fetchProfileKeys(webId, { timeout } = {}) {
+  const { contentType, text } = await fetchProfileText(webId, {
     headers: {
       'Accept': 'application/ld+json, text/turtle, application/json'
     }
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch WebID profile: ${response.status}`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  const text = await response.text();
+  }, timeout);
 
   let jsonLd;
 
@@ -175,9 +187,11 @@ async function fetchProfileKeys(webId) {
  * Verify certificate against WebID profile
  * @param {object} certificate - Node.js TLS certificate object
  * @param {string} webId - WebID URI
+ * @param {object} [opts]
+ * @param {number} [opts.timeout] - profile fetch deadline in ms (tests)
  * @returns {Promise<boolean>} True if certificate matches profile
  */
-export async function verifyWebIdTls(certificate, webId) {
+export async function verifyWebIdTls(certificate, webId, { timeout } = {}) {
   if (!certificate.modulus || !certificate.exponent) {
     throw new Error('Certificate missing modulus or exponent');
   }
@@ -195,7 +209,7 @@ export async function verifyWebIdTls(certificate, webId) {
   }
 
   try {
-    const profileKeys = await fetchProfileKeys(webId);
+    const profileKeys = await fetchProfileKeys(webId, { timeout });
 
     // Check if any key matches
     const verified = profileKeys.some(key =>

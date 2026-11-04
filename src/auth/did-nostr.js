@@ -8,6 +8,7 @@
  */
 
 import { validateExternalUrl } from '../utils/ssrf.js';
+import { readBodyWithCap, discardBody } from '../utils/bounded-body.js';
 import { extractNostrPubkeysFromProfile } from './nostr-keys.js';
 
 // Default DID resolver endpoint
@@ -68,6 +69,7 @@ function rateLimitedError(key, message) {
 //     bypass the initial validateExternalUrl check)
 //   - cross-origin redirects refused (open-redirect → arbitrary host)
 //   - response size cap before reading the body
+//   - the per-hop timeout covers the body read too (#641)
 const MAX_REDIRECTS = 5;
 const DEFAULT_FETCH_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles are tiny
@@ -75,7 +77,8 @@ const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles
 /**
  * Fetch with a timeout, manual redirect following, SSRF re-validation
  * per hop, and a body-size cap. Returns `{ url, status, headers, body }`
- * — `body` is a string (caller decides whether to JSON-parse).
+ * — `body` is a string (caller decides whether to JSON-parse), and is
+ * empty on a non-2xx status: error bodies are not read.
  *
  * Throws on validation, network, redirect, or size failures so the
  * resolver can swallow them uniformly into a null/false return.
@@ -109,6 +112,8 @@ export async function fetchWithRedirectGuard(initialUrl, {
     if (!validation.valid) {
       throw new Error(`SSRF protection: ${validation.error}`);
     }
+    // One deadline covers the connection, the headers AND the body
+    // read (#641); the timer is cleared only after the body is in.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     let res;
@@ -118,51 +123,39 @@ export async function fetchWithRedirectGuard(initialUrl, {
         redirect: 'manual',
         signal: controller.signal,
       });
+      if (res.status >= 300 && res.status < 400) {
+        if (isLastAllowedHop) throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
+        const loc = res.headers.get('location');
+        if (!loc) throw new Error(`redirect ${res.status} without Location`);
+        const nextUrl = new URL(loc, currentUrl).toString();
+        const nextOrigin = new URL(nextUrl).origin;
+        if (nextOrigin !== originalOrigin) {
+          throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
+        }
+        currentUrl = nextUrl;
+        continue;
+      }
+      // Error statuses fail fast with an empty body: callers only use
+      // `body` on 2xx, and returning here lets discardBody() in the
+      // finally cancel a trickling error page at once instead of
+      // reading it until the deadline.
+      if (!res.ok) {
+        return { url: currentUrl, status: res.status, headers: res.headers, body: '' };
+      }
+      // Cap the body before reading. Content-Length pre-check rejects
+      // a server that advertises an oversized response; the streaming
+      // cap rejects servers that lie about Content-Length.
+      const declared = Number(res.headers.get('content-length'));
+      if (Number.isFinite(declared) && declared > maxBytes) {
+        throw new Error(`response too large (Content-Length=${declared} > ${maxBytes})`);
+      }
+      const body = await readBodyWithCap(res, { maxBytes, signal: controller.signal });
+      return { url: currentUrl, status: res.status, headers: res.headers, body };
     } finally {
       clearTimeout(timer);
+      // Redirect hops and error exits never read the body; release the socket.
+      discardBody(res);
     }
-    if (res.status >= 300 && res.status < 400) {
-      if (isLastAllowedHop) throw new Error(`too many redirects (>${MAX_REDIRECTS})`);
-      const loc = res.headers.get('location');
-      if (!loc) throw new Error(`redirect ${res.status} without Location`);
-      const nextUrl = new URL(loc, currentUrl).toString();
-      const nextOrigin = new URL(nextUrl).origin;
-      if (nextOrigin !== originalOrigin) {
-        throw new Error(`cross-origin redirect refused: ${originalOrigin} → ${nextOrigin}`);
-      }
-      currentUrl = nextUrl;
-      continue;
-    }
-    // Cap the body before reading. Content-Length pre-check rejects
-    // a server that advertises an oversized response; the streaming
-    // cap rejects servers that lie about Content-Length.
-    const declared = Number(res.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new Error(`response too large (Content-Length=${declared} > ${maxBytes})`);
-    }
-    const reader = res.body?.getReader?.();
-    let body = '';
-    if (!reader) {
-      body = await res.text();
-      if (Buffer.byteLength(body, 'utf8') > maxBytes) {
-        throw new Error(`response too large (>${maxBytes} bytes)`);
-      }
-    } else {
-      const chunks = [];
-      let total = 0;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > maxBytes) {
-          try { await reader.cancel(); } catch { /* noop */ }
-          throw new Error(`response too large (>${maxBytes} bytes)`);
-        }
-        chunks.push(value);
-      }
-      body = Buffer.concat(chunks).toString('utf8');
-    }
-    return { url: currentUrl, status: res.status, headers: res.headers, body };
   }
   throw new Error('fetch loop exited unexpectedly');
 }
