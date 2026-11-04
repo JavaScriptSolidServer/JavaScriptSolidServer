@@ -43,6 +43,23 @@ Save this as `data/.acl` (replacing `your-domain.com` with your actual domain).
 
 See [Issue #32](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/32) for background.
 
+### Dotfiles
+
+Paths whose segments start with a dot are refused with `403` unless the
+segment is one of the Solid-specific names (`.well-known`, `.acl`, `.meta`,
+`.pods`, `.notifications`, `.account`). This keeps `.git/`, `.env`,
+`.htpasswd` and similar files out of reach over HTTP even when they sit
+inside a pod. Git smart-HTTP, the pay routes and app plugins mounted at a
+dot prefix are allowed through on their own terms.
+
+The check runs on the percent-decoded path, segment by segment, and the
+storage lookup applies the same rule, so `%2Egit` is `.git` on both sides
+and neither can be talked past the other (#639). A dot has to be literal
+in the request: a segment that only starts with a dot after decoding is
+refused even for the allowed names. A path that cannot be decoded, or that
+hides a path separator behind `%2F`, is refused with `400` instead of
+being passed on.
+
 ## Subdomain Mode (XSS Protection)
 
 By default, JSS uses **path-based pods** (`/alice/`, `/bob/`). This is simple but has a security limitation: all pods share the same origin, making cross-site scripting (XSS) attacks possible between pods.
