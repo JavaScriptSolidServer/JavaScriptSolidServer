@@ -77,7 +77,8 @@ const DEFAULT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB — DID docs / WebID profiles
 /**
  * Fetch with a timeout, manual redirect following, SSRF re-validation
  * per hop, and a body-size cap. Returns `{ url, status, headers, body }`
- * — `body` is a string (caller decides whether to JSON-parse).
+ * — `body` is a string (caller decides whether to JSON-parse), and is
+ * empty on a non-2xx status: error bodies are not read.
  *
  * Throws on validation, network, redirect, or size failures so the
  * resolver can swallow them uniformly into a null/false return.
@@ -133,6 +134,13 @@ export async function fetchWithRedirectGuard(initialUrl, {
         }
         currentUrl = nextUrl;
         continue;
+      }
+      // Error statuses fail fast with an empty body: callers only use
+      // `body` on 2xx, and returning here lets discardBody() in the
+      // finally cancel a trickling error page at once instead of
+      // reading it until the deadline.
+      if (!res.ok) {
+        return { url: currentUrl, status: res.status, headers: res.headers, body: '' };
       }
       // Cap the body before reading. Content-Length pre-check rejects
       // a server that advertises an oversized response; the streaming

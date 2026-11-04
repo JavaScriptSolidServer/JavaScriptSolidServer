@@ -130,6 +130,18 @@ describe('#641 auth document fetch: deadline covers the body read', () => {
     assert.ok(await waitFor(() => srv.closed.includes('/redirect-trickle/did')), 'redirect hop socket was not released');
   });
 
+  it('did-nostr returns an error status at once and releases its trickling body', async () => {
+    const started = Date.now();
+    const r = await fetchWithRedirectGuard(`http://127.0.0.1:${srv.port}/error-trickle/did`, {
+      _validateUrl: allowAll,
+      timeout: TIMEOUT_MS,
+    });
+    assert.strictEqual(r.status, 500);
+    assert.strictEqual(r.body, '');
+    assert.ok(Date.now() - started < 200, 'should return on the status, not wait for the deadline');
+    assert.ok(await waitFor(() => srv.closed.includes('/error-trickle/did')), 'error response socket was not released');
+  });
+
   it('WebID-TLS releases a trickling error-status body', async () => {
     clearTlsCache();
     const cert = { modulus: 'abc123def456', exponent: '10001' };
