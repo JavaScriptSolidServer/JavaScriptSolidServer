@@ -37,7 +37,7 @@ const PARTIAL_PLUGIN = `export async function activate(api) {
   api.fastify.get(api.prefix + '/echo', async () => ({ app: true, plugin: true }));
 }
 `;
-const FIXTURE_DIR = path.join(os.tmpdir(), 'jss-app-paths-fixture');
+let fixtureDir; // a fresh temp dir per run, so parallel runs never collide
 
 // routes: 'all' mounts the app on the prefix and its whole subtree (the
 // #582 shape); 'partial' registers one route only, leaving the rest of
@@ -45,15 +45,15 @@ const FIXTURE_DIR = path.join(os.tmpdir(), 'jss-app-paths-fixture');
 async function startWith(appPaths, routes = 'all') {
   await fs.emptyDir(TEST_DATA_DIR);
   if (routes === 'plugin') {
-    await fs.ensureDir(FIXTURE_DIR);
-    await fs.writeFile(path.join(FIXTURE_DIR, 'partial.js'), PARTIAL_PLUGIN);
+    fixtureDir ??= await fs.mkdtemp(path.join(os.tmpdir(), 'jss-app-paths-'));
+    await fs.writeFile(path.join(fixtureDir, 'partial.js'), PARTIAL_PLUGIN);
   }
   server = createServer({
     logger: false,
     forceCloseConnections: true,
     root: TEST_DATA_DIR,
     ...(routes === 'plugin'
-      ? { plugins: [{ id: 'partial', module: path.join(FIXTURE_DIR, 'partial.js'), prefix: '/myapp' }] }
+      ? { plugins: [{ id: 'partial', module: path.join(fixtureDir, 'partial.js'), prefix: '/myapp' }] }
       : { appPaths }),
   });
   // An app in the #206 plugin-zero shape: routes registered on the returned
@@ -92,9 +92,10 @@ describe('appPaths application mount points (#582)', () => {
     await fs.remove(TEST_DATA_DIR);
   });
 
-  after(() => {
+  after(async () => {
     if (originalDataRoot === undefined) delete process.env.DATA_ROOT;
     else process.env.DATA_ROOT = originalDataRoot;
+    if (fixtureDir) await fs.remove(fixtureDir);
   });
 
   it('unauthenticated POST below an app path reaches the app handler', async () => {
@@ -194,7 +195,7 @@ describe('appPaths application mount points (#582)', () => {
         await startWith(['/myapp'], shape);
         await fs.ensureDir(path.join(TEST_DATA_DIR, 'myapp'));
         await fs.writeFile(path.join(TEST_DATA_DIR, 'myapp', 'secret.txt'), 'private');
-        for (const method of ['GET', 'DELETE', 'PATCH']) {
+        for (const method of ['GET', 'HEAD', 'DELETE', 'PATCH']) {
           const res = await fetch(`${baseUrl}/myapp/secret.txt`, {
             method,
             ...(method === 'PATCH' ? { headers: { 'Content-Type': 'text/n3' }, body: '' } : {}),
@@ -207,6 +208,21 @@ describe('appPaths application mount points (#582)', () => {
         assert.strictEqual((await ok.json()).app, true);
       });
     }
+
+    it('OPTIONS below the prefix is a bare 204 for existing and missing paths alike (no existence leak)', async () => {
+      await startWith(['/myapp'], 'plugin');
+      await fs.ensureDir(path.join(TEST_DATA_DIR, 'myapp', 'dir'));
+      await fs.writeFile(path.join(TEST_DATA_DIR, 'myapp', 'secret.txt'), 'private');
+      const seen = [];
+      for (const p of ['/myapp/secret.txt', '/myapp/missing.txt', '/myapp/dir/', '/myapp/nodir/']) {
+        const res = await fetch(`${baseUrl}${p}`, { method: 'OPTIONS', headers: { Origin: 'https://app.example' } });
+        assert.strictEqual(res.status, 204, `${p} preflight should be 204`);
+        assert.strictEqual(res.headers.get('access-control-allow-origin'), 'https://app.example');
+        seen.push([res.headers.get('link'), res.headers.get('accept-patch'), res.headers.get('allow')].join('|'));
+      }
+      assert.strictEqual(new Set(seen).size, 1, `OPTIONS headers must not vary with storage: ${seen.join(' / ')}`);
+      assert.strictEqual(seen[0].includes('Container'), false);
+    });
 
     it('a sibling LDP path is untouched: PUT is still 401, not 404', async () => {
       await startWith(['/myapp'], 'partial');
