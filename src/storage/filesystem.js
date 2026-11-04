@@ -148,6 +148,30 @@ export function lockPathFor(urlPath) {
   return path.join(path.dirname(filePath), `.${path.basename(filePath)}.lock`);
 }
 
+// Break a lock that was observed stale, and only that lock. Two contenders can both see
+// the same dead lock; the faster one breaks it and takes a fresh lock, and a plain
+// unlink by the slower one would then remove the fresh lock. So the stale file is first
+// moved aside with rename (atomic: one contender wins, the other gets ENOENT and looks
+// again) and its inode compared with the one observed. If the file moved is the stale one,
+// it is deleted. If it is somebody's fresh lock, caught in the moment between their break
+// and our rename, it is put back with link, which fails rather than overwrite a third
+// contender's lock.
+async function breakStaleLock(lockPath, observed) {
+  const aside = `${lockPath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    await fs.rename(lockPath, aside);
+  } catch {
+    return; // already broken by someone else
+  }
+  const moved = await fs.stat(aside).catch(() => null);
+  if (!moved || moved.ino === observed.ino) {
+    await fs.remove(aside).catch(() => {});
+    return;
+  }
+  await fs.link(aside, lockPath).catch(() => {});
+  await fs.remove(aside).catch(() => {});
+}
+
 export async function withLock(urlPath, fn, { staleMs = LOCK_STALE_MS, waitMs = LOCK_WAIT_MS } = {}) {
   const lockPath = lockPathFor(urlPath);
   await fs.ensureDir(path.dirname(lockPath));
@@ -161,7 +185,7 @@ export async function withLock(urlPath, fn, { staleMs = LOCK_STALE_MS, waitMs = 
       if (err.code !== 'EEXIST') throw err;
       const stat = await fs.stat(lockPath).catch(() => null);
       if (stat && Date.now() - stat.mtimeMs > staleMs) {
-        await fs.remove(lockPath).catch(() => {});
+        await breakStaleLock(lockPath, stat);
         continue;
       }
       if (Date.now() - started > waitMs) {

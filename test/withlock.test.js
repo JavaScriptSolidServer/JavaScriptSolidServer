@@ -48,6 +48,25 @@ describe('withLock', () => {
     assert.ok(!await fs.pathExists(lockPath), 'lock removed afterwards');
   });
 
+  it('many contenders on a dead lock: all run, never two at once, no lock left behind', async () => {
+    const lockPath = lockPathFor('/pod/crowd.json');
+    await fs.writeFile(lockPath, '');
+    const old = new Date(Date.now() - 60_000);
+    await fs.utimes(lockPath, old, old);
+    let inside = 0, peak = 0, ran = 0;
+    const opts = { staleMs: 100, waitMs: 5000 };
+    await Promise.all(Array.from({ length: 8 }, () => withLock('/pod/crowd.json', async () => {
+      inside++; peak = Math.max(peak, inside); ran++;
+      await sleep(30);
+      inside--;
+    }, opts)));
+    assert.strictEqual(ran, 8, 'every contender ran');
+    assert.strictEqual(peak, 1, 'never two holders at once');
+    assert.ok(!await fs.pathExists(lockPath), 'lock removed afterwards');
+    const leftovers = (await fs.readdir(path.join(ROOT, 'pod'))).filter((n) => n.startsWith('.crowd.json.lock'));
+    assert.deepStrictEqual(leftovers, [], 'no moved-aside lock files left');
+  });
+
   it('a live lock that is never released ends in ELOCKED after waitMs', async () => {
     const lockPath = lockPathFor('/pod/held.json');
     await fs.writeFile(lockPath, '');
