@@ -34,6 +34,7 @@ import { webrtcPlugin } from './webrtc/index.js';
 import { tunnelPlugin } from './tunnel/index.js';
 import { terminalPlugin } from './terminal/index.js';
 import { registerErrorHandler } from './utils/error-handler.js';
+import { findForbiddenDotfile } from './utils/dotfiles.js';
 import { seedServerRoot } from './ui/server-root.js';
 import { assertProvisionKeysCompatible } from './keys/provision.js';
 
@@ -571,7 +572,6 @@ export function createServer(options = {}) {
   // Security: Block access to dotfiles except allowed Solid-specific ones
   // This prevents exposure of .git/, .env, .htpasswd, etc.
   // Git protocol requests bypass this check when git is enabled
-  const ALLOWED_DOTFILES = ['.well-known', '.acl', '.meta', '.pods', '.notifications', '.account'];
   fastify.addHook('onRequest', async (request, reply) => {
     // Allow git protocol requests through when git is enabled
     if (gitEnabled && isGitRequest(request.url)) {
@@ -609,14 +609,18 @@ export function createServer(options = {}) {
     // legitimate proxy requests for upstream URLs that happen to
     // contain dotfile-like path segments. The dotfile guard is about
     // *this* pod's filesystem, not what the URL looks like.
-    const segments = request.url.split('?')[0].split('/');
-    const hasForbiddenDotfile = segments.some(seg =>
-      seg.startsWith('.') &&
-      seg.length > 1 &&
-      !ALLOWED_DOTFILES.includes(seg)
-    );
+    //
+    // Segments are percent-decoded before the check, the same way the
+    // storage lookup decodes them (#639): `%2Egit` is `.git` on disk.
+    // A path that cannot be decoded is refused rather than passed on.
+    let forbidden;
+    try {
+      forbidden = findForbiddenDotfile(urlNoQuery);
+    } catch (err) {
+      return reply.code(400).send({ error: 'Bad Request', message: err.message });
+    }
 
-    if (hasForbiddenDotfile) {
+    if (forbidden) {
       return reply.code(403).send({ error: 'Forbidden', message: 'Dotfile access is not allowed' });
     }
   });

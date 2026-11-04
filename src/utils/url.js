@@ -1,5 +1,6 @@
 import path from 'path';
 import * as mime from 'mime-types';
+import { decodeSegments, introducesDot } from './dotfiles.js';
 
 // Base directory for storing all pods
 // Use a getter function to read env var at runtime (not import time)
@@ -17,25 +18,50 @@ export function updateDataRoot() {
 }
 
 /**
+ * Decode and sanitise a URL path into a relative filesystem path.
+ *
+ * - Leading slashes are stripped (#131 — `//foo` from bot probes would
+ *   otherwise leave `/foo`, and path.resolve(root, '/foo') would treat the
+ *   second arg as absolute, escape dataRoot, and trip the traversal guard
+ *   with a 500 instead of resolving cleanly to a 404).
+ * - Each segment is percent-decoded on its own; malformed encoding and
+ *   encoded separators are rejected with a 400 error (see dotfiles.js).
+ * - `..` is removed from every segment (multiple passes for the `....//`
+ *   bypass).
+ * - A segment that only became a dotfile by decoding (`%2Egit`, `%2Eacl`)
+ *   is rejected with a 403 error, so this lookup can never reach a dotfile
+ *   that the request guard in server.js would have refused (#639).
+ *   Internal callers pass dotfile names literally (`.acl`, `.quota.json`,
+ *   lock files) and are unaffected: their raw and decoded forms agree.
+ * @param {string} urlPath
+ * @returns {string} relative path, '/'-joined
+ */
+function normalizeUrlPath(urlPath) {
+  const stripped = urlPath.replace(/^\/+/, '');
+  return decodeSegments(stripped).map(({ raw, decoded }) => {
+    let segment = decoded;
+    let previous;
+    do {
+      previous = segment;
+      segment = segment.replace(/\.\./g, '');
+    } while (segment !== previous);
+    if (introducesDot(raw, segment)) {
+      const err = new Error('Dotfile access is not allowed');
+      err.statusCode = 403;
+      throw err;
+    }
+    return segment;
+  }).join('/');
+}
+
+/**
  * Convert URL path to filesystem path
  * @param {string} urlPath - The URL path (e.g., /alice/profile/)
  * @returns {string} - Filesystem path
  * @throws {Error} - If path traversal is detected
  */
 export function urlToPath(urlPath) {
-  // Normalize: strip all leading slashes (#131 — `//foo` from bot probes
-  // would otherwise leave `/foo`, and path.resolve(root, '/foo') would
-  // treat the second arg as absolute, escape dataRoot, and trip the
-  // traversal guard with a 500 instead of resolving cleanly to a 404).
-  let normalized = urlPath.replace(/^\/+/, '');
-  normalized = decodeURIComponent(normalized);
-
-  // Security: remove path traversal attempts (multiple passes for ....// bypass)
-  let previous;
-  do {
-    previous = normalized;
-    normalized = normalized.replace(/\.\./g, '');
-  } while (normalized !== previous);
+  const normalized = normalizeUrlPath(urlPath);
 
   // Resolve to absolute path and verify it's within DATA_ROOT
   const dataRoot = path.resolve(getDataRoot());
@@ -58,16 +84,7 @@ export function urlToPath(urlPath) {
  * @throws {Error} - If path traversal is detected
  */
 export function urlToPathWithPod(urlPath, podName) {
-  // Normalize: strip all leading slashes (#131 — see urlToPath for context).
-  let normalized = urlPath.replace(/^\/+/, '');
-  normalized = decodeURIComponent(normalized);
-
-  // Security: remove path traversal attempts (multiple passes for ....// bypass)
-  let previous;
-  do {
-    previous = normalized;
-    normalized = normalized.replace(/\.\./g, '');
-  } while (normalized !== previous);
+  const normalized = normalizeUrlPath(urlPath);
 
   // Also sanitize podName (multiple passes for ....// bypass)
   let safePodName = podName;
