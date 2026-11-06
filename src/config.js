@@ -137,6 +137,10 @@ export const defaults = {
   // MCP (Model Context Protocol) server — pod as a tool surface for agents (#490)
   mcp: false,
 
+  // Plugins (#206): fail the boot when a plugin's activate() throws, instead
+  // of skipping it with a 503 under its prefix (#645)
+  pluginStrict: false,
+
   // Logging
   logger: true,
   quiet: false,
@@ -209,6 +213,7 @@ const envMap = {
   JSS_MONGO_URL: 'mongoUrl',
   JSS_MONGO_DATABASE: 'mongoDatabase',
   JSS_MCP: 'mcp',
+  JSS_PLUGIN_STRICT: 'pluginStrict',
 };
 
 /**
@@ -255,6 +260,7 @@ const BOOLEAN_KEYS = new Set([
   'pay',
   'mongo',
   'mcp',
+  'pluginStrict',
   'idp',
   'notifications',
   'logger',

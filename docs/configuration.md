@@ -449,6 +449,21 @@ routed through the same upgrade path as the built-in realtime features, so
 plugins never attach their own `'upgrade'` listener. Return
 `{ deactivate }` to run teardown (state saves, timers) on server close.
 
+**When a plugin fails** ([#645](https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/645)):
+a plugin that cannot be *loaded* — unresolvable module, no `activate`
+export, invalid prefix, duplicate id — fails startup loudly. A plugin whose
+`activate()` *throws* is treated differently, because the usual cause is a
+dependency that is not up yet (a database, a node's RPC) — the normal state
+right after a reboot. By default it is skipped: the error is logged with
+the plugin id, every request under its prefix answers `503` with
+`Retry-After: 30` and a JSON body naming the plugin and the reason, the
+other plugins and the pod itself start normally, and the skipped plugins
+are listed in a `plugins: N active, M skipped` warning and on
+`fastify.pluginFailures` (`[{ id, prefix, module, error }]`). Routes the
+plugin registered before throwing stay in place. Re-activating it needs a
+server restart once its dependency is back. Set `pluginStrict: true`
+(`--plugin-strict`, `JSS_PLUGIN_STRICT=true`) to fail startup instead.
+
 A plugin whose protocol **pins absolute paths** outside its prefix can
 claim them with `api.reservePath(path)`:
 

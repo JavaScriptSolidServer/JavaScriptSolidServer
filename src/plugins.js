@@ -39,9 +39,25 @@
  *   api.ws.route('/myapp/ws', (socket, req) => wss.emit('connection', socket, req));
  *
  * activate() may return { deactivate() {} }; deactivate runs on server
- * close (world saves, timer teardown). A plugin that fails to load fails
- * the boot loudly — the operator wrote the config, and a server silently
- * missing an app is worse than one that refuses to start.
+ * close (world saves, timer teardown).
+ *
+ * Failure policy (#645). A plugin that cannot be LOADED — bad entry,
+ * unresolvable module, no activate export, invalid prefix, duplicate id —
+ * fails the boot loudly: the operator wrote the config, and a server
+ * silently missing an app is worse than one that refuses to start. A
+ * plugin whose activate() THROWS is a different animal: the usual cause is
+ * a dependency that isn't up yet (a database, a node's RPC, a remote
+ * service) — exactly the state after a host reboot, when the pod comes
+ * back under a supervisor before the things its plugins talk to. Killing
+ * the whole server for that turns one unavailable dependency into a crash
+ * loop that takes every other plugin and plain pod serving down with it.
+ * So by default an activate() failure is isolated: logged with the plugin
+ * id, the plugin skipped, a 503 placeholder mounted under its prefix, and
+ * the boot continues. The failure is recorded in ctx.pluginFailures and
+ * summarized at the end of the load. Operators who would rather not start
+ * at all than start without an app opt back in with pluginStrict
+ * (--plugin-strict / JSS_PLUGIN_STRICT). Re-activation of a skipped plugin
+ * needs a restart: Fastify's route table is sealed once listening.
  */
 
 import fs from 'fs';
@@ -186,9 +202,27 @@ export function pluginId(spec) {
  * @param {Array}  entries   options.plugins, verbatim
  * @param {object} ctx       { appPaths, root, log }
  */
+/**
+ * Errors the plugin api raises for a misuse of itself — a malformed
+ * reservePath, a bad mountApp prefix, a path two plugins both claim — are
+ * operator/author mistakes, not an unavailable dependency. They stay fatal
+ * even in the default lenient mode (#645): marked here, rethrown by the
+ * activate() catch below.
+ */
+const CONFIG_ERROR = Symbol('jss.plugin.configError');
+function configError(message) {
+  const err = new Error(message);
+  err[CONFIG_ERROR] = true;
+  return err;
+}
+
 export async function loadPlugins(fastify, entries, ctx) {
   const log = makePluginLog(ctx.log);
   const seenIds = new Set();
+  // activate() failures land here (#645) unless ctx.strict; the caller
+  // may pass its own array to read the outcome back.
+  const failures = ctx.pluginFailures ?? (ctx.pluginFailures = []);
+  let activeCount = 0;
   // reservePath claims (#602), shared across all entries of this load so
   // two plugins reserving the same pinned path fail the boot with both
   // names — loud beats the silent-loser outcome witnessed with webfinger
@@ -292,14 +326,14 @@ export async function loadPlugins(fastify, entries, ctx) {
         // rather than an opaque TypeError from .map deep in activate.
         const options = opts && typeof opts === 'object' ? opts : {};
         if (options.methods !== undefined && !Array.isArray(options.methods)) {
-          throw new Error(`plugin ${id}: reservePath { methods } must be an array, got ${JSON.stringify(options.methods)}`);
+          throw configError(`plugin ${id}: reservePath { methods } must be an array, got ${JSON.stringify(options.methods)}`);
         }
         // Validate AFTER normalization: '//' or '/ ' normalize to '',
         // and an empty string in appPaths would match every URL in the
         // WAC hook — a one-call total WAC bypass.
         const key = typeof p === 'string' ? p.trim().replace(/\/+$/, '') : '';
         if (!key.startsWith('/') || key.length < 2) {
-          throw new Error(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
+          throw configError(`plugin ${id}: reservePath needs an absolute path, got ${JSON.stringify(p)}`);
         }
         // A reservation is a pathname, not a URL: '?'/'#' don't belong.
         // A query in the string would be escaped into the matcher (tying
@@ -307,7 +341,7 @@ export async function loadPlugins(fastify, entries, ctx) {
         // request.url — both silently produce a reservation that matches
         // nothing real.
         if (key.includes('?') || key.includes('#')) {
-          throw new Error(`plugin ${id}: reservePath must be a pathname without '?' or '#', got ${JSON.stringify(p)}`);
+          throw configError(`plugin ${id}: reservePath must be a pathname without '?' or '#', got ${JSON.stringify(p)}`);
         }
         // Track by the shape, not the raw string: '/:user/did.json' and
         // '/:acct/did.json' exempt the same URLs, so they're the same
@@ -318,7 +352,7 @@ export async function loadPlugins(fastify, entries, ctx) {
           return; // idempotent re-claim — the matcher is already installed
         }
         if (holder) {
-          throw new Error(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
+          throw configError(`plugin ${id}: path '${key}' is already reserved by plugin '${holder}'`);
         }
         reservations.set(claim, id);
         // Read-only by default for BOTH lanes: a reserved path is
@@ -370,18 +404,18 @@ export async function loadPlugins(fastify, entries, ctx) {
       // the handler runs and any body-reading app hangs forever.
       async mountApp(handler, opts = {}) {
         if (typeof handler !== 'function') {
-          throw new Error(`plugin ${id}: mountApp(handler) needs a (req, res) function`);
+          throw configError(`plugin ${id}: mountApp(handler) needs a (req, res) function`);
         }
         // Any provided prefix must validate — same rule as entry.prefix: a
         // falsy normalization silently falling back to the entry prefix
         // would mount the app (and WAC-exempt it) somewhere unexpected.
         const secondary = normalizePrefix(opts.prefix);
         if (opts.prefix !== undefined && !secondary) {
-          throw new Error(`plugin ${id}: mountApp invalid prefix ${JSON.stringify(opts.prefix)} (must start with '/'; omit to use the entry prefix)`);
+          throw configError(`plugin ${id}: mountApp invalid prefix ${JSON.stringify(opts.prefix)} (must start with '/'; omit to use the entry prefix)`);
         }
         const mountPrefix = secondary || prefix;
         if (!mountPrefix) {
-          throw new Error(`plugin ${id}: mountApp needs a prefix (entry.prefix or opts.prefix)`);
+          throw configError(`plugin ${id}: mountApp needs a prefix (entry.prefix or opts.prefix)`);
         }
         if (mountPrefix !== prefix && !ctx.appPaths.includes(mountPrefix)) {
           ctx.appPaths.push(mountPrefix); // exempt a secondary mount too
@@ -447,8 +481,19 @@ export async function loadPlugins(fastify, entries, ctx) {
     try {
       result = await activate(api);
     } catch (err) {
-      throw new Error(`plugin ${id}: activate() failed: ${err.message}`);
+      if (ctx.strict || err?.[CONFIG_ERROR]) {
+        throw new Error(`plugin ${id}: activate() failed: ${err.message}`);
+      }
+      // Isolate (#645): this plugin is out, the server is not. Routes it
+      // registered before throwing stay (Fastify has no unregister), so
+      // the placeholder below only claims what is still free under the
+      // prefix — a half-activated plugin may answer some paths itself.
+      log.error({ err }, `plugin ${id}: activate() failed: ${err.message} — skipped; restart the server once its dependency is up (pluginStrict to fail the boot instead)`);
+      failures.push({ id, prefix, module: spec.module, error: err.message });
+      if (prefix) mountUnavailable(fastify, id, prefix, err.message, log);
+      continue;
     }
+    activeCount += 1;
     if (result && typeof result.deactivate === 'function') {
       fastify.addHook('onClose', async () => {
         try {
@@ -459,5 +504,33 @@ export async function loadPlugins(fastify, entries, ctx) {
       });
     }
     log.info(`plugin ${id} active${prefix ? ` at ${prefix}` : ''}`);
+  }
+  if (failures.length) {
+    log.warn(`plugins: ${activeCount} active, ${failures.length} skipped after activate() failed: ${failures.map((f) => f.id).join(', ')}`);
+  }
+}
+
+/**
+ * 503 placeholder for a plugin whose activate() threw (#645). Claims the
+ * prefix and its subtree for every method so clients get a clear, retryable
+ * answer instead of a 404 (or, worse, the pod's WAC-exempt fallthrough —
+ * the prefix is already in appPaths). The plugin may have registered some
+ * of these shapes before failing; Fastify refuses duplicates, so each claim
+ * is best-effort and a collision just leaves the plugin's own route in place.
+ */
+function mountUnavailable(fastify, id, prefix, reason, log) {
+  const handler = async (request, reply) => {
+    reply.code(503).header('retry-after', '30').send({
+      error: 'plugin unavailable',
+      plugin: id,
+      reason,
+    });
+  };
+  for (const url of [prefix, `${prefix}/*`]) {
+    try {
+      fastify.all(url, handler);
+    } catch (err) {
+      log.warn(`plugin ${id}: could not mount 503 placeholder at ${url}: ${err.message}`);
+    }
   }
 }

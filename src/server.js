@@ -64,6 +64,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {boolean} options.webidTls - Enable WebID-TLS client certificate auth (default false)
  * @param {boolean} options.pay - Enable HTTP 402 paid /pay/* routes (default false)
  * @param {Array} options.plugins - App plugins to load (#206): [{ module, prefix, config, id }].
+ * @param {boolean} options.pluginStrict - Fail listen() when a plugin's activate() throws; default false skips it with a 503 under its prefix (#645).
  *   Each module's activate(api) runs at startup; prefix is WAC-exempted via appPaths.
  *   See src/plugins.js for the api surface.
  * @param {number} options.payCost - Cost per request in satoshis (default 1)
@@ -127,6 +128,10 @@ export function createServer(options = {}) {
   // appPaths. The WAC hook reads the array per request, so pushes made
   // during plugin activation are honored.
   const pluginEntries = Array.isArray(options.plugins) ? options.plugins : [];
+  // Plugins skipped after activate() threw (#645): [{ id, prefix, module, error }].
+  // Exposed as fastify.pluginFailures so an operator (or a status plugin)
+  // can see what is missing without grepping the boot log.
+  const pluginFailures = [];
   // Parameterized reservations from api.reservePath (#602): compiled
   // matchers for path shapes like /:user/did.json that literal appPaths
   // prefixes cannot express. Same per-request read as appPaths.
@@ -330,6 +335,7 @@ export function createServer(options = {}) {
 
   // Attach server config to requests
   // Raw request body for the application/json parser to stash (#565).
+  fastify.decorate('pluginFailures', pluginFailures); // (#645)
   fastify.decorateRequest('rawBody', null);
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
@@ -443,14 +449,17 @@ export function createServer(options = {}) {
   }
 
   // Load app plugins (#206). Deferred into a register scope so the dynamic
-  // imports and async activation run during fastify's startup; a failing
-  // plugin fails listen() rather than leaving a half-configured server.
+  // imports and async activation run during fastify's startup. A plugin
+  // that cannot be loaded fails listen(); one whose activate() throws is
+  // skipped with a 503 under its prefix unless pluginStrict (#645).
   if (pluginEntries.length) {
     fastify.register(async (instance) => {
       const { loadPlugins } = await import('./plugins.js');
       await loadPlugins(instance, pluginEntries, {
         appPaths,
         appPathPatterns,
+        strict: !!options.pluginStrict,
+        pluginFailures,
         root: options.root || process.env.DATA_ROOT || './data',
         log: fastify.log,
         // api.serverInfo inputs (#601). ?? keeps an explicit port 0 —

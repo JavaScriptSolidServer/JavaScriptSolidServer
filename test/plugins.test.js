@@ -8,7 +8,9 @@
  * WebSocket endpoint through ws.route (#588), private storage under the
  * data root's dot-guard, config pass-through, and deactivate on close.
  * Failure paths (missing module, no activate export, bad prefix) must fail
- * listen() loudly rather than boot a server silently missing an app.
+ * listen() loudly rather than boot a server silently missing an app. A
+ * plugin whose activate() throws is isolated instead (#645): skipped with a
+ * 503 under its prefix, the rest of the server up — unless pluginStrict.
  */
 
 import { describe, it, before, after, afterEach } from 'node:test';
@@ -67,13 +69,23 @@ export async function activate(api) {
 }
 `;
 
-async function startWith(plugins) {
+const THROWING_PLUGIN = `
+export async function activate(api) {
+  // Registers one route, then fails the way a plugin whose dependency is
+  // down does: a rejected fetch during activation.
+  api.fastify.get(api.prefix + '/early', async () => ({ early: true }));
+  throw new Error('fetch failed');
+}
+`;
+
+async function startWith(plugins, extra = {}) {
   await fs.emptyDir(TEST_DATA_DIR);
   server = createServer({
     logger: false,
     forceCloseConnections: true,
     root: TEST_DATA_DIR,
     plugins,
+    ...extra,
   });
   await server.listen({ port: 0, host: '127.0.0.1' });
   const address = server.server.address();
@@ -89,6 +101,7 @@ describe('plugin loader (#206)', () => {
     originalDataRoot = process.env.DATA_ROOT;
     await fs.emptyDir(FIXTURE_DIR);
     await fs.writeFile(path.join(FIXTURE_DIR, 'fixture-plugin.js'), FIXTURE_PLUGIN);
+    await fs.writeFile(path.join(FIXTURE_DIR, 'throwing-plugin.js'), THROWING_PLUGIN);
   });
 
   afterEach(async () => {
@@ -214,6 +227,52 @@ describe('plugin loader (#206)', () => {
     await assert.rejects(
       server.listen({ port: 0, host: '127.0.0.1' }),
       /cannot import/,
+    );
+  });
+
+  it('a plugin whose activate() throws is skipped with a 503, not a dead server (#645)', async () => {
+    await startWith([
+      { module: `${FIXTURE_DIR}/throwing-plugin.js`, prefix: '/broken' },
+      { module: `${FIXTURE_DIR}/fixture-plugin.js`, prefix: '/game' },
+    ]);
+    // The healthy sibling loaded after the failure is up...
+    const ok = await fetch(`${baseUrl}/game/echo`);
+    assert.strictEqual(ok.status, 200);
+    // ...and so is the pod itself.
+    const pod = await fetch(`${baseUrl}/.well-known/openid-configuration`);
+    assert.notStrictEqual(pod.status, 503);
+    // The broken prefix answers 503 at the root and below, every method.
+    for (const [url, method] of [['/broken', 'GET'], ['/broken/a/b', 'GET'], ['/broken/x', 'PUT']]) {
+      const res = await fetch(baseUrl + url, { method });
+      assert.strictEqual(res.status, 503, `${method} ${url}`);
+      assert.strictEqual(res.headers.get('retry-after'), '30');
+      const body = await res.json();
+      assert.strictEqual(body.error, 'plugin unavailable');
+      assert.strictEqual(body.plugin, 'throwing-plugin');
+      assert.match(body.reason, /fetch failed/);
+    }
+    // A route the plugin managed to register before throwing is left alone.
+    const early = await fetch(`${baseUrl}/broken/early`);
+    assert.strictEqual(early.status, 200);
+    // The outcome is readable off the server.
+    assert.deepStrictEqual(
+      server.pluginFailures.map(({ id, prefix, error }) => ({ id, prefix, error })),
+      [{ id: 'throwing-plugin', prefix: '/broken', error: 'fetch failed' }],
+    );
+  });
+
+  it('pluginStrict restores the fail-fast boot for a throwing activate() (#645)', async () => {
+    await fs.emptyDir(TEST_DATA_DIR);
+    server = createServer({
+      logger: false,
+      forceCloseConnections: true,
+      root: TEST_DATA_DIR,
+      pluginStrict: true,
+      plugins: [{ module: `${FIXTURE_DIR}/throwing-plugin.js`, prefix: '/broken' }],
+    });
+    await assert.rejects(
+      server.listen({ port: 0, host: '127.0.0.1' }),
+      /plugin throwing-plugin: activate\(\) failed: fetch failed/,
     );
   });
 
