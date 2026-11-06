@@ -103,6 +103,14 @@ describe('NIP-98 verifier: one header, one request (#643)', () => {
     assert.ok(isAuthed(r2), r2.error);
   });
 
+  it('git routes accept the same token for every request of one operation', async () => {
+    const token = tokenFromTags([['u', `http://${HOST}/alice/twice`], ['method', '*']]);
+    const r1 = await verifyNostrAuth(req({ url: '/alice/twice/info/refs?service=git-receive-pack', token }));
+    assert.ok(isAuthed(r1), r1.error);
+    const r2 = await verifyNostrAuth(req({ url: '/alice/twice/git-receive-pack', method: 'POST', token, body: Buffer.from('0000') }));
+    assert.ok(isAuthed(r2), r2.error);
+  });
+
   it('the replay cache forgets an id once it can no longer verify', async () => {
     const token = nip98Token(`http://${HOST}/alice/old/`, 'GET', sk);
     assert.ok(isAuthed(await verifyNostrAuth(req({ url: '/alice/old/', token }))));

@@ -53,14 +53,21 @@ const WRITE_METHODS = new Set(['PUT', 'POST', 'PATCH']);
 
 // Replay cache: event ids accepted inside the timestamp window (#643). An
 // event is valid for ±TIMESTAMP_TOLERANCE, so an id older than twice that
-// can never verify again and is dropped. Same shape as the DPoP jti cache
-// in solid-oidc.js.
+// can never verify again and is dropped by a periodic sweep, as the DPoP
+// jti cache in solid-oidc.js does; noteEventId itself is O(1). Not applied
+// on git routes: git reuses the credential helper's one token for every
+// request of an operation (info/refs, then the pack service).
 const seenEventIds = new Map();
 const REPLAY_WINDOW = TIMESTAMP_TOLERANCE * 2;
-function noteEventId(id, now) {
-  for (const [seenId, at] of seenEventIds) {
-    if (now - at > REPLAY_WINDOW) seenEventIds.delete(seenId);
+const REPLAY_SWEEP_INTERVAL = 60 * 1000;
+function sweepEventIds() {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [id, at] of seenEventIds) {
+    if (now - at > REPLAY_WINDOW) seenEventIds.delete(id);
   }
+}
+setInterval(sweepEventIds, REPLAY_SWEEP_INTERVAL).unref();
+function noteEventId(id, now) {
   if (seenEventIds.has(id)) return false;
   seenEventIds.set(id, now);
   return true;
@@ -333,8 +340,9 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: 'Invalid Schnorr signature' };
   }
 
-  // Each signed event authorizes one request (#643).
-  if (!noteEventId(event.id, now)) {
+  // Each signed event authorizes one request (#643), except on git routes,
+  // where one token covers the requests of a git operation.
+  if (!gitRoute && !noteEventId(event.id, now)) {
     return { webId: null, error: 'Replayed event id' };
   }
 
