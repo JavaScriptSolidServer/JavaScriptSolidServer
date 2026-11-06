@@ -158,6 +158,7 @@ program
   .option('--no-mcp', 'Disable MCP server')
   .option('-q, --quiet', 'Suppress log output')
   .option('--plugin <module[@prefix]>', 'Mount an app plugin (repeatable; prefix must start with /). Appends to config-file plugins (#594)', (value, previous) => previous.concat([value]), [])
+  .option('--plugin-strict', 'Fail startup when a plugin\'s activate() throws, instead of skipping it with a 503 under its prefix (#645)')
   .option('--log-level <level>', 'Log level: error, warn, info, debug (default: info)')
   .option('--print-config', 'Print configuration and exit')
   .action(async (options) => {
