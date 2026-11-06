@@ -334,6 +334,8 @@ export function createServer(options = {}) {
   fastify.decorateRequest('connegEnabled', null);
   fastify.decorateRequest('notificationsEnabled', null);
   fastify.decorateRequest('idpEnabled', null);
+  // read by the NIP-98 verifier: the lenient git rules apply only while git is on (#643)
+  fastify.decorate('gitEnabled', gitEnabled);
   fastify.decorateRequest('subdomainsEnabled', null);
   fastify.decorateRequest('baseDomain', null);
   fastify.decorateRequest('podName', null);

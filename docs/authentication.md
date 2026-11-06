@@ -97,6 +97,12 @@ jss start --idp
 - Account must have a `did:nostr:<pubkey>` WebID linked
 - User needs a NIP-07 compatible browser extension
 
+**What the server checks in a NIP-98 event** (`Authorization: Nostr <base64 event>`, kind 27235):
+- `u` must equal the request URL (query string optional); `method` must be present and equal the HTTP method
+- a PUT, POST or PATCH with a body must carry `payload` = sha256 of the exact body bytes
+- `created_at` within ±60 s of the server clock, and each event id is accepted once
+- Git smart-HTTP requests are the exception, and only while the server runs with `--git`: the ref-discovery GET (`/info/refs?service=git-…-pack`) and the pack-service POSTs. There `method` may be `*` or omitted, `u` may be the repo base URL, no `payload` is required, and the same event id may be reused, so a credential helper can sign once per git operation
+
 **Benefits:**
 - No passwords - cryptographic authentication
 - Works with existing Nostr identity

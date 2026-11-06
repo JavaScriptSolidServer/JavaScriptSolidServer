@@ -43,6 +43,53 @@ const HTTP_AUTH_KIND = 27235;
 // Timestamp tolerance in seconds
 const TIMESTAMP_TOLERANCE = 60;
 
+// Git smart-HTTP routes keep the lenient rules (missing or `*` method, URL
+// prefix match, no payload tag): git credential helpers sign once for the
+// repo base URL and git sends the pack bodies. Everywhere else the NIP-98
+// MUSTs apply, or a captured header could be replayed as a different method
+// against any sub-path (#643).
+const WRITE_METHODS = new Set(['PUT', 'POST', 'PATCH']);
+
+// A git smart-HTTP request, recognised by its shape (the ref discovery GET
+// with a service query, or a pack-service POST with the git content type),
+// and only while the server has git enabled. A plain resource whose path
+// happens to end in /info/refs or /git-receive-pack gets the strict rules.
+function isGitSmartHttp(request) {
+  if (request.server?.gitEnabled !== true) return false;
+  const [path, query = ''] = request.url.split('?');
+  const method = request.method.toUpperCase();
+  if (path.endsWith('/info/refs')) {
+    return method === 'GET' && /(^|&)service=git-(upload|receive)-pack(&|$)/.test(query);
+  }
+  if (/\/git-(upload|receive)-pack$/.test(path)) {
+    const type = request.headers['content-type'] || '';
+    return method === 'POST' && /^application\/x-git-(upload|receive)-pack-request/.test(type);
+  }
+  return false;
+}
+
+// Replay cache: event ids accepted inside the timestamp window (#643). An
+// event is valid for ±TIMESTAMP_TOLERANCE, so an id older than twice that
+// can never verify again and is dropped by a periodic sweep, as the DPoP
+// jti cache in solid-oidc.js does; noteEventId itself is O(1). Not applied
+// on git routes: git reuses the credential helper's one token for every
+// request of an operation (info/refs, then the pack service).
+const seenEventIds = new Map();
+const REPLAY_WINDOW = TIMESTAMP_TOLERANCE * 2;
+const REPLAY_SWEEP_INTERVAL = 60 * 1000;
+function sweepEventIds() {
+  const now = Math.floor(Date.now() / 1000);
+  for (const [id, at] of seenEventIds) {
+    if (now - at > REPLAY_WINDOW) seenEventIds.delete(id);
+  }
+}
+setInterval(sweepEventIds, REPLAY_SWEEP_INTERVAL).unref();
+function noteEventId(id, now) {
+  if (seenEventIds.has(id)) return false;
+  seenEventIds.set(id, now);
+  return true;
+}
+
 // Profile-fetch body-size cap. Matches the LWS-CID verifier; both
 // callers go through the shared fetchCidDocument helper.
 const MAX_PROFILE_BYTES = 256 * 1024;
@@ -222,9 +269,10 @@ export async function verifyNostrAuth(request) {
   let urlMatches = normalizedEventUrl === normalizedRequestUrl ||
                    normalizedEventUrl === normalizedRequestUrlNoQuery;
 
-  // For git clients: allow prefix matching (event URL is base of request URL)
-  // This enables git credential helpers that sign for the repo base URL
-  if (!urlMatches && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
+  // Git routes only: allow prefix matching (event URL is base of request
+  // URL), for git credential helpers that sign for the repo base URL.
+  const gitRoute = isGitSmartHttp(request);
+  if (!urlMatches && gitRoute && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
     urlMatches = true;
   }
 
@@ -232,11 +280,14 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: `URL mismatch: event URL "${eventUrl}" does not match request URL "${fullUrl}"` };
   }
 
-  // Validate method tag matches request method
-  // For git clients: allow '*' as wildcard method
-  // If method tag is missing, infer from HTTP request (lenient mode)
+  // Validate method tag matches request method (NIP-98: MUST). Git routes
+  // only: a missing tag is inferred from the request and '*' is a wildcard.
   const eventMethod = getTagValue(event, 'method');
-  if (eventMethod && eventMethod !== '*' && eventMethod.toUpperCase() !== request.method.toUpperCase()) {
+  if (!eventMethod) {
+    if (!gitRoute) return { webId: null, error: 'Missing method tag in event' };
+  } else if (eventMethod === '*') {
+    if (!gitRoute) return { webId: null, error: 'Wildcard method is only accepted on git routes' };
+  } else if (eventMethod.toUpperCase() !== request.method.toUpperCase()) {
     return { webId: null, error: `Method mismatch: expected ${request.method}, got ${eventMethod}` };
   }
 
@@ -247,6 +298,12 @@ export async function verifyNostrAuth(request) {
   // to a falsy value (`null`, `false`, `0`, `""`) is still hash-checked
   // rather than silently skipping the integrity guard (Copilot review on
   // #573). Fastify leaves request.body `undefined` when no body was sent.
+  // A write with a body must carry the payload tag (git routes excepted:
+  // the pack bodies are not signed), or a replayed header would authorize
+  // whatever body the replayer attaches.
+  if (!payloadTag && !gitRoute && request.body !== undefined && WRITE_METHODS.has(request.method.toUpperCase())) {
+    return { webId: null, error: 'Missing payload tag for request with body' };
+  }
   if (payloadTag && request.body !== undefined) {
     // Hash the EXACT bytes the client signed. NIP-98's `payload` tag is
     // sha256(request body) over the wire bytes. crypto.update() accepts a
@@ -298,6 +355,12 @@ export async function verifyNostrAuth(request) {
   const isValid = verifyEvent(event);
   if (!isValid) {
     return { webId: null, error: 'Invalid Schnorr signature' };
+  }
+
+  // Each signed event authorizes one request (#643), except on git routes,
+  // where one token covers the requests of a git operation.
+  if (!gitRoute && !noteEventId(event.id, now)) {
+    return { webId: null, error: 'Replayed event id' };
   }
 
   // First lookup: the resource's owner WebID profile. If the pod owner
