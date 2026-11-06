@@ -43,6 +43,29 @@ const HTTP_AUTH_KIND = 27235;
 // Timestamp tolerance in seconds
 const TIMESTAMP_TOLERANCE = 60;
 
+// Git smart-HTTP routes keep the lenient rules (missing or `*` method, URL
+// prefix match, no payload tag): git credential helpers sign once for the
+// repo base URL and git sends the pack bodies. Everywhere else the NIP-98
+// MUSTs apply, or a captured header could be replayed as a different method
+// against any sub-path (#643).
+const GIT_ROUTE = /\/(info\/refs|git-upload-pack|git-receive-pack)(\?|$)/;
+const WRITE_METHODS = new Set(['PUT', 'POST', 'PATCH']);
+
+// Replay cache: event ids accepted inside the timestamp window (#643). An
+// event is valid for ±TIMESTAMP_TOLERANCE, so an id older than twice that
+// can never verify again and is dropped. Same shape as the DPoP jti cache
+// in solid-oidc.js.
+const seenEventIds = new Map();
+const REPLAY_WINDOW = TIMESTAMP_TOLERANCE * 2;
+function noteEventId(id, now) {
+  for (const [seenId, at] of seenEventIds) {
+    if (now - at > REPLAY_WINDOW) seenEventIds.delete(seenId);
+  }
+  if (seenEventIds.has(id)) return false;
+  seenEventIds.set(id, now);
+  return true;
+}
+
 // Profile-fetch body-size cap. Matches the LWS-CID verifier; both
 // callers go through the shared fetchCidDocument helper.
 const MAX_PROFILE_BYTES = 256 * 1024;
@@ -222,9 +245,10 @@ export async function verifyNostrAuth(request) {
   let urlMatches = normalizedEventUrl === normalizedRequestUrl ||
                    normalizedEventUrl === normalizedRequestUrlNoQuery;
 
-  // For git clients: allow prefix matching (event URL is base of request URL)
-  // This enables git credential helpers that sign for the repo base URL
-  if (!urlMatches && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
+  // Git routes only: allow prefix matching (event URL is base of request
+  // URL), for git credential helpers that sign for the repo base URL.
+  const gitRoute = GIT_ROUTE.test(request.url);
+  if (!urlMatches && gitRoute && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
     urlMatches = true;
   }
 
@@ -232,11 +256,14 @@ export async function verifyNostrAuth(request) {
     return { webId: null, error: `URL mismatch: event URL "${eventUrl}" does not match request URL "${fullUrl}"` };
   }
 
-  // Validate method tag matches request method
-  // For git clients: allow '*' as wildcard method
-  // If method tag is missing, infer from HTTP request (lenient mode)
+  // Validate method tag matches request method (NIP-98: MUST). Git routes
+  // only: a missing tag is inferred from the request and '*' is a wildcard.
   const eventMethod = getTagValue(event, 'method');
-  if (eventMethod && eventMethod !== '*' && eventMethod.toUpperCase() !== request.method.toUpperCase()) {
+  if (!eventMethod) {
+    if (!gitRoute) return { webId: null, error: 'Missing method tag in event' };
+  } else if (eventMethod === '*') {
+    if (!gitRoute) return { webId: null, error: 'Wildcard method is only accepted on git routes' };
+  } else if (eventMethod.toUpperCase() !== request.method.toUpperCase()) {
     return { webId: null, error: `Method mismatch: expected ${request.method}, got ${eventMethod}` };
   }
 
@@ -247,6 +274,12 @@ export async function verifyNostrAuth(request) {
   // to a falsy value (`null`, `false`, `0`, `""`) is still hash-checked
   // rather than silently skipping the integrity guard (Copilot review on
   // #573). Fastify leaves request.body `undefined` when no body was sent.
+  // A write with a body must carry the payload tag (git routes excepted:
+  // the pack bodies are not signed), or a replayed header would authorize
+  // whatever body the replayer attaches.
+  if (!payloadTag && !gitRoute && request.body !== undefined && WRITE_METHODS.has(request.method.toUpperCase())) {
+    return { webId: null, error: 'Missing payload tag for request with body' };
+  }
   if (payloadTag && request.body !== undefined) {
     // Hash the EXACT bytes the client signed. NIP-98's `payload` tag is
     // sha256(request body) over the wire bytes. crypto.update() accepts a
@@ -298,6 +331,11 @@ export async function verifyNostrAuth(request) {
   const isValid = verifyEvent(event);
   if (!isValid) {
     return { webId: null, error: 'Invalid Schnorr signature' };
+  }
+
+  // Each signed event authorizes one request (#643).
+  if (!noteEventId(event.id, now)) {
+    return { webId: null, error: 'Replayed event id' };
   }
 
   // First lookup: the resource's owner WebID profile. If the pod owner
