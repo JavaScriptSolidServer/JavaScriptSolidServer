@@ -24,11 +24,13 @@ function tokenFromTags(tags) {
   return Buffer.from(JSON.stringify(event)).toString('base64');
 }
 
-function req({ url, method = 'GET', token, body }) {
-  const r = { url, method, protocol: 'http', hostname: HOST, headers: { host: HOST, authorization: `Nostr ${token}` } };
+function req({ url, method = 'GET', token, body, git = false, type }) {
+  const r = { url, method, protocol: 'http', hostname: HOST, headers: { host: HOST, authorization: `Nostr ${token}` }, server: { gitEnabled: git } };
+  if (type) r.headers['content-type'] = type;
   if (body !== undefined) { r.body = body; r.rawBody = body; }
   return r;
 }
+const PACK = 'application/x-git-receive-pack-request';
 
 // Every path here is unowned, so the resolver chain ends at did:nostr:<pubkey>.
 const isAuthed = (r) => r.error === null && typeof r.webId === 'string' && r.webId.startsWith('did:nostr:');
@@ -96,18 +98,30 @@ describe('NIP-98 verifier: one header, one request (#643)', () => {
 
   it('git routes keep the lenient rules: wildcard method and base-URL prefix', async () => {
     const token = tokenFromTags([['u', `http://${HOST}/alice/repo`], ['method', '*']]);
-    const r = await verifyNostrAuth(req({ url: '/alice/repo/info/refs?service=git-receive-pack', token }));
+    const r = await verifyNostrAuth(req({ url: '/alice/repo/info/refs?service=git-receive-pack', token, git: true }));
     assert.ok(isAuthed(r), r.error);
     const push = tokenFromTags([['u', `http://${HOST}/alice/repo`]]);
-    const r2 = await verifyNostrAuth(req({ url: '/alice/repo/git-receive-pack', method: 'POST', token: push, body: Buffer.from('0000') }));
+    const r2 = await verifyNostrAuth(req({ url: '/alice/repo/git-receive-pack', method: 'POST', token: push, body: Buffer.from('0000'), git: true, type: PACK }));
     assert.ok(isAuthed(r2), r2.error);
+  });
+
+  it('a git-looking path is strict when git is off, or when the request is not git-shaped', async () => {
+    const off = tokenFromTags([['u', `http://${HOST}/alice/notes/git-receive-pack`], ['method', '*']]);
+    const r = await verifyNostrAuth(req({ url: '/alice/notes/git-receive-pack', method: 'POST', token: off, body: 'x', git: false, type: PACK }));
+    assert.match(r.error, /Wildcard method/);
+    const plainGet = tokenFromTags([['u', `http://${HOST}/alice/notes/info/refs`], ['method', '*']]);
+    const r2 = await verifyNostrAuth(req({ url: '/alice/notes/info/refs', token: plainGet, git: true })); // no service query
+    assert.match(r2.error, /Wildcard method/);
+    const putPack = tokenFromTags([['u', `http://${HOST}/alice/notes/git-upload-pack`]]);
+    const r3 = await verifyNostrAuth(req({ url: '/alice/notes/git-upload-pack', method: 'PUT', token: putPack, body: 'x', git: true, type: 'text/plain' }));
+    assert.match(r3.error, /Missing method tag/);
   });
 
   it('git routes accept the same token for every request of one operation', async () => {
     const token = tokenFromTags([['u', `http://${HOST}/alice/twice`], ['method', '*']]);
-    const r1 = await verifyNostrAuth(req({ url: '/alice/twice/info/refs?service=git-receive-pack', token }));
+    const r1 = await verifyNostrAuth(req({ url: '/alice/twice/info/refs?service=git-receive-pack', token, git: true }));
     assert.ok(isAuthed(r1), r1.error);
-    const r2 = await verifyNostrAuth(req({ url: '/alice/twice/git-receive-pack', method: 'POST', token, body: Buffer.from('0000') }));
+    const r2 = await verifyNostrAuth(req({ url: '/alice/twice/git-receive-pack', method: 'POST', token, body: Buffer.from('0000'), git: true, type: PACK }));
     assert.ok(isAuthed(r2), r2.error);
   });
 

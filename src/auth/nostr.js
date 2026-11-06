@@ -48,8 +48,25 @@ const TIMESTAMP_TOLERANCE = 60;
 // repo base URL and git sends the pack bodies. Everywhere else the NIP-98
 // MUSTs apply, or a captured header could be replayed as a different method
 // against any sub-path (#643).
-const GIT_ROUTE = /\/(info\/refs|git-upload-pack|git-receive-pack)(\?|$)/;
 const WRITE_METHODS = new Set(['PUT', 'POST', 'PATCH']);
+
+// A git smart-HTTP request, recognised by its shape (the ref discovery GET
+// with a service query, or a pack-service POST with the git content type),
+// and only while the server has git enabled. A plain resource whose path
+// happens to end in /info/refs or /git-receive-pack gets the strict rules.
+function isGitSmartHttp(request) {
+  if (request.server?.gitEnabled !== true) return false;
+  const [path, query = ''] = request.url.split('?');
+  const method = request.method.toUpperCase();
+  if (path.endsWith('/info/refs')) {
+    return method === 'GET' && /(^|&)service=git-(upload|receive)-pack(&|$)/.test(query);
+  }
+  if (/\/git-(upload|receive)-pack$/.test(path)) {
+    const type = request.headers['content-type'] || '';
+    return method === 'POST' && /^application\/x-git-(upload|receive)-pack-request/.test(type);
+  }
+  return false;
+}
 
 // Replay cache: event ids accepted inside the timestamp window (#643). An
 // event is valid for ±TIMESTAMP_TOLERANCE, so an id older than twice that
@@ -254,7 +271,7 @@ export async function verifyNostrAuth(request) {
 
   // Git routes only: allow prefix matching (event URL is base of request
   // URL), for git credential helpers that sign for the repo base URL.
-  const gitRoute = GIT_ROUTE.test(request.url);
+  const gitRoute = isGitSmartHttp(request);
   if (!urlMatches && gitRoute && normalizedRequestUrlNoQuery.startsWith(normalizedEventUrl + '/')) {
     urlMatches = true;
   }
