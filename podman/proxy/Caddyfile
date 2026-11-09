@@ -1,0 +1,55 @@
+# Caddy reverse proxy for JSS.
+#
+# Caddy runs on the host (sudo apt install caddy), not in a container, because
+# rootless Podman can't bind ports below 1024 by default. Copy this file to
+# /etc/caddy/Caddyfile (or `import` it from there), replace the CHANGE-ME
+# names, then: sudo systemctl reload caddy
+#
+# Check syntax without installing anything: make caddy-validate
+#
+# What Caddy does for JSS out of the box:
+# - Passes the original Host header and adds X-Forwarded-For/-Proto/-Host.
+#   JSS runs Fastify with trustProxy enabled, so it sees https and the public
+#   host name (e.g. Updates-Via becomes wss://<host>/.notifications).
+# - Proxies WebSocket upgrades (Solid notifications) with no extra config.
+# JSS_IDP_ISSUER in the active profile must still equal the public URL exactly.
+
+# Shared rules for every JSS site below.
+(jss) {
+	# JSS's always-on remoteStorage endpoint (/storage/me/...) lets ANY
+	# logged-in account read and write every pod's files, bypassing WAC.
+	# There's no setting to turn it off in 0.0.224, so block it here.
+	@remotestorage path /storage /storage/*
+	respond @remotestorage 404
+
+	# POST /.pods creates accounts. In 0.0.224 it ignores JSS_INVITE_ONLY (and
+	# its per-IP limit isn't enforced), so anyone could sign up through it.
+	# Block it publicly; create accounts on this host against
+	# http://localhost:4443 (make create-pod), which doesn't go through Caddy.
+	@createpod {
+		method POST
+		path /.pods /.pods/*
+	}
+	respond @createpod "Account creation is disabled on this server." 403
+
+	reverse_proxy 127.0.0.1:4443
+}
+
+# Internet profile: public domain with an automatic Let's Encrypt certificate.
+# Needs a DNS A/AAAA record for the name pointing at this host and ports
+# 80 and 443 reachable from the internet.
+CHANGE-ME.example.com {
+	import jss
+}
+
+# LAN profile: HTTPS from Caddy's own local CA so browsers allow Solid-OIDC
+# logins on the LAN. Run `sudo caddy trust` on this host and install Caddy's
+# root certificate (/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt)
+# on other devices. Set JSS_IDP_ISSUER to https://CHANGE-ME.local/ in your
+# lan profile, and keep JSS bound to 127.0.0.1 (make up PROFILE=local) so the
+# plain-http port isn't exposed. Uncomment to use:
+#
+# CHANGE-ME.local {
+# 	tls internal
+# 	import jss
+# }

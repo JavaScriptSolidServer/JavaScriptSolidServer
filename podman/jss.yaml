@@ -1,0 +1,40 @@
+# JSS pod definition.
+#
+# Runs locally with:  podman kube play --configmap profiles/<profile>.yaml jss.yaml
+# (the Makefile wraps this). It is a plain Kubernetes v1 Pod, so it also works
+# on Kubernetes once localhost/jss:latest has been pushed to a registry and the
+# image reference below is updated.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: jss
+  labels:
+    app: jss
+spec:
+  restartPolicy: Always
+  containers:
+    - name: server
+      image: localhost/jss:latest
+      envFrom:
+        - configMapRef:
+            name: jss-config
+      ports:
+        - containerPort: 4443
+          hostPort: 4443
+          hostIP: 127.0.0.1
+      volumeMounts:
+        # Pod storage (all user data).
+        - name: jss-data
+          mountPath: /data
+        # JSS keeps its token-signing secret in ~/.jss/token.secret.
+        # Without a persistent volume here, every restart generates a new
+        # secret and all existing logins/tokens break.
+        - name: jss-secrets
+          mountPath: /home/node/.jss
+  volumes:
+    - name: jss-data
+      persistentVolumeClaim:
+        claimName: jss-data
+    - name: jss-secrets
+      persistentVolumeClaim:
+        claimName: jss-secrets

@@ -1,0 +1,12 @@
+# Local profile: only reachable from this machine at http://localhost:4443/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jss-config
+data:
+  JSS_IDP: "true"
+  JSS_IDP_ISSUER: "http://localhost:4443/"
+  JSS_MULTIUSER: "true"
+  JSS_CONNEG: "true"
+  JSS_NOTIFICATIONS: "true"
+  JSS_LOG_LEVEL: "info"
