@@ -10,6 +10,7 @@
  */
 
 import { Command } from 'commander';
+import { sortPanes } from '../src/mashlib/index.js';
 import { createServer } from '../src/server.js';
 import { loadConfig, saveConfig, printConfig, defaults, parsePluginFlag } from '../src/config.js';
 import { createInvite, listInvites, revokeInvite } from '../src/idp/invites.js';
@@ -305,7 +306,17 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
-        if (config.panes && String(config.panes).length) console.log(`  Panes: ${[].concat(config.panes).join(', ')}`);
+        {
+          const { urls, dropped } = sortPanes(config.panes);
+          const paneMode = config.mashlibCdn && !config.mashlibModule;
+          if (urls.length && paneMode) console.log(`  Panes: ${urls.join(', ')}`);
+          if (urls.length && !paneMode) {
+            console.log(config.mashlibModule
+              ? '  Panes: ignored (--panes does not apply to --mashlib-module yet)'
+              : '  Panes: ignored (--panes needs --mashlib-cdn)');
+          }
+          for (const d of dropped) console.log(`  Panes: ignored "${d}" (not an http(s) URL or an absolute path)`);
+        }
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.corsProxy) console.log('  CORS proxy: enabled (/proxy?url=..., WAC-gated)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);

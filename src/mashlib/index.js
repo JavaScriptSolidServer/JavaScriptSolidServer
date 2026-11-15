@@ -15,6 +15,8 @@
  * static-site exporters — and gives Phase 2 a zero-network fast path.
  */
 
+import { readFileSync } from 'node:fs';
+
 /**
  * Cap on how much JSON-LD we'll inline. A 256 KB resource fits any
  * realistic profile, type index, or container listing. Above that we
@@ -261,29 +263,49 @@ export const PANE_LOADER_PATH = '/.well-known/jss/pane-loader.js';
 /** How long the page waits for panes before starting SolidOS anyway. */
 export const PANE_LOAD_TIMEOUT_MS = 5000;
 
+// The loader URL carries the package version, so a browser or proxy cache
+// never pairs a new page with an old loader after an upgrade.
+let loaderVersion = '0';
+try {
+  loaderVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || '0';
+} catch { /* unversioned URL: still correct, only less cache-friendly */ }
+const PANE_LOADER_URL = `${PANE_LOADER_PATH}?v=${encodeURIComponent(loaderVersion)}`;
+
 /**
  * Turn the `panes` option into a clean list of URLs. Accepts an array or
  * a comma-separated string (CLI flag, env var). Keeps http(s) URLs and
  * absolute paths on this server; anything else is dropped, so a typo
  * cannot become a relative import from whatever page is on show.
+ *
+ * The string form splits on every comma. A pane URL that contains a comma
+ * has to be given in the array form (config file).
  * @param {string[]|string|undefined|null|false} value
  * @returns {string[]}
  */
 export function normalizePanes(value) {
-  if (!value) return [];
+  return sortPanes(value).urls;
+}
+
+/**
+ * As normalizePanes, and also says which entries were dropped, so the CLI
+ * can tell the operator instead of ignoring them silently.
+ * @param {string[]|string|undefined|null|false} value
+ * @returns {{urls: string[], dropped: string[]}}
+ */
+export function sortPanes(value) {
+  const urls = [];
+  const dropped = [];
+  if (!value) return { urls, dropped };
   const list = Array.isArray(value) ? value : String(value).split(',');
-  const seen = new Set();
-  const out = [];
   for (const item of list) {
-    if (typeof item !== 'string') continue;
-    const url = item.trim();
-    if (!url || seen.has(url)) continue;
-    const ok = /^https?:\/\/[^\s]+$/i.test(url) || /^\/(?!\/)[^\s]*$/.test(url);
-    if (!ok) continue;
-    seen.add(url);
-    out.push(url);
+    const url = typeof item === 'string' ? item.trim() : item;
+    if (url === '') continue;
+    const ok = typeof url === 'string' &&
+      (/^https?:\/\/[^\s]+$/i.test(url) || /^\/(?!\/)[^\s]*$/.test(url));
+    if (!ok) { dropped.push(String(url)); continue; }
+    if (!urls.includes(url)) urls.push(url);
   }
-  return out;
+  return { urls, dropped };
 }
 
 /** JSON for use inside an inline script: no `<`, so no early `</script>`. */
@@ -295,24 +317,65 @@ function scriptJson(value) {
 }
 
 /**
- * The inline function that loads the configured panes, then starts
- * SolidOS. It always starts SolidOS: a pane that fails to load is skipped
- * by the loader, a loader that fails to import is logged, and a pane host
- * that hangs is given PANE_LOAD_TIMEOUT_MS before the page starts without
- * it (a pane that arrives later is still registered).
+ * Load the configured panes, then start SolidOS. This function is written
+ * into the page as source (`toString()`), so it uses nothing from this
+ * module and is exported only so that it can be tested.
+ *
+ * - It always starts SolidOS, once: when every pane has been dealt with or
+ *   after `timeoutMs`, whichever comes first. A loader that cannot be
+ *   imported is logged and SolidOS starts without panes.
+ * - All pane modules are fetched at once, so a slow or dead host delays
+ *   only its own pane, never the ones listed after it.
+ * - Panes are registered in the order configured. One that is still
+ *   loading at `timeoutMs` is registered when it arrives; the registry is
+ *   read at render time, so it is offered from the next view drawn, and
+ *   the view already on show is not redrawn under the person using it.
+ *
+ * @param {string[]} urls pane module URLs
+ * @param {string} loaderUrl URL of pane-loader.js
+ * @param {number} timeoutMs longest wait before SolidOS starts
+ * @param {(url: string) => Promise<object>} [load] import function (tests)
+ * @returns {Promise<void>} settles when SolidOS has been started
  */
-function paneStartFunction(paneUrls) {
-  return `
-function jssStartDataBrowser() {
+export function jssStartDataBrowser(urls, loaderUrl, timeoutMs, load) {
+  load = load || function (url) { return import(url); };
   var started = false;
   function start() { if (!started) { started = true; panes.runDataBrowser(); } }
-  setTimeout(start, ${PANE_LOAD_TIMEOUT_MS});
-  import('${PANE_LOADER_PATH}')
-    .then(function (m) { return m.loadPanes(${scriptJson(paneUrls)}, { refresh: false }); })
-    .catch(function (e) { console.warn('[jss] panes not loaded: ' + (e && e.message ? e.message : e)); })
-    .then(start);
+  var gate = new Promise(function (resolve) { setTimeout(resolve, timeoutMs); });
+  gate.then(start);
+  return load(loaderUrl).then(function (loader) {
+    function add(url) {
+      return loader.loadPane(url).then(function (r) {
+        if (r.ok) console.info('[jss] pane "' + r.name + '" loaded from ' + url + (started ? ' (after start-up)' : ''));
+        else console.warn('[jss] pane skipped: ' + url + ': ' + r.reason);
+      });
+    }
+    var arrived = urls.map(function () { return false; });
+    var fetched = urls.map(function (url, i) {
+      // Warm the module cache; loadPane imports the same URL again from it.
+      return load(url).then(function () {}, function () {}).then(function () { arrived[i] = true; });
+    });
+    var chain = Promise.resolve();
+    urls.forEach(function (url, i) {
+      chain = chain
+        .then(function () { return Promise.race([fetched[i], gate]); })
+        .then(function () {
+          if (arrived[i]) return add(url);
+          fetched[i].then(function () { return add(url); });
+        });
+    });
+    return chain;
+  }).catch(function (e) {
+    console.warn('[jss] panes not loaded: ' + (e && e.message ? e.message : e));
+  }).then(start);
 }
-`;
+
+/** The inline source for the page: the function above, and its call. */
+function paneStartScript(paneUrls) {
+  return {
+    fn: `\n${jssStartDataBrowser.toString()}\n`,
+    call: `jssStartDataBrowser(${scriptJson(paneUrls)}, ${scriptJson(PANE_LOADER_URL)}, ${PANE_LOAD_TIMEOUT_MS})`
+  };
 }
 
 /**
@@ -327,7 +390,8 @@ function jssStartDataBrowser() {
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
  * @param {string[]|string} [opts.panes] - Pane module URLs to load and
  *   register before SolidOS starts (#652). Empty or absent: the page is
- *   unchanged.
+ *   unchanged. Not applied by `generateModuleDatabrowserHtml`: a module
+ *   entry point starts itself, so that mode needs its own design.
  * @param {boolean} [opts.roundTripOptimization=true] - Inline a small
  *   reader script that lets rdflib-based clients (mashlib and friends)
  *   resolve `fetcher.load(uri)` from the data island instead of issuing
@@ -340,8 +404,9 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
   const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
   const paneUrls = normalizePanes(opts.panes);
   // With no panes configured the page is exactly what it was before #652.
-  const start = paneUrls.length ? 'jssStartDataBrowser()' : 'panes.runDataBrowser()';
-  const startFn = paneUrls.length ? paneStartFunction(paneUrls) : '';
+  const paneStart = paneUrls.length ? paneStartScript(paneUrls) : null;
+  const start = paneStart ? paneStart.call : 'panes.runDataBrowser()';
+  const startFn = paneStart ? paneStart.fn : '';
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
@@ -384,19 +449,12 @@ export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts 
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
   const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
-  const paneUrls = normalizePanes(opts.panes);
-  // A module entry point starts SolidOS by itself, so there is no call to
-  // wrap. Module scripts run in document order: this one runs after the
-  // entry point has been evaluated, registers the panes and redraws.
-  const paneScript = paneUrls.length
-    ? `\n<script type="module">import { loadPanes } from '${PANE_LOADER_PATH}'; loadPanes(${scriptJson(paneUrls)});</script>`
-    : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
 <body>${island}${reader}<div id="mashlib"></div>
-<script type="module" src="${moduleUrl}"></script>${paneScript}
+<script type="module" src="${moduleUrl}"></script>
 </body></html>`;
 }
 

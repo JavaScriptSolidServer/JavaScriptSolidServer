@@ -313,7 +313,7 @@ export async function handleGet(request, reply) {
       // on indentation that nothing will ever read.
       const embedJsonLd = JSON.stringify(jsonLd);
       const html = request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd, panes: request.panes })
+        ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
         : generateDatabrowserHtml(
           resourceUrl,
           request.mashlibCdn ? request.mashlibVersion : null,
@@ -450,7 +450,7 @@ export async function handleGet(request, reply) {
       }
     }
     const html = request.mashlibModule
-      ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd, panes: request.panes })
+      ? generateModuleDatabrowserHtml(request.mashlibModule, resourceUrl, { embedJsonLd })
       : generateDatabrowserHtml(
         resourceUrl,
         request.mashlibCdn ? request.mashlibVersion : null,

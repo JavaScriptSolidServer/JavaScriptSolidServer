@@ -44,11 +44,15 @@ jss start --mashlib-cdn --conneg --panes https://melvincarvalho.github.io/pane-l
 `--panes` (env `JSS_PANES`, config `panes`) takes a comma-separated list of pane module URLs. Each is an ES module whose default export is a SolidOS pane (`name`, `label`, `render`). The data browser page loads and registers them before it starts SolidOS, so they are in the registry at first render. Mashlib is not changed or rebuilt.
 
 - A URL is an `http(s)` address or an absolute path on this server (`/public/panes/my-pane.js`); anything else is ignored.
-- A pane that fails to load, or is not a pane, is skipped with a console warning. The data browser still starts, and it never waits more than 5 seconds for panes.
+- A pane that fails to load, or is not a pane, is skipped with a console warning, and the data browser still starts.
+- Panes are fetched at the same time and registered in the order listed. The page waits at most 5 seconds for them. A pane slower than that is registered when it arrives and is offered from the next view drawn; the view already on show is not redrawn.
+- It applies to `--mashlib-cdn`. It does not apply to `--mashlib-module` yet: a module entry point starts itself, so that mode needs its own design. The server says so at start-up.
+- On the command line and in `JSS_PANES` the list is split on commas. A pane URL that contains a comma has to go in the config file, as an array.
+- Entries that are not usable are listed at start-up, not silently ignored.
 - A loaded pane is registered after the built-in ones, so it is offered alongside them and does not replace the default view.
 - With no `--panes`, the page is exactly as before.
 
-The loader is [pane-loader](https://github.com/melvincarvalho/pane-loader), shipped with JSS and served at `/.well-known/jss/pane-loader.js` when panes are configured. Background: [SolidOS Panes, section 7](https://melvincarvalho.github.io/solidos-panes/#dynamic).
+The loader is [pane-loader](https://github.com/melvincarvalho/pane-loader), shipped with JSS and served at `/.well-known/jss/pane-loader.js` when panes are configured. The shipped copy leaves out the upstream `?pane=URL` shortcut, so the only panes loaded are the ones in this list. Background: [SolidOS Panes, section 7](https://melvincarvalho.github.io/solidos-panes/#dynamic).
 
 **Trust:** a pane runs in the page with the logged-in session and can do whatever the person can. This list is set by whoever runs the server; add only panes you would install for every user. Signing and consent are tracked in https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/651.
 

@@ -1,5 +1,10 @@
 // pane-loader.js — load SolidOS panes at run time, from URLs. No dependencies, no build.
 //
+// This is the copy shipped with JSS, from https://github.com/melvincarvalho/pane-loader
+// with one difference: the upstream file ends with a convenience that loads whatever panes
+// are named in its own URL (`pane-loader.js?pane=URL`). That is left out here, so the only
+// panes this server loads are the ones in its `--panes` list.
+//
 // A dynamically loaded pane is an ES module at a URL whose default export is a SolidOS pane:
 // { name, label(subject, context), render(subject, context), icon?, ... }. Nothing about the pane
 // changes; only how it reaches the registry. See https://melvincarvalho.github.io/solidos-panes/#dynamic
@@ -9,10 +14,6 @@
 //
 //   import { loadPanes } from './pane-loader.js'
 //   await loadPanes(['https://alice.example/public/panes/hello-pane.js'])
-//
-// or in one line, from the browser console on any SolidOS page:
-//
-//   import('https://…/pane-loader.js?pane=https://…/hello-pane.js')
 
 /** Is this object usable as a SolidOS pane? The same test `register` applies, plus render. */
 export function isPane (p) {
@@ -92,8 +93,3 @@ function refresh (results, options) {
     console.warn('[pane-loader] could not redraw the page: ' + (err && err.message ? err.message : err))
   }
 }
-
-// One-line use: import('…/pane-loader.js?pane=URL&pane=URL&show') loads those panes at once.
-const self = new URL(import.meta.url)
-const wanted = self.searchParams.getAll('pane')
-if (wanted.length) loadPanes(wanted, { show: self.searchParams.has('show'), subject: self.searchParams.get('subject') || undefined })

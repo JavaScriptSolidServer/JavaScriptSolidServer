@@ -989,19 +989,15 @@ export function createServer(options = {}) {
   }
 
   // The pane loader (#652): one static file from the package, served only
-  // when the data browser is on and panes are configured. Registered as a
-  // literal route so it wins over the LDP wildcard below.
+  // when a data browser page can ask for it. Registered as a literal route
+  // so it wins over the LDP wildcard below; Fastify derives HEAD from GET.
+  // The page asks for it with ?v=<package version>, so it can be cached.
   if (mashlibEnabled && panes.length) {
-    const paneLoaderFile = join(__dirname, 'mashlib', 'pane-loader.js');
-    const servePaneLoader = async (request, reply) => {
-      const body = await readFile(paneLoaderFile, 'utf8');
-      return reply
-        .header('Content-Type', 'text/javascript; charset=utf-8')
-        .header('Cache-Control', 'public, max-age=3600')
-        .send(request.method === 'HEAD' ? '' : body);
-    };
-    fastify.get(PANE_LOADER_PATH, servePaneLoader);
-    fastify.head(PANE_LOADER_PATH, servePaneLoader);
+    const paneLoaderSource = readFileSync(join(__dirname, 'mashlib', 'pane-loader.js'), 'utf8');
+    fastify.get(PANE_LOADER_PATH, async (request, reply) => reply
+      .header('Content-Type', 'text/javascript; charset=utf-8')
+      .header('Cache-Control', 'public, max-age=3600')
+      .send(paneLoaderSource));
   }
 
   // LDP routes - using wildcard routing
