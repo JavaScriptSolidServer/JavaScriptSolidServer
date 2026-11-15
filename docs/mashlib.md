@@ -35,6 +35,23 @@ Loads an ES module-based data browser from any URL. Uses `<script type="module">
 
 **Note:** Mashlib works best with `--conneg` enabled for Turtle support.
 
+## Extra panes at start-up
+
+```bash
+jss start --mashlib-cdn --conneg --panes https://melvincarvalho.github.io/pane-loader/examples/meetings-pane.js
+```
+
+`--panes` (env `JSS_PANES`, config `panes`) takes a comma-separated list of pane module URLs. Each is an ES module whose default export is a SolidOS pane (`name`, `label`, `render`). The data browser page loads and registers them before it starts SolidOS, so they are in the registry at first render. Mashlib is not changed or rebuilt.
+
+- A URL is an `http(s)` address or an absolute path on this server (`/public/panes/my-pane.js`); anything else is ignored.
+- A pane that fails to load, or is not a pane, is skipped with a console warning. The data browser still starts, and it never waits more than 5 seconds for panes.
+- A loaded pane is registered after the built-in ones, so it is offered alongside them and does not replace the default view.
+- With no `--panes`, the page is exactly as before.
+
+The loader is [pane-loader](https://github.com/melvincarvalho/pane-loader), shipped with JSS and served at `/.well-known/jss/pane-loader.js` when panes are configured. Background: [SolidOS Panes, section 7](https://melvincarvalho.github.io/solidos-panes/#dynamic).
+
+**Trust:** a pane runs in the page with the logged-in session and can do whatever the person can. This list is set by whoever runs the server; add only panes you would install for every user. Signing and consent are tracked in https://github.com/JavaScriptSolidServer/JavaScriptSolidServer/issues/651.
+
 ## Modern UI (SolidOS UI)
 
 ```bash

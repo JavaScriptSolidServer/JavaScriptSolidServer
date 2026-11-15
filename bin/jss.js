@@ -106,6 +106,7 @@ program
   .option('--mashlib-module <url>', 'Enable ES module data browser from a URL')
   .option('--no-mashlib', 'Disable Mashlib data browser')
   .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
+  .option('--panes <urls>', 'Comma-separated pane module URLs the data browser loads at start-up')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
   .option('--cors-proxy', 'Enable CORS proxy at /proxy?url=... for browser apps (WAC-gated)')
@@ -241,6 +242,7 @@ program
         mashlibCdn: config.mashlibCdn,
         mashlibVersion: config.mashlibVersion,
         mashlibModule: config.mashlibModule,
+        panes: config.panes,
         git: config.git,
         corsProxy: config.corsProxy,
         corsProxyMaxBytes: config.corsProxyMaxBytes,
@@ -303,6 +305,7 @@ program
           console.log(`  Mashlib: local (data browser enabled)`);
         }
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
+        if (config.panes && String(config.panes).length) console.log(`  Panes: ${[].concat(config.panes).join(', ')}`);
         if (config.git) console.log('  Git: enabled (clone/push support)');
         if (config.corsProxy) console.log('  CORS proxy: enabled (/proxy?url=..., WAC-gated)');
         if (config.nostr) console.log(`  Nostr: enabled (${config.nostrPath})`);

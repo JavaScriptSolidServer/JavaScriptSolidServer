@@ -147,6 +147,7 @@ Server: pub http://localhost:4443/alice/public/data.json  (on change)
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-module <url>` | Enable ES module data browser from a URL | - |
 | `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
+| `--panes <urls>` | Comma-separated pane module URLs the data browser loads at start-up | - |
 | `--solidos-ui` | Enable modern SolidOS UI (requires --mashlib) | false |
 | `--git` | Enable Git HTTP backend | false |
 | `--nostr` | Enable Nostr relay | false |

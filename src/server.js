@@ -4,6 +4,7 @@ import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import { readFile } from 'fs/promises';
 import { readFileSync } from 'fs';
+import { normalizePanes, PANE_LOADER_PATH } from './mashlib/index.js';
 import { STATUS_CODES } from 'node:http';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -87,6 +88,8 @@ export function createServer(options = {}) {
   const mashlibCdn = options.mashlibCdn ?? false;
   const mashlibEnabled = mashlibCdn || !!mashlibModule;
   const mashlibVersion = options.mashlibVersion ?? '2.0.0';
+  // Panes loaded by the data browser page at start-up (#652). OFF by default.
+  const panes = normalizePanes(options.panes);
   // Git HTTP backend is OFF by default - enables clone/push via git protocol
   const gitEnabled = options.git ?? false;
   // CORS proxy (#378) — OFF by default. Numeric settings get the
@@ -343,6 +346,7 @@ export function createServer(options = {}) {
   fastify.decorateRequest('mashlibCdn', null);
   fastify.decorateRequest('mashlibVersion', null);
   fastify.decorateRequest('mashlibModule', null);
+  fastify.decorateRequest('panes', null);
   fastify.decorateRequest('defaultQuota', null);
   fastify.decorateRequest('provisionKeys', null);
   fastify.decorateRequest('config', null);
@@ -359,6 +363,7 @@ export function createServer(options = {}) {
     request.mashlibCdn = mashlibCdn;
     request.mashlibVersion = mashlibVersion;
     request.mashlibModule = mashlibModule;
+    request.panes = panes;
     request.defaultQuota = defaultQuota;
     request.provisionKeys = provisionKeysEnabled;
     request.config = { public: options.public, readOnly: options.readOnly };
@@ -957,6 +962,9 @@ export function createServer(options = {}) {
     // identity. GET/HEAD reach the LDP layer normally and serve the
     // file written by --provision-keys.
     '/.well-known/nostr.json',
+    // The pane loader (#652) is served from the package, never from
+    // storage; writes to its path are refused for the same reason.
+    PANE_LOADER_PATH,
   ]) {
     fastify.put(pat, methodNotAllowed);
     fastify.post(pat, methodNotAllowed);
@@ -978,6 +986,22 @@ export function createServer(options = {}) {
       // LDP layer returns 404 because there's no on-disk file.
       instance.head('/.well-known/did/nostr/:pubkeyAndExt', wellKnownDidNostr);
     });
+  }
+
+  // The pane loader (#652): one static file from the package, served only
+  // when the data browser is on and panes are configured. Registered as a
+  // literal route so it wins over the LDP wildcard below.
+  if (mashlibEnabled && panes.length) {
+    const paneLoaderFile = join(__dirname, 'mashlib', 'pane-loader.js');
+    const servePaneLoader = async (request, reply) => {
+      const body = await readFile(paneLoaderFile, 'utf8');
+      return reply
+        .header('Content-Type', 'text/javascript; charset=utf-8')
+        .header('Cache-Control', 'public, max-age=3600')
+        .send(request.method === 'HEAD' ? '' : body);
+    };
+    fastify.get(PANE_LOADER_PATH, servePaneLoader);
+    fastify.head(PANE_LOADER_PATH, servePaneLoader);
   }
 
   // LDP routes - using wildcard routing
