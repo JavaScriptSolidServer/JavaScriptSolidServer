@@ -893,7 +893,9 @@ export function createServer(options = {}) {
   // Mashlib CDN mode: redirect chunk requests to CDN
   if (mashlibEnabled && mashlibCdn) {
     const cdnBase = `https://unpkg.com/mashlib@${mashlibVersion}/dist`;
-    const chunkPattern = /^\/\d+\.mashlib\.min\.js(\.map)?$/;
+    // Lazy chunks are requested from the pod. mashlib 2.x names them
+    // 841.mashlib.min.js; 3.x names them 799.js, 410.js (#654).
+    const chunkPattern = /^\/\d+(\.mashlib\.min)?\.js(\.map)?$/;
 
     fastify.addHook('onRequest', async (request, reply) => {
       if (chunkPattern.test(request.url)) {
