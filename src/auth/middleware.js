@@ -181,7 +181,7 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     if (request.mashlibEnabled) {
       const html = request.mashlibModule
         ? generateModuleDatabrowserHtml(request.mashlibModule)
-        : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null);
+        : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null, { panes: request.panes });
       return reply.code(statusCode).type('text/html').send(html);
     }
     return reply.code(statusCode).type('text/html').send(getErrorPage(statusCode, isAuthenticated, request));

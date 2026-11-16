@@ -15,6 +15,8 @@
  * static-site exporters — and gives Phase 2 a zero-network fast path.
  */
 
+import { readFileSync } from 'node:fs';
+
 /**
  * Cap on how much JSON-LD we'll inline. A 256 KB resource fits any
  * realistic profile, type index, or container listing. Above that we
@@ -246,6 +248,137 @@ export function roundTripOptimizationScript() {
 }
 
 /**
+ * Panes loaded at start-up (#652).
+ *
+ * The server can be given a list of pane module URLs (`--panes`). Each is
+ * an ES module whose default export is a SolidOS pane. The data browser
+ * page loads and registers them before it starts SolidOS, so they are in
+ * the registry at first render and mashlib itself is unchanged.
+ *
+ * The loader is pane-loader (https://github.com/melvincarvalho/pane-loader),
+ * shipped beside this file and served at PANE_LOADER_PATH.
+ */
+export const PANE_LOADER_PATH = '/.well-known/jss/pane-loader.js';
+
+/** How long the page waits for panes before starting SolidOS anyway. */
+export const PANE_LOAD_TIMEOUT_MS = 5000;
+
+// The loader URL carries the package version, so a browser or proxy cache
+// never pairs a new page with an old loader after an upgrade.
+let loaderVersion = '0';
+try {
+  loaderVersion = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version || '0';
+} catch { /* unversioned URL: still correct, only less cache-friendly */ }
+const PANE_LOADER_URL = `${PANE_LOADER_PATH}?v=${encodeURIComponent(loaderVersion)}`;
+
+/**
+ * Turn the `panes` option into a clean list of URLs. Accepts an array or
+ * a comma-separated string (CLI flag, env var). Keeps http(s) URLs and
+ * absolute paths on this server; anything else is dropped, so a typo
+ * cannot become a relative import from whatever page is on show.
+ *
+ * The string form splits on every comma. A pane URL that contains a comma
+ * has to be given in the array form (config file).
+ * @param {string[]|string|undefined|null|false} value
+ * @returns {string[]}
+ */
+export function normalizePanes(value) {
+  return sortPanes(value).urls;
+}
+
+/**
+ * As normalizePanes, and also says which entries were dropped, so the CLI
+ * can tell the operator instead of ignoring them silently.
+ * @param {string[]|string|undefined|null|false} value
+ * @returns {{urls: string[], dropped: string[]}}
+ */
+export function sortPanes(value) {
+  const urls = [];
+  const dropped = [];
+  if (!value) return { urls, dropped };
+  const list = Array.isArray(value) ? value : String(value).split(',');
+  for (const item of list) {
+    const url = typeof item === 'string' ? item.trim() : item;
+    if (url === '') continue;
+    const ok = typeof url === 'string' &&
+      (/^https?:\/\/[^\s]+$/i.test(url) || /^\/(?!\/)[^\s]*$/.test(url));
+    if (!ok) { dropped.push(String(url)); continue; }
+    if (!urls.includes(url)) urls.push(url);
+  }
+  return { urls, dropped };
+}
+
+/** JSON for use inside an inline script: no `<`, so no early `</script>`. */
+function scriptJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+/**
+ * Load the configured panes, then start SolidOS. This function is written
+ * into the page as source (`toString()`), so it uses nothing from this
+ * module and is exported only so that it can be tested.
+ *
+ * - It always starts SolidOS, once: when every pane has been dealt with or
+ *   after `timeoutMs`, whichever comes first. A loader that cannot be
+ *   imported is logged and SolidOS starts without panes.
+ * - All pane modules are fetched at once, so a slow or dead host delays
+ *   only its own pane, never the ones listed after it.
+ * - Panes are registered in the order configured. One that is still
+ *   loading at `timeoutMs` is registered when it arrives; the registry is
+ *   read at render time, so it is offered from the next view drawn, and
+ *   the view already on show is not redrawn under the person using it.
+ *
+ * @param {string[]} urls pane module URLs
+ * @param {string} loaderUrl URL of pane-loader.js
+ * @param {number} timeoutMs longest wait before SolidOS starts
+ * @param {(url: string) => Promise<object>} [load] import function (tests)
+ * @returns {Promise<void>} settles when SolidOS has been started
+ */
+export function jssStartDataBrowser(urls, loaderUrl, timeoutMs, load) {
+  load = load || function (url) { return import(url); };
+  var started = false;
+  function start() { if (!started) { started = true; panes.runDataBrowser(); } }
+  var gate = new Promise(function (resolve) { setTimeout(resolve, timeoutMs); });
+  gate.then(start);
+  return load(loaderUrl).then(function (loader) {
+    function add(url) {
+      return loader.loadPane(url).then(function (r) {
+        if (r.ok) console.info('[jss] pane "' + r.name + '" loaded from ' + url + (started ? ' (after start-up)' : ''));
+        else console.warn('[jss] pane skipped: ' + url + ': ' + r.reason);
+      });
+    }
+    var arrived = urls.map(function () { return false; });
+    var fetched = urls.map(function (url, i) {
+      // Warm the module cache; loadPane imports the same URL again from it.
+      return load(url).then(function () {}, function () {}).then(function () { arrived[i] = true; });
+    });
+    var chain = Promise.resolve();
+    urls.forEach(function (url, i) {
+      chain = chain
+        .then(function () { return Promise.race([fetched[i], gate]); })
+        .then(function () {
+          if (arrived[i]) return add(url);
+          fetched[i].then(function () { return add(url); });
+        });
+    });
+    return chain;
+  }).catch(function (e) {
+    console.warn('[jss] panes not loaded: ' + (e && e.message ? e.message : e));
+  }).then(start);
+}
+
+/** The inline source for the page: the function above, and its call. */
+function paneStartScript(paneUrls) {
+  return {
+    fn: `\n${jssStartDataBrowser.toString()}\n`,
+    call: `jssStartDataBrowser(${scriptJson(paneUrls)}, ${scriptJson(PANE_LOADER_URL)}, ${PANE_LOAD_TIMEOUT_MS})`
+  };
+}
+
+/**
  * Generate Mashlib databrowser HTML
  *
  * @param {string} resourceUrl - The URL of the resource being viewed
@@ -255,6 +388,10 @@ export function roundTripOptimizationScript() {
  *   as a `<script type="application/ld+json">` data island. Accepts a
  *   UTF-8 string or a Buffer (coerced via `String()`). Honors a 256 KB
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
+ * @param {string[]|string} [opts.panes] - Pane module URLs to load and
+ *   register before SolidOS starts (#652). Empty or absent: the page is
+ *   unchanged. Not applied by `generateModuleDatabrowserHtml`: a module
+ *   entry point starts itself, so that mode needs its own design.
  * @param {boolean} [opts.roundTripOptimization=true] - Inline a small
  *   reader script that lets rdflib-based clients (mashlib and friends)
  *   resolve `fetcher.load(uri)` from the data island instead of issuing
@@ -265,6 +402,11 @@ export function roundTripOptimizationScript() {
 export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {}) {
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
   const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
+  const paneUrls = normalizePanes(opts.panes);
+  // With no panes configured the page is exactly what it was before #652.
+  const paneStart = paneUrls.length ? paneStartScript(paneUrls) : null;
+  const start = paneStart ? paneStart.call : 'panes.runDataBrowser()';
+  const startFn = paneStart ? paneStart.fn : '';
   if (cdnVersion) {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
@@ -274,11 +416,11 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
 <body id="PageBody">${island}${reader}<header id="PageHeader"></header>
 <div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div>
 <footer id="PageFooter"></footer>
-<script>
+<script>${startFn}
 (function() {
   var s = document.createElement('script');
   s.src = '${cdnBase}/mashlib.min.js';
-  s.onload = function() { panes.runDataBrowser(); };
+  s.onload = function() { ${start}; };
   s.onerror = function() { document.body.innerHTML = '<p>Failed to load Mashlib from CDN</p>'; };
   document.head.appendChild(s);
 })();
@@ -286,8 +428,8 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
   }
 
   // Local mode - use defer (reliable when served locally)
-  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>document.addEventListener('DOMContentLoaded', function() {
-        panes.runDataBrowser()
+  return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title><script>${startFn}document.addEventListener('DOMContentLoaded', function() {
+        ${start}
       })</script><script defer="defer" src="/mashlib.min.js"></script><link href="/mash.css" rel="stylesheet"></head><body id="PageBody">${island}${reader}<header id="PageHeader"></header><div class="TabulatorOutline" id="DummyUUID" role="main"><table id="outline"></table><div id="GlobalDashboard"></div></div><footer id="PageFooter"></footer></body></html>`;
 }
 

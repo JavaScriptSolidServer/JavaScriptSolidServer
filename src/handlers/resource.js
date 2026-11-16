@@ -317,7 +317,7 @@ export async function handleGet(request, reply) {
         : generateDatabrowserHtml(
           resourceUrl,
           request.mashlibCdn ? request.mashlibVersion : null,
-          { embedJsonLd }
+          { embedJsonLd, panes: request.panes }
         );
       const headers = getAllHeaders({
         isContainer: true,
@@ -454,7 +454,7 @@ export async function handleGet(request, reply) {
       : generateDatabrowserHtml(
         resourceUrl,
         request.mashlibCdn ? request.mashlibVersion : null,
-        { embedJsonLd }
+        { embedJsonLd, panes: request.panes }
       );
     const headers = getAllHeaders({
       isContainer: false,

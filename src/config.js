@@ -49,6 +49,9 @@ export const defaults = {
   mashlibCdn: false,
   mashlibVersion: '2.0.0',
   mashlibModule: false,
+  // Pane module URLs the data browser loads at start-up (#652):
+  // an array, or a comma-separated string. Empty: off.
+  panes: null,
 
   // Git HTTP backend
   git: false,
@@ -169,6 +172,7 @@ const envMap = {
   JSS_MASHLIB_CDN: 'mashlibCdn',
   JSS_MASHLIB_VERSION: 'mashlibVersion',
   JSS_MASHLIB_MODULE: 'mashlibModule',
+  JSS_PANES: 'panes',
   JSS_GIT: 'git',
   JSS_CORS_PROXY: 'corsProxy',
   JSS_CORS_PROXY_MAX_BYTES: 'corsProxyMaxBytes',
