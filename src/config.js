@@ -47,7 +47,7 @@ export const defaults = {
   // Mashlib data browser
   mashlib: false,
   mashlibCdn: false,
-  mashlibVersion: '2.0.0',
+  mashlibVersion: '3.1.0',
   mashlibModule: false,
   // Pane module URLs the data browser loads at start-up (#652):
   // an array, or a comma-separated string. Empty: off.

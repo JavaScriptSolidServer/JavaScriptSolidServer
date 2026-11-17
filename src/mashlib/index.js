@@ -428,10 +428,51 @@ function paneAddScript(paneUrls) {
 }
 
 /**
+ * mashlib 3.x keeps the height of its header in `--app-header-height`,
+ * which its layout reads (#660). The header is put on the page by
+ * `runDataBrowser`, which with `--panes` runs after the panes have loaded,
+ * so this waits for it. Serialized into the page with `toString()`, so it
+ * must be self-contained and plain ES5-style.
+ */
+export function jssSyncHeaderHeight() {
+  function watch(header) {
+    function sync() {
+      var height = header.getBoundingClientRect().height;
+      if (height > 0) {
+        var rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        document.documentElement.style.setProperty('--app-header-height', (height / rootFontSize) + 'rem');
+      }
+    }
+    sync();
+    if ('ResizeObserver' in window) new ResizeObserver(sync).observe(header);
+    else window.addEventListener('resize', sync);
+  }
+  var found = document.getElementById('mainSolidUiHeader');
+  if (found) return watch(found);
+  if (!('MutationObserver' in window)) return;
+  var seen = new MutationObserver(function () {
+    var header = document.getElementById('mainSolidUiHeader');
+    if (!header) return;
+    seen.disconnect();
+    watch(header);
+  });
+  seen.observe(document.body, { childList: true, subtree: true });
+  // A page whose header never appears keeps the stylesheet's own height.
+  setTimeout(function () { seen.disconnect(); }, 30000);
+}
+
+/** True for a mashlib version of 3 or later, whose page differs from 2.x (#660). */
+export function isMashlib3(version) {
+  const major = parseInt(String(version || '').replace(/^[^0-9]*/, ''), 10);
+  return Number.isFinite(major) && major >= 3;
+}
+
+/**
  * Generate Mashlib databrowser HTML
  *
  * @param {string} resourceUrl - The URL of the resource being viewed
- * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "2.0.0")
+ * @param {string} cdnVersion - If provided, load mashlib from unpkg CDN (e.g., "3.1.0").
+ *   A version of 3 or later gets the 3.x page; an earlier one the 2.x page (#660).
  * @param {object} [opts]
  * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body to inline
  *   as a `<script type="application/ld+json">` data island. Accepts a
@@ -460,6 +501,22 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
     // CDN mode - use script.onload to ensure mashlib is fully loaded before init
     // This avoids race conditions with defer + DOMContentLoaded
     const cdnBase = `https://unpkg.com/mashlib@${cdnVersion}/dist`;
+    if (isMashlib3(cdnVersion)) {
+      // The 3.x page (#660): upstream's databrowser.html, loaded the same way as below.
+      return `<!doctype html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>SolidOS</title>
+<link href="${cdnBase}/mash.css" rel="stylesheet"></head>
+<body id="PageBody" data-app-shell="databrowser">${island}${reader}<solid-ui-provider><a href="#MainContent" class="skip-link">Skip to main content</a><div class="app-main" tabindex="-1" aria-live="polite"><div class="app-shell"><main id="MainContent" class="app-view"><div id="OutlineView" class="outline-view" aria-label="Resource browser"></div></main></div></div></solid-ui-provider>
+<script>${startFn}
+${jssSyncHeaderHeight.toString()}
+(function() {
+  var s = document.createElement('script');
+  s.src = '${cdnBase}/mashlib.min.js';
+  s.onload = function() { ${start}; jssSyncHeaderHeight(); };
+  s.onerror = function() { document.body.innerHTML = '<p>Failed to load Mashlib from CDN</p>'; };
+  document.head.appendChild(s);
+})();
+</script></body></html>`;
+    }
     return `<!doctype html><html><head><meta charset="utf-8"/><title>SolidOS Web App</title>
 <link href="${cdnBase}/mash.css" rel="stylesheet"></head>
 <body id="PageBody">${island}${reader}<header id="PageHeader"></header>

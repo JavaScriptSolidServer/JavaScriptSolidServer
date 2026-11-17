@@ -43,7 +43,7 @@ createServer({
   baseDomain: null,    // Base domain for subdomains (e.g., "example.com")
   mashlib: false,      // Enable Mashlib data browser - local mode (default: false)
   mashlibCdn: false,   // Enable Mashlib data browser - CDN mode (default: false)
-  mashlibVersion: '2.0.0', // Mashlib version for CDN mode
+  mashlibVersion: '3.1.0', // Mashlib version for CDN mode
 });
 ```
 
@@ -146,7 +146,7 @@ Server: pub http://localhost:4443/alice/public/data.json  (on change)
 | `--mashlib` | Enable Mashlib (local mode) | false |
 | `--mashlib-cdn` | Enable Mashlib (CDN mode) | false |
 | `--mashlib-module <url>` | Enable ES module data browser from a URL | - |
-| `--mashlib-version <ver>` | Mashlib CDN version | 2.0.0 |
+| `--mashlib-version <ver>` | Mashlib CDN version | 3.1.0 |
 | `--panes <urls>` | Comma-separated pane module URLs the data browser loads at start-up | - |
 | `--solidos-ui` | Enable modern SolidOS UI (requires --mashlib) | false |
 | `--git` | Enable Git HTTP backend | false |
