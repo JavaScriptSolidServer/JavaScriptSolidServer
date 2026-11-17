@@ -308,13 +308,9 @@ program
         if (config.mashlibModule) console.log(`  Mashlib module: ${config.mashlibModule}`);
         {
           const { urls, dropped } = sortPanes(config.panes);
-          const paneMode = config.mashlibCdn && !config.mashlibModule;
+          const paneMode = config.mashlibCdn || config.mashlibModule;
           if (urls.length && paneMode) console.log(`  Panes: ${urls.join(', ')}`);
-          if (urls.length && !paneMode) {
-            console.log(config.mashlibModule
-              ? '  Panes: ignored (--panes does not apply to --mashlib-module yet)'
-              : '  Panes: ignored (--panes needs --mashlib-cdn)');
-          }
+          if (urls.length && !paneMode) console.log('  Panes: ignored (--panes needs --mashlib-cdn or --mashlib-module)');
           for (const d of dropped) console.log(`  Panes: ignored "${d}" (not an http(s) URL or an absolute path)`);
         }
         if (config.git) console.log('  Git: enabled (clone/push support)');

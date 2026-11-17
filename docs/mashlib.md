@@ -46,7 +46,7 @@ jss start --mashlib-cdn --conneg --panes https://melvincarvalho.github.io/pane-l
 - A URL is an `http(s)` address or an absolute path on this server (`/public/panes/my-pane.js`); anything else is ignored.
 - A pane that fails to load, or is not a pane, is skipped with a console warning, and the data browser still starts.
 - Panes are fetched at the same time and registered in the order listed. The page waits at most 5 seconds for them. A pane slower than that is registered when it arrives and is offered from the next view drawn; the view already on show is not redrawn.
-- It applies to `--mashlib-cdn`. It does not apply to `--mashlib-module` yet: a module entry point starts itself, so that mode needs its own design. The server says so at start-up.
+- It applies to `--mashlib-cdn` and to `--mashlib-module`. A module entry point starts SolidOS itself, so in that mode the panes are added once it has put the pane registry (`panes.register`) on the page, and the view on show is redrawn so that they are offered. An entry point that never provides the registry gets one console warning after 30 seconds.
 - On the command line and in `JSS_PANES` the list is split on commas. A pane URL that contains a comma has to go in the config file, as an array.
 - Entries that are not usable are listed at start-up, not silently ignored.
 - A loaded pane is registered after the built-in ones, so it is offered alongside them and does not replace the default view.
