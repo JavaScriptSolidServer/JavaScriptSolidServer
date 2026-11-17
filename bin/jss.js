@@ -106,7 +106,7 @@ program
   .option('--mashlib-cdn', 'Enable Mashlib data browser (CDN mode)')
   .option('--mashlib-module <url>', 'Enable ES module data browser from a URL')
   .option('--no-mashlib', 'Disable Mashlib data browser')
-  .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 2.0.0)')
+  .option('--mashlib-version <version>', 'Mashlib version for CDN mode (default: 3.1.0)')
   .option('--panes <urls>', 'Comma-separated pane module URLs the data browser loads at start-up')
   .option('--git', 'Enable Git HTTP backend (clone/push support)')
   .option('--no-git', 'Disable Git HTTP backend')
