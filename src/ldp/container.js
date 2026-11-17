@@ -33,6 +33,23 @@ function isHiddenEntry(name) {
 }
 
 /**
+ * A name on disk as one segment of a URL path (#662).
+ *
+ * Names are stored decoded, so a listing has to encode them again, or a
+ * space gives an IRI no RDF parser accepts, `#` and `?` cut the name
+ * short, and `%` is decoded a second time. Everything is encoded except
+ * the characters a path segment may hold as they are (RFC 3986 pchar:
+ * unreserved, sub-delims, `:` and `@`), which keeps ordinary names
+ * such as `a:b@c.ttl` exactly as clients wrote them.
+ *
+ * @param {string} name - A file or directory name, not a path
+ * @returns {string}
+ */
+export function encodePathSegment(name) {
+  return encodeURIComponent(name).replace(/%(3A|40|24|26|2B|2C|3B|3D)/g, (m) => decodeURIComponent(m));
+}
+
+/**
  * Generate JSON-LD representation of a container
  * @param {string} containerUrl - Full URL of the container
  * @param {Array<{name: string, isDirectory: boolean}>} entries - Container contents
@@ -43,7 +60,7 @@ export function generateContainerJsonLd(containerUrl, entries) {
   const baseUrl = containerUrl.endsWith('/') ? containerUrl : containerUrl + '/';
 
   const contains = entries.filter(entry => !isHiddenEntry(entry.name)).map(entry => {
-    const childUrl = baseUrl + entry.name + (entry.isDirectory ? '/' : '');
+    const childUrl = baseUrl + encodePathSegment(entry.name) + (entry.isDirectory ? '/' : '');
     const item = {
       '@id': childUrl,
       '@type': entry.isDirectory ? [`${LDP}Container`, `${LDP}BasicContainer`, `${LDP}Resource`] : [`${LDP}Resource`]
