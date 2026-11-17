@@ -7,7 +7,7 @@
  *     dropped entries are reported
  *   - with no panes the generated page is unchanged
  *   - with panes the page loads them, then starts SolidOS (CDN and local)
- *   - module mode is not touched
+ *   - module mode: the entry point is left alone; panes are added after it (#658)
  *   - a URL cannot break out of the inline script
  *   - the start-up function: always starts once, a dead or slow pane host
  *     holds back only its own pane, configured order is kept
@@ -29,6 +29,7 @@ import {
 import {
   generateDatabrowserHtml,
   generateModuleDatabrowserHtml,
+  jssAddPanes,
   jssStartDataBrowser,
   normalizePanes,
   sortPanes,
@@ -98,10 +99,68 @@ describe('panes at start-up — the page (unit, #652)', () => {
     });
   }
 
-  it('module mode is not touched', () => {
-    const plain = generateModuleDatabrowserHtml('https://cdn.example/mashlib.js', 'https://pod.example/', {});
-    const withPanes = generateModuleDatabrowserHtml('https://cdn.example/mashlib.js', 'https://pod.example/', { panes: [PANE] });
-    assert.strictEqual(withPanes, plain);
+  it('module mode: no panes leaves the page unchanged (#658)', () => {
+    const page = (opts) => generateModuleDatabrowserHtml('https://cdn.example/mashlib.js', 'https://pod.example/', opts);
+    const plain = page({});
+    assert.strictEqual(page({ panes: [] }), plain);
+    assert.strictEqual(page({ panes: null }), plain);
+    assert.strictEqual(page({ panes: 'not a url' }), plain);
+    assert.ok(!plain.includes(PANE_LOADER_PATH));
+    assert.ok(!plain.includes('jssAddPanes'));
+  });
+
+  it('module mode: panes are added after the entry point, which is not touched (#658)', () => {
+    const html = generateModuleDatabrowserHtml('https://cdn.example/mashlib.js', 'https://pod.example/', { panes: [PANE] });
+    const entry = html.indexOf('<script type="module" src="https://cdn.example/mashlib.js"></script>');
+    const add = html.indexOf('function jssAddPanes(');
+    assert.ok(entry > 0 && add > entry, 'the pane script follows the entry point');
+    assert.match(html, new RegExp(`jssAddPanes\\(\\["${PANE.replace(/[.]/g, '\\.')}"\\], "/\\.well-known/jss/pane-loader\\.js\\?v=[^"]+", \\d+\\)`));
+    assert.ok(!html.includes('runDataBrowser'), 'starting SolidOS is left to the entry point');
+    const nasty = 'https://panes.example/a.js?x=</script><script>alert(1)</script>';
+    assert.ok(!generateModuleDatabrowserHtml('https://cdn.example/mashlib.js', '', { panes: [nasty] }).includes('<script>alert(1)'));
+  });
+
+  describe('jssAddPanes (module mode, #658)', () => {
+    const quiet = async (fn) => {
+      const { warn, info } = console; const said = [];
+      console.warn = (m) => said.push(m); console.info = () => {};
+      try { await fn(); } finally { console.warn = warn; console.info = info; }
+      return said;
+    };
+
+    it('waits for the registry, then hands the list to the loader', async () => {
+      const calls = [];
+      const load = async (url) => {
+        calls.push(url);
+        return { loadPanes: async (urls) => { calls.push(['loadPanes', urls, typeof globalThis.panes.register]); } };
+      };
+      delete globalThis.panes;
+      setTimeout(() => { globalThis.panes = { register () {} }; }, 120);
+      try {
+        await quiet(() => jssAddPanes([PANE], '/loader.js', 2000, load));
+      } finally { delete globalThis.panes; }
+      assert.deepStrictEqual(calls, [PANE, '/loader.js', ['loadPanes', [PANE], 'function']]);
+    });
+
+    it('gives up, with one warning, when no registry appears', async () => {
+      delete globalThis.panes;
+      const calls = [];
+      const said = await quiet(() => jssAddPanes([PANE], '/loader.js', 150, async (url) => { calls.push(url); return {}; }));
+      assert.deepStrictEqual(calls, [PANE], 'the loader is never asked for');
+      assert.strictEqual(said.length, 1);
+      assert.match(said[0], /no SolidOS pane registry/);
+    });
+
+    it('a loader that fails is reported, not thrown', async () => {
+      globalThis.panes = { register () {} };
+      try {
+        const said = await quiet(() => jssAddPanes([PANE], '/loader.js', 500, async (url) => {
+          if (url === '/loader.js') throw new Error('404');
+          return {};
+        }));
+        assert.match(said[0], /panes not loaded: 404/);
+      } finally { delete globalThis.panes; }
+    });
   });
 
   it('a pane URL cannot close the inline script', () => {

@@ -180,7 +180,7 @@ export function handleUnauthorized(request, reply, isAuthenticated, wacAllow, au
     // Mashlib has built-in login functionality via panes.runDataBrowser()
     if (request.mashlibEnabled) {
       const html = request.mashlibModule
-        ? generateModuleDatabrowserHtml(request.mashlibModule)
+        ? generateModuleDatabrowserHtml(request.mashlibModule, '', { panes: request.panes })
         : generateDatabrowserHtml(request.url, request.mashlibCdn ? request.mashlibVersion : null, { panes: request.panes });
       return reply.code(statusCode).type('text/html').send(html);
     }

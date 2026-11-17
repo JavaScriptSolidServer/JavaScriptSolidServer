@@ -378,6 +378,55 @@ function paneStartScript(paneUrls) {
   };
 }
 
+/** Longest wait, in module mode, for the entry point to put the pane registry on the page. */
+export const PANE_REGISTRY_WAIT_MS = 30000;
+
+/**
+ * Module mode (#658): the entry point starts SolidOS itself, so the page
+ * cannot load panes first. This waits for the registry the entry point
+ * puts on the page (`panes.register`), then hands the list to the loader,
+ * whose `loadPanes` registers each pane and redraws the subject on show
+ * so that the new panes are offered. Serialized into the page with
+ * `toString()`, so it must be self-contained and plain ES5-style.
+ *
+ * - The pane modules are fetched straight away, so that they are in the
+ *   module cache by the time the registry is there.
+ * - A registry that never appears (an entry point that is not SolidOS) is
+ *   reported once, after `waitMs`.
+ *
+ * @param {string[]} urls pane module URLs
+ * @param {string} loaderUrl URL of pane-loader.js
+ * @param {number} waitMs longest wait for the registry
+ * @param {(url: string) => Promise<object>} [load] import function (tests)
+ * @returns {Promise<void>} settles when the panes are in, or given up on
+ */
+export function jssAddPanes(urls, loaderUrl, waitMs, load) {
+  load = load || function (url) { return import(url); };
+  urls.forEach(function (url) { load(url).then(function () {}, function () {}); });
+  var began = Date.now();
+  return new Promise(function (resolve) {
+    (function look() {
+      var p = globalThis.panes;
+      if (p && typeof p.register === 'function') return resolve(true);
+      if (Date.now() - began >= waitMs) return resolve(false);
+      setTimeout(look, 50);
+    })();
+  }).then(function (ready) {
+    if (!ready) {
+      console.warn('[jss] panes not loaded: no SolidOS pane registry on this page after ' + waitMs + ' ms');
+      return;
+    }
+    return load(loaderUrl).then(function (loader) { return loader.loadPanes(urls); }).then(function () {});
+  }).catch(function (e) {
+    console.warn('[jss] panes not loaded: ' + (e && e.message ? e.message : e));
+  });
+}
+
+/** The inline module for the module page: the function above, and its call. */
+function paneAddScript(paneUrls) {
+  return `\n<script type="module">\n${jssAddPanes.toString()}\njssAddPanes(${scriptJson(paneUrls)}, ${scriptJson(PANE_LOADER_URL)}, ${PANE_REGISTRY_WAIT_MS});\n</script>`;
+}
+
 /**
  * Generate Mashlib databrowser HTML
  *
@@ -390,8 +439,8 @@ function paneStartScript(paneUrls) {
  *   size cap; oversize payloads are silently dropped. Phase 1 of #7.
  * @param {string[]|string} [opts.panes] - Pane module URLs to load and
  *   register before SolidOS starts (#652). Empty or absent: the page is
- *   unchanged. Not applied by `generateModuleDatabrowserHtml`: a module
- *   entry point starts itself, so that mode needs its own design.
+ *   unchanged. Module mode has its own way in: see
+ *   `generateModuleDatabrowserHtml` (#658).
  * @param {boolean} [opts.roundTripOptimization=true] - Inline a small
  *   reader script that lets rdflib-based clients (mashlib and friends)
  *   resolve `fetcher.load(uri)` from the data island instead of issuing
@@ -441,6 +490,9 @@ export function generateDatabrowserHtml(resourceUrl, cdnVersion = null, opts = {
  * @param {object} [opts]
  * @param {string|Buffer} [opts.embedJsonLd] - JSON-LD body for the
  *   data island, same contract as `generateDatabrowserHtml`. Phase 1 of #7.
+ * @param {string[]|string} [opts.panes] - Pane module URLs to register
+ *   once the entry point has put the pane registry on the page (#658).
+ *   Empty or absent: the page is unchanged.
  * @param {boolean} [opts.roundTripOptimization=true] - Inline reader
  *   script (#346); see `generateDatabrowserHtml` for details.
  * @returns {string} HTML content
@@ -449,12 +501,15 @@ export function generateModuleDatabrowserHtml(moduleUrl, resourceUrl = '', opts 
   const cssUrl = moduleUrl.replace(/\.js$/, '.css');
   const island = dataIsland(resourceUrl, opts.embedJsonLd);
   const reader = opts.roundTripOptimization === false ? '' : roundTripOptimizationScript();
+  const paneUrls = normalizePanes(opts.panes);
+  // With no panes configured the page is exactly what it was before #658.
+  const addPanes = paneUrls.length ? paneAddScript(paneUrls) : '';
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solid Data Browser</title>
 <link rel="stylesheet" href="${cssUrl}"></head>
 <body>${island}${reader}<div id="mashlib"></div>
-<script type="module" src="${moduleUrl}"></script>
+<script type="module" src="${moduleUrl}"></script>${addPanes}
 </body></html>`;
 }
 
