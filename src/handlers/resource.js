@@ -40,6 +40,19 @@ const RDF_CACHE_CONTROL = 'private, no-cache, must-revalidate';
 // can't drift apart silently.
 const EXPLICIT_JSON_RE = /\b(application\/ld\+json|application\/json)\b/i;
 
+// A container with index.html has three representations at one URL: the
+// HTML page and its data island as Turtle or JSON-LD. They must not share
+// an ETag. A browser that cached the page (top-level navigation) revalidates
+// with that tag when a data client (rdflib/SolidOS) asks for Turtle; a
+// shared tag earns a 304 and the browser hands the cached HTML to the data
+// client, which then sees no triples. Suffix the data variants' tags.
+function islandVariantEtag(etag, contentType) {
+  if (!etag) return etag;
+  if (contentType === 'text/turtle') return etag.replace(/"$/, '-ttl"');
+  if (contentType === 'application/ld+json') return etag.replace(/"$/, '-jsonld"');
+  return etag;
+}
+
 /**
  * Inject live reload script into HTML content
  */
@@ -185,16 +198,6 @@ export async function handleGet(request, reply) {
       const content = await storage.read(indexPath);
       const indexStats = await storage.stat(indexPath);
 
-      // Deferred 304 check for index.html containers (#456)
-      const indexEtag = indexStats?.etag || stats.etag;
-      if (ifNoneMatch) {
-        const check = checkIfNoneMatchForGet(ifNoneMatch, indexEtag);
-        if (!check.ok && check.notModified) {
-          reply.header('ETag', indexEtag);
-          reply.header('Vary', getVaryHeader(connegEnabled, request.mashlibEnabled));
-          return reply.code(304).send();
-        }
-      }
 
       // Pick the negotiated RDF type using q-aware Accept parsing. The
       // naive `acceptHeader.includes('text/turtle')` we used to do here
@@ -218,6 +221,21 @@ export async function handleGet(request, reply) {
       const explicitJson = EXPLICIT_JSON_RE.test(acceptHeader);
       const wantsJsonLd = negotiated === RDF_TYPES.JSON_LD && explicitJson;
 
+      // Deferred 304 check for index.html containers (#456), against the
+      // ETag of the variant this request would get (see islandVariantEtag).
+      const indexEtag = indexStats?.etag || stats.etag;
+      const variantEtag = wantsTurtle
+        ? islandVariantEtag(indexEtag, 'text/turtle')
+        : wantsJsonLd ? islandVariantEtag(indexEtag, 'application/ld+json') : indexEtag;
+      if (ifNoneMatch) {
+        const check = checkIfNoneMatchForGet(ifNoneMatch, variantEtag);
+        if (!check.ok && check.notModified) {
+          reply.header('ETag', variantEtag);
+          reply.header('Vary', getVaryHeader(connegEnabled, request.mashlibEnabled));
+          return reply.code(304).send();
+        }
+      }
+
       if (wantsTurtle || wantsJsonLd) {
         // Extract JSON-LD from HTML data island
         try {
@@ -237,7 +255,7 @@ export async function handleGet(request, reply) {
 
               const headers = getAllHeaders({
                 isContainer: true,
-                etag: indexStats?.etag || stats.etag,
+                etag: islandVariantEtag(indexEtag, 'text/turtle'),
                 contentType: 'text/turtle',
                 origin,
                 resourceUrl,
@@ -251,7 +269,7 @@ export async function handleGet(request, reply) {
               // Return JSON-LD directly
               const headers = getAllHeaders({
                 isContainer: true,
-                etag: indexStats?.etag || stats.etag,
+                etag: islandVariantEtag(indexEtag, 'application/ld+json'),
                 contentType: 'application/ld+json',
                 origin,
                 resourceUrl,
@@ -271,7 +289,7 @@ export async function handleGet(request, reply) {
 
       const headers = getAllHeaders({
         isContainer: true,
-        etag: indexStats?.etag || stats.etag,
+        etag: indexEtag,
         contentType: 'text/html',
         origin,
         resourceUrl,
@@ -831,7 +849,7 @@ export async function handleHead(request, reply) {
     if (indexExists) {
       // Mirror GET: containers with index.html use the index file's ETag
       const indexStats = await storage.stat(indexPath);
-      headEtag = indexStats?.etag || stats.etag;
+      headEtag = islandVariantEtag(indexStats?.etag || stats.etag, contentType);
     } else if (shouldServeMashlib(request, request.mashlibEnabled, 'application/ld+json')) {
       // Container listing via mashlib — suffix the ETag (#456)
       headEtag = stats.etag.replace(/"$/, '-html"');
