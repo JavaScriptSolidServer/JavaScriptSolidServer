@@ -1,0 +1,24 @@
+# LAN profile: `make up PROFILE=lan` publishes JSS on 0.0.0.0:4443 so other
+# machines on the network can reach it over plain HTTP.
+#
+# Don't edit this file for your machine: copy it to profiles/lan.local.yaml
+# (gitignored; the Makefile uses it automatically) and replace CHANGE-ME.local
+# with this machine's hostname or LAN IP, e.g. http://192.168.1.50:4443/.
+# JSS_IDP_ISSUER must match the URL clients actually use.
+#
+# NOTE: browsers only allow Solid-OIDC login over HTTPS or on localhost, so
+# plain http://<lan-host>:4443 is fine for reads and for curl/scripts with
+# Bearer tokens, but not for browser logins. For LAN browser logins, run Caddy
+# with `tls internal` (see proxy/Caddyfile), use the local profile's
+# 127.0.0.1 binding, and set the issuer to the https:// URL Caddy serves.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jss-config
+data:
+  JSS_IDP: "true"
+  JSS_IDP_ISSUER: "http://CHANGE-ME.local:4443/"
+  JSS_MULTIUSER: "true"
+  JSS_CONNEG: "true"
+  JSS_NOTIFICATIONS: "true"
+  JSS_LOG_LEVEL: "info"

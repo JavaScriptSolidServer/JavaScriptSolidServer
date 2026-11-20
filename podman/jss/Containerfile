@@ -1,0 +1,22 @@
+# JavaScript Solid Server (JSS) image.
+# Build: podman build -t localhost/jss:latest jss
+FROM docker.io/library/node:22-bookworm-slim
+
+ARG JSS_VERSION=0.0.224
+
+RUN npm install -g --omit=dev javascript-solid-server@${JSS_VERSION} \
+ && npm cache clean --force \
+ && mkdir -p /data /home/node/.jss \
+ && chown node:node /data /home/node/.jss
+
+USER node
+WORKDIR /data
+
+ENV JSS_ROOT=/data \
+    JSS_HOST=0.0.0.0 \
+    JSS_PORT=4443
+
+EXPOSE 4443
+
+ENTRYPOINT ["jss"]
+CMD ["start"]

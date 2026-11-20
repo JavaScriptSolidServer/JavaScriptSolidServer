@@ -1,0 +1,28 @@
+# Internet profile: `make up PROFILE=internet` keeps JSS bound to
+# 127.0.0.1:4443; Caddy on the host terminates HTTPS for the public name and
+# proxies to it (see proxy/Caddyfile).
+#
+# Copy this file to profiles/internet.local.yaml (gitignored; the Makefile
+# uses it automatically) and replace CHANGE-ME.example.com with your real
+# domain, the same name as in the Caddyfile. Keep the trailing slash.
+#
+# Security:
+# - JSS_INVITE_ONLY: the IdP sign-up form needs an invite code (create them
+#   with `make shell`, then `jss invite --help`). It does NOT cover the
+#   POST /.pods API, so the Caddyfile blocks that with 403. Create accounts
+#   on this host with `make create-pod` (talks to localhost:4443 directly).
+# - remoteStorage (/storage/me/...) is always on in JSS 0.0.224 and has no env
+#   var to disable it. It lets any logged-in account bypass WAC, so the
+#   Caddyfile blocks /storage/*. Never expose port 4443 directly.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jss-config
+data:
+  JSS_IDP: "true"
+  JSS_IDP_ISSUER: "https://CHANGE-ME.example.com/"
+  JSS_MULTIUSER: "true"
+  JSS_INVITE_ONLY: "true"
+  JSS_CONNEG: "true"
+  JSS_NOTIFICATIONS: "true"
+  JSS_LOG_LEVEL: "warn"
